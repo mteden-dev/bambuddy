@@ -1,0 +1,111 @@
+# Fork only: put the local patches on top of each new upstream release.
+#
+# Daily, finds maziggy/bambuddy's latest release. If `custom` is not built on
+# it yet, rebases the local commits onto the release tag and force-pushes
+# `custom`, which starts "Custom image". A conflict, or a missing SYNC_TOKEN,
+# opens an issue instead and leaves `custom` as it was. See CUSTOM_FORK.md.
+name: Sync upstream release
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to rebase onto (empty = latest release)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: maziggy/bambuddy
+  BRANCH: custom
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+    steps:
+      - name: Find the upstream release
+        id: release
+        run: |
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then
+            tag="$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name)"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Upstream release: ${tag}"
+
+      # SYNC_TOKEN (a token with Contents and Workflows write on this fork)
+      # is needed to push: a release usually changes upstream's workflow
+      # files, which the built-in GITHUB_TOKEN may never push. A push made
+      # with it also starts the image build, which a GITHUB_TOKEN push would not.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Rebase the local commits onto the release
+        id: rebase
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch --no-tags upstream "refs/tags/${TAG}:refs/tags/${TAG}"
+
+          if git merge-base --is-ancestor "${TAG}" HEAD; then
+            echo "status=current" >> "$GITHUB_OUTPUT"
+            echo "${BRANCH} is already built on ${TAG}."
+            exit 0
+          fi
+
+          echo "Local commits being moved:"
+          git log --oneline "$(git merge-base HEAD "${TAG}")..HEAD"
+
+          if git rebase "${TAG}"; then
+            echo "status=rebased" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt || true
+            git rebase --abort
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the rebased branch
+        if: steps.rebase.outputs.status == 'rebased' && env.HAS_SYNC_TOKEN == 'true'
+        run: git push --force-with-lease origin "HEAD:${BRANCH}"
+
+      - name: Open an issue when it needs a hand
+        if: >-
+          steps.rebase.outputs.status == 'conflict'
+          || (steps.rebase.outputs.status == 'rebased' && env.HAS_SYNC_TOKEN != 'true')
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          STATUS: ${{ steps.rebase.outputs.status }}
+        run: |
+          title="Upstream ${TAG}: local patches need a manual rebase"
+          if [ "$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "\"${title}\" in:title" --json number --jq length)" != "0" ]; then
+            echo "Issue already open."
+            exit 1
+          fi
+          if [ "${STATUS}" = "conflict" ]; then
+            reason="Rebasing \`${BRANCH}\` onto \`${TAG}\` stopped on conflicts in:"$'\n\n'"$(sed 's/^/- `/; s/$/`/' /tmp/conflicts.txt)"
+          else
+            reason="The rebase onto \`${TAG}\` went through, but the repository has no \`SYNC_TOKEN\` secret to push it with."
+          fi
+          body="${reason}"$'\n\n'"\`${BRANCH}\` was left as it was. To finish by hand:"$'\n\n'"\`\`\`bash"$'\n'"git fetch upstream --tags"$'\n'"git checkout ${BRANCH}"$'\n'"git rebase ${TAG}"$'\n'"# resolve, test, then"$'\n'"git push --force-with-lease origin ${BRANCH}"$'\n'"\`\`\`"$'\n\n'"Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+          # Fail the run as well, so GitHub's failed-run email goes out.
+          exit 1
