@@ -17,6 +17,7 @@ import { useToast } from '../contexts/ToastContext';
 import { ACTIVE_PRINT_STATES } from '../utils/printer';
 import { useAuth } from '../contexts/AuthContext';
 import { applySavedUiSettings, useUiSettings } from '../hooks/useUiSettings';
+import { AmsColorPalette } from './AmsColorPalette';
 import {
   parseHiddenFilamentPresets,
   serializeHiddenFilamentPresets,
@@ -218,46 +219,10 @@ const COLOR_NAME_MAP: Record<string, string> = {
   'wood': 'DEB887',
 };
 
-// Quick-select color presets (common filament colors)
-// Basic colors shown by default
-const QUICK_COLORS_BASIC = [
-  { name: 'White', hex: 'FFFFFF' },
-  { name: 'Black', hex: '000000' },
-  { name: 'Red', hex: 'FF0000' },
-  { name: 'Blue', hex: '0000FF' },
-  { name: 'Green', hex: '00AA00' },
-  { name: 'Yellow', hex: 'FFFF00' },
-  { name: 'Orange', hex: 'FFA500' },
-  { name: 'Gray', hex: '808080' },
-];
-
-// Extended colors shown when expanded
-const QUICK_COLORS_EXTENDED = [
-  { name: 'Cyan', hex: '00FFFF' },
-  { name: 'Magenta', hex: 'FF00FF' },
-  { name: 'Purple', hex: '800080' },
-  { name: 'Pink', hex: 'FFC0CB' },
-  { name: 'Brown', hex: '8B4513' },
-  { name: 'Beige', hex: 'F5F5DC' },
-  { name: 'Navy', hex: '000080' },
-  { name: 'Teal', hex: '008080' },
-  { name: 'Lime', hex: '32CD32' },
-  { name: 'Gold', hex: 'FFD700' },
-  { name: 'Silver', hex: 'C0C0C0' },
-  { name: 'Maroon', hex: '800000' },
-  { name: 'Olive', hex: '808000' },
-  { name: 'Coral', hex: 'FF7F50' },
-  { name: 'Salmon', hex: 'FA8072' },
-  { name: 'Turquoise', hex: '40E0D0' },
-  { name: 'Violet', hex: 'EE82EE' },
-  { name: 'Indigo', hex: '4B0082' },
-  { name: 'Chocolate', hex: 'D2691E' },
-  { name: 'Tan', hex: 'D2B48C' },
-  { name: 'Slate', hex: '708090' },
-  { name: 'Charcoal', hex: '36454F' },
-  { name: 'Ivory', hex: 'FFFFF0' },
-  { name: 'Cream', hex: 'FFFDD0' },
-];
+/** A catalog swatch's tooltip: its name and the hex the slot will get. */
+function catalogSwatchTitle(name: string, hex: string): string {
+  return `${name} #${hex.replace('#', '').toUpperCase()}`;
+}
 
 // Try to convert color name to hex
 function colorNameToHex(name: string): string | null {
@@ -314,7 +279,6 @@ export function ConfigureAmsSlotModal({
   // left out unless the user asks to see them, to bring one back.
   const [showHiddenPresets, setShowHiddenPresets] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [showExtendedColors, setShowExtendedColors] = useState(false);
   const scrolledToRef = useRef<string>('');
   // The success state is held briefly before the modal closes itself; that
   // timer must not outlive the modal.
@@ -1628,7 +1592,7 @@ export function ConfigureAmsSlotModal({
                                 ? 'border-bambu-green scale-105'
                                 : 'border-white/20 hover:border-white/40'
                             }`}
-                            title={entry.color_name}
+                            title={catalogSwatchTitle(entry.color_name, entry.hex_color)}
                           >
                             <span
                               className="w-4 h-4 rounded-full border border-black/20 flex-shrink-0"
@@ -1640,51 +1604,14 @@ export function ConfigureAmsSlotModal({
                       </div>
                     </div>
                   )}
-                  <div className="flex flex-wrap gap-1.5 mb-2">
-                    {QUICK_COLORS_BASIC.map((color) => (
-                      <button
-                        key={color.hex}
-                        onClick={() => {
-                          setColorHex(color.hex);
-                          setColorInput(color.name);
-                        }}
-                        className={`w-7 h-7 rounded-md border-2 transition-all ${
-                          colorHex === color.hex
-                            ? 'border-bambu-green scale-110'
-                            : 'border-white/20 hover:border-white/40'
-                        }`}
-                        style={{ backgroundColor: `#${color.hex}` }}
-                        title={color.name}
-                      />
-                    ))}
-                    <button
-                      onClick={() => setShowExtendedColors(!showExtendedColors)}
-                      className="w-7 h-7 rounded-md border-2 border-white/20 hover:border-white/40 flex items-center justify-center text-white/60 hover:text-white/80 transition-all text-xs"
-                      title={showExtendedColors ? t('configureAmsSlot.showLessColors') : t('configureAmsSlot.showMoreColors')}
-                    >
-                      {showExtendedColors ? '−' : '+'}
-                    </button>
-                  </div>
-                  {showExtendedColors && (
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {QUICK_COLORS_EXTENDED.map((color) => (
-                        <button
-                          key={color.hex}
-                          onClick={() => {
-                            setColorHex(color.hex);
-                            setColorInput(color.name);
-                          }}
-                          className={`w-7 h-7 rounded-md border-2 transition-all ${
-                            colorHex === color.hex
-                              ? 'border-bambu-green scale-110'
-                              : 'border-white/20 hover:border-white/40'
-                          }`}
-                          style={{ backgroundColor: `#${color.hex}` }}
-                          title={color.name}
-                        />
-                      ))}
-                    </div>
-                  )}
+                  <AmsColorPalette
+                    selectedHex={colorHex}
+                    suggestedName={colorInput}
+                    onPick={(name, hex) => {
+                      setColorHex(hex);
+                      setColorInput(name);
+                    }}
+                  />
                   <div className="flex gap-2 items-center">
                     <div
                       className="w-10 h-10 rounded-lg border-2 border-white/20 flex-shrink-0"
@@ -1832,7 +1759,7 @@ export function ConfigureAmsSlotModal({
                               ? 'border-bambu-green scale-105'
                               : 'border-white/20 hover:border-white/40'
                           }`}
-                          title={entry.color_name}
+                          title={catalogSwatchTitle(entry.color_name, entry.hex_color)}
                         >
                           <span
                             className="w-4 h-4 rounded-full border border-black/20 flex-shrink-0"
@@ -1844,53 +1771,14 @@ export function ConfigureAmsSlotModal({
                     </div>
                   </div>
                 )}
-                {/* Quick color buttons */}
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {QUICK_COLORS_BASIC.map((color) => (
-                    <button
-                      key={color.hex}
-                      onClick={() => {
-                        setColorHex(color.hex);
-                        setColorInput(color.name);
-                      }}
-                      className={`w-7 h-7 rounded-md border-2 transition-all ${
-                        colorHex === color.hex
-                          ? 'border-bambu-green scale-110'
-                          : 'border-white/20 hover:border-white/40'
-                      }`}
-                      style={{ backgroundColor: `#${color.hex}` }}
-                      title={color.name}
-                    />
-                  ))}
-                  <button
-                    onClick={() => setShowExtendedColors(!showExtendedColors)}
-                    className="w-7 h-7 rounded-md border-2 border-white/20 hover:border-white/40 flex items-center justify-center text-white/60 hover:text-white/80 transition-all text-xs"
-                    title={showExtendedColors ? t('configureAmsSlot.showLessColors') : t('configureAmsSlot.showMoreColors')}
-                  >
-                    {showExtendedColors ? '−' : '+'}
-                  </button>
-                </div>
-                {/* Extended colors (collapsible) */}
-                {showExtendedColors && (
-                  <div className="flex flex-wrap gap-1.5 mb-2">
-                    {QUICK_COLORS_EXTENDED.map((color) => (
-                      <button
-                        key={color.hex}
-                        onClick={() => {
-                          setColorHex(color.hex);
-                          setColorInput(color.name);
-                        }}
-                        className={`w-7 h-7 rounded-md border-2 transition-all ${
-                          colorHex === color.hex
-                            ? 'border-bambu-green scale-110'
-                            : 'border-white/20 hover:border-white/40'
-                        }`}
-                        style={{ backgroundColor: `#${color.hex}` }}
-                        title={color.name}
-                      />
-                    ))}
-                  </div>
-                )}
+                <AmsColorPalette
+                  selectedHex={colorHex}
+                  suggestedName={colorInput}
+                  onPick={(name, hex) => {
+                    setColorHex(hex);
+                    setColorInput(name);
+                  }}
+                />
                 {/* Color input: name or hex */}
                 <div className="flex gap-2 items-center">
                   <div

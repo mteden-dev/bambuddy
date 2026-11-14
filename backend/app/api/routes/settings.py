@@ -746,6 +746,9 @@ _UI_FLAG_FIELDS: tuple[str, ...] = (
     # settings:update changes it.
     "hidden_filament_presets",
     "hide_builtin_filament_presets",
+    # The picker's quick colours, with names typed on this install; shared
+    # the same way.
+    "ams_color_palette",
 )
 
 

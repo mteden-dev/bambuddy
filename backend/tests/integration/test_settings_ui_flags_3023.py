@@ -182,6 +182,7 @@ class TestWhatItExposes:
             "default_printer_id",
             "hidden_filament_presets",
             "hide_builtin_filament_presets",
+            "ams_color_palette",
             "has_gcode_snippets",
         }
 

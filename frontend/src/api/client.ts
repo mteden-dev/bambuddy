@@ -1674,6 +1674,8 @@ export interface AppSettings {
   hidden_filament_presets: string;
   /** Leave the built-in filament names out of the AMS slot picker. */
   hide_builtin_filament_presets: boolean;
+  /** JSON array of {name, hex, hidden} quick colours for the AMS slot picker (empty = defaults). */
+  ams_color_palette: string;
   // Default sidebar order (admin-set for all users)
   default_sidebar_order: string;
   // LDAP authentication

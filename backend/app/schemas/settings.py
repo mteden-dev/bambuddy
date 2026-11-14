@@ -40,6 +40,11 @@ _COMPOSE_DIR_MAX_LEN = 512
 HIDDEN_FILAMENT_PRESETS_MAX = 5000
 HIDDEN_FILAMENT_PRESET_ID_MAX_LEN = 128
 
+# Bounds for ams_color_palette (the AMS slot picker's quick colours).
+AMS_COLOR_PALETTE_MAX = 200
+AMS_COLOR_NAME_MAX_LEN = 64
+_HEX_RGB = re.compile(r"^[0-9A-Fa-f]{6}$")
+
 
 class AppSettings(BaseModel):
     """Application settings schema."""
@@ -621,6 +626,14 @@ class AppSettings(BaseModel):
         default=False,
         description="Leave the built-in filament names out of the AMS slot picker",
     )
+    # The quick colours of the AMS slot picker, in display order. Each entry
+    # is {"name", "hex" (RRGGBB), "hidden" (optional bool)}; hidden colours
+    # sit behind the picker's "more colours" button. Empty = the built-in
+    # palette.
+    ams_color_palette: str = Field(
+        default="",
+        description="JSON array of {name, hex, hidden} quick colours for the AMS slot picker (empty = defaults)",
+    )
 
     # Local login (#1589) — when False, /auth/login rejects username+password
     # credentials with HTTP 403 and the login page hides the credentials form,
@@ -895,6 +908,7 @@ class AppSettingsUpdate(BaseModel):
     fan_speed_presets: str | None = None
     hidden_filament_presets: str | None = None
     hide_builtin_filament_presets: bool | None = None
+    ams_color_palette: str | None = None
     gcode_snippets: str | None = None
     local_backup_enabled: bool | None = None
     local_backup_schedule: str | None = None
@@ -1120,6 +1134,32 @@ class AppSettingsUpdate(BaseModel):
     @classmethod
     def validate_fan_speed_presets(cls, v: str | None) -> str | None:
         return cls._validate_preset_triple(v, "fan_speed_presets", 0, 100)
+
+    @field_validator("ams_color_palette")
+    @classmethod
+    def validate_ams_color_palette(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        try:
+            parsed = json.loads(v)
+        except json.JSONDecodeError:
+            raise ValueError("ams_color_palette must be valid JSON or empty")
+        if not isinstance(parsed, list):
+            raise ValueError("ams_color_palette must be a JSON array of colours")
+        if len(parsed) > AMS_COLOR_PALETTE_MAX:
+            raise ValueError(f"ams_color_palette holds at most {AMS_COLOR_PALETTE_MAX} colours")
+        for entry in parsed:
+            if not isinstance(entry, dict) or not set(entry) <= {"name", "hex", "hidden"}:
+                raise ValueError("ams_color_palette entries must be objects with name, hex and optional hidden")
+            name = entry.get("name")
+            if not isinstance(name, str) or not name.strip() or len(name) > AMS_COLOR_NAME_MAX_LEN:
+                raise ValueError(f"ams_color_palette names must be 1-{AMS_COLOR_NAME_MAX_LEN} characters")
+            hex_value = entry.get("hex")
+            if not isinstance(hex_value, str) or not _HEX_RGB.match(hex_value):
+                raise ValueError("ams_color_palette hex values must be six hex digits (RRGGBB)")
+            if "hidden" in entry and not isinstance(entry["hidden"], bool):
+                raise ValueError("ams_color_palette hidden must be true or false")
+        return v
 
     @field_validator("hidden_filament_presets")
     @classmethod
