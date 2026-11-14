@@ -180,6 +180,8 @@ class TestWhatItExposes:
             "forecast_global_lead_time_days",
             # Withheld (None) from a caller outside that printer's scope.
             "default_printer_id",
+            "hidden_filament_presets",
+            "hide_builtin_filament_presets",
             "has_gcode_snippets",
         }
 

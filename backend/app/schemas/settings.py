@@ -34,6 +34,12 @@ LAN_SERVICE_URL_SETTINGS = ("ha_url", "obico_ml_url", "orcaslicer_api_url", "bam
 _COMPOSE_DIR_ALLOWED = re.compile(r"^[\w \-./\\:~]+$", re.UNICODE)
 _COMPOSE_DIR_MAX_LEN = 512
 
+# Bounds for hidden_filament_presets. Bambu Cloud lists about two thousand
+# filament presets, so the cap leaves room to hide all of them and then some;
+# preset IDs are short (a setting_id is under 32 characters).
+HIDDEN_FILAMENT_PRESETS_MAX = 5000
+HIDDEN_FILAMENT_PRESET_ID_MAX_LEN = 128
+
 
 class AppSettings(BaseModel):
     """Application settings schema."""
@@ -603,6 +609,19 @@ class AppSettings(BaseModel):
         description="JSON array of 3 fan-speed preset values in % (0-100). Empty = use defaults [50, 75, 100]",
     )
 
+    # Filament presets left out of the AMS slot picker. The IDs are the
+    # picker's own: a Bambu Cloud setting_id, ``local_<id>``, ``orca_<id>`` or
+    # ``builtin_<filament_id>``. Hiding only filters the list; nothing is
+    # deleted from Bambu Cloud, Orca Cloud or the local profiles.
+    hidden_filament_presets: str = Field(
+        default="",
+        description="JSON array of filament preset IDs hidden in the AMS slot picker (empty = none hidden)",
+    )
+    hide_builtin_filament_presets: bool = Field(
+        default=False,
+        description="Leave the built-in filament names out of the AMS slot picker",
+    )
+
     # Local login (#1589) — when False, /auth/login rejects username+password
     # credentials with HTTP 403 and the login page hides the credentials form,
     # leaving only the OIDC SSO provider buttons. LDAP is governed by its own
@@ -874,6 +893,8 @@ class AppSettingsUpdate(BaseModel):
     bed_temp_presets: str | None = None
     chamber_temp_presets: str | None = None
     fan_speed_presets: str | None = None
+    hidden_filament_presets: str | None = None
+    hide_builtin_filament_presets: bool | None = None
     gcode_snippets: str | None = None
     local_backup_enabled: bool | None = None
     local_backup_schedule: str | None = None
@@ -1099,6 +1120,23 @@ class AppSettingsUpdate(BaseModel):
     @classmethod
     def validate_fan_speed_presets(cls, v: str | None) -> str | None:
         return cls._validate_preset_triple(v, "fan_speed_presets", 0, 100)
+
+    @field_validator("hidden_filament_presets")
+    @classmethod
+    def validate_hidden_filament_presets(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        try:
+            parsed = json.loads(v)
+        except json.JSONDecodeError:
+            raise ValueError("hidden_filament_presets must be valid JSON or empty")
+        if not isinstance(parsed, list) or not all(
+            isinstance(item, str) and 0 < len(item) <= HIDDEN_FILAMENT_PRESET_ID_MAX_LEN for item in parsed
+        ):
+            raise ValueError("hidden_filament_presets must be a JSON array of non-empty preset ID strings")
+        if len(parsed) > HIDDEN_FILAMENT_PRESETS_MAX:
+            raise ValueError(f"hidden_filament_presets holds at most {HIDDEN_FILAMENT_PRESETS_MAX} preset IDs")
+        return v
 
     @field_validator("obico_sensitivity")
     @classmethod

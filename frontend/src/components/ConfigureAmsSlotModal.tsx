@@ -1,9 +1,9 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { X, Loader2, Settings2, ChevronDown, CheckCircle2, RotateCcw } from 'lucide-react';
+import { X, Loader2, Settings2, ChevronDown, CheckCircle2, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import { api } from '../api/client';
-import type { KProfile } from '../api/client';
+import type { AppSettings, KProfile } from '../api/client';
 import { matchesPrinterModelSuffix, presetCompatibility, buildCompatibilityIndex, extractPresetModel } from '../utils/slicerPrinterMatch';
 import { toFilamentId } from './spool-form/utils';
 import { cloudPresetFilamentId, cloudPresetFilamentIds, filamentIdToSettingId } from '../utils/filamentIds';
@@ -15,6 +15,13 @@ import { useCancellableTimeout } from '../hooks/useCancellableTimeout';
 import { flowApplies, flowLabel, normaliseFlow } from '../utils/nozzleFlow';
 import { useToast } from '../contexts/ToastContext';
 import { ACTIVE_PRINT_STATES } from '../utils/printer';
+import { useAuth } from '../contexts/AuthContext';
+import { applySavedUiSettings, useUiSettings } from '../hooks/useUiSettings';
+import {
+  parseHiddenFilamentPresets,
+  serializeHiddenFilamentPresets,
+  toggleHiddenFilamentPreset,
+} from '../utils/hiddenFilamentPresets';
 
 interface SlotInfo {
   amsId: number;
@@ -303,12 +310,48 @@ export function ConfigureAmsSlotModal({
   const [colorHex, setColorHex] = useState<string>(''); // Just the 6-char hex, no alpha
   const [colorInput, setColorInput] = useState<string>(''); // User's text input (name or hex)
   const [searchQuery, setSearchQuery] = useState('');
+  // Presets hidden from the picker (the hidden_filament_presets setting) are
+  // left out unless the user asks to see them, to bring one back.
+  const [showHiddenPresets, setShowHiddenPresets] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showExtendedColors, setShowExtendedColors] = useState(false);
   const scrolledToRef = useRef<string>('');
   // The success state is held briefly before the modal closes itself; that
   // timer must not outlive the modal.
   const { schedule: scheduleClose } = useCancellableTimeout();
+
+  // Which presets the picker hides. Read through useUiSettings so a user
+  // without settings:read gets the same list; only settings:update may change it.
+  const { hasPermission } = useAuth();
+  const canHidePresets = hasPermission('settings:update');
+  const queryClient = useQueryClient();
+  const { data: uiSettings } = useUiSettings({ enabled: isOpen });
+  // Each change rewrites the whole list from the loaded one, so nothing may be
+  // changed before it has loaded: that would drop every preset hidden so far.
+  const presetHidingReady = canHidePresets && uiSettings !== undefined;
+  const hiddenPresetIds = useMemo(
+    () => parseHiddenFilamentPresets(uiSettings?.hidden_filament_presets),
+    [uiSettings?.hidden_filament_presets],
+  );
+  const hideBuiltinPresets = uiSettings?.hide_builtin_filament_presets === true;
+  const hiddenPresetsMutation = useMutation({
+    mutationFn: (
+      update: Partial<Pick<AppSettings, 'hidden_filament_presets' | 'hide_builtin_filament_presets'>>,
+    ) => api.updateSettings(update),
+    onSuccess: (saved) =>
+      applySavedUiSettings(queryClient, {
+        hidden_filament_presets: saved.hidden_filament_presets,
+        hide_builtin_filament_presets: saved.hide_builtin_filament_presets,
+      }),
+    onError: (error: Error) => showToast(error.message, 'error'),
+  });
+  const toggleHiddenPreset = (presetId: string) => {
+    hiddenPresetsMutation.mutate({
+      hidden_filament_presets: serializeHiddenFilamentPresets(
+        toggleHiddenFilamentPreset(hiddenPresetIds, presetId),
+      ),
+    });
+  };
 
   // Fetch cloud settings (gracefully handle 401 when logged out)
   const { data: cloudSettings, isLoading: settingsLoading, isError: cloudError } = useQuery({
@@ -700,10 +743,18 @@ export function ConfigureAmsSlotModal({
   });
 
   // Unified preset item for the list (orca_cloud + cloud + local + builtin fallback)
-  type PresetItem = { id: string; name: string; source: 'orca_cloud' | 'cloud' | 'local' | 'builtin'; isUser: boolean };
+  type PresetItem = {
+    id: string;
+    name: string;
+    source: 'orca_cloud' | 'cloud' | 'local' | 'builtin';
+    isUser: boolean;
+    /** Hidden by the user: listed only while hidden presets are shown, or
+     *  because it is the selected preset. */
+    hidden?: boolean;
+  };
 
   // Filter filament presets based on search (merged orca_cloud + cloud + local + builtin)
-  const filteredPresets = useMemo(() => {
+  const candidatePresets = useMemo(() => {
     const query = searchQuery.toLowerCase();
     const items: PresetItem[] = [];
 
@@ -817,6 +868,27 @@ export function ConfigureAmsSlotModal({
       return a.name.localeCompare(b.name);
     });
   }, [orcaCloudList?.filament, cloudSettings?.filament, localPresets?.filament, builtinFilaments, searchQuery, printerModel, slotInfo.savedPresetId, slotInfo.trayInfoIdx, fullPrinterName, compatIndex, printerModelsData]);
+
+  // User hiding, applied after the tiers above so a hidden preset still counts
+  // as covered there (hiding a cloud preset must not bring its built-in twin
+  // back), and in its own memo so picking a row does not rebuild the list.
+  // The selected preset stays in view, marked hidden: it is what the slot
+  // holds or what the user just picked, and losing it would hide the choice.
+  const { presets: filteredPresets, hiddenCount: hiddenPresetCount } = useMemo(() => {
+    let hiddenCount = 0;
+    const presets: PresetItem[] = [];
+    for (const item of candidatePresets) {
+      const hidden = hiddenPresetIds.has(item.id) || (hideBuiltinPresets && item.source === 'builtin');
+      if (!hidden) {
+        presets.push(item);
+        continue;
+      }
+      const isSelected = item.id === selectedPresetId;
+      if (!isSelected) hiddenCount += 1;
+      if (showHiddenPresets || isSelected) presets.push({ ...item, hidden });
+    }
+    return { presets, hiddenCount };
+  }, [candidatePresets, selectedPresetId, hiddenPresetIds, hideBuiltinPresets, showHiddenPresets]);
 
   // Get full preset name for K profile filtering (brand + material, without printer suffix)
   const selectedPresetInfo = useMemo(() => {
@@ -1258,6 +1330,113 @@ export function ConfigureAmsSlotModal({
   if (!isOpen) return null;
   const canSave = selectedPresetId && !configureMutation.isPending;
 
+  // The preset list, shared by the kiosk and the regular layout. Each row is
+  // the select button plus, for users who may change settings, a sibling
+  // hide/unhide button (a button cannot sit inside another).
+  const renderPresetList = (listClassName: string) => (
+    <div className={listClassName}>
+      {filteredPresets.length === 0 ? (
+        <p className="text-center py-4 text-bambu-gray">
+          {(cloudSettings?.filament?.length === 0 && !localPresets?.filament?.length && hiddenPresetCount === 0)
+            ? t('configureAmsSlot.noPresetsAvailable')
+            : t('configureAmsSlot.noMatchingPresets')}
+        </p>
+      ) : (
+        filteredPresets.map((preset) => (
+          <div key={preset.id} className="relative">
+            <button
+              data-preset-id={preset.id}
+              onClick={() => setSelectedPresetId(preset.id)}
+              className={`group w-full p-2 rounded-lg border text-left transition-colors ${canHidePresets ? 'pr-9' : ''} ${
+                selectedPresetId === preset.id
+                  ? 'bg-bambu-green/20 border-bambu-green'
+                  : 'bg-bambu-dark border-bambu-dark-tertiary hover:border-bambu-gray'
+              } ${preset.hidden ? 'opacity-60' : ''}`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-white text-sm truncate group-hover:whitespace-normal group-hover:break-all" title={preset.name}>{preset.name}</span>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {preset.source === 'local' && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400">
+                      {t('profiles.localProfiles.badge')}
+                    </span>
+                  )}
+                  {preset.source === 'orca_cloud' && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400">
+                      {t('configureAmsSlot.orcaCloud')}
+                    </span>
+                  )}
+                  {preset.source === 'cloud' && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-blue/20 text-bambu-blue">
+                      {t('configureAmsSlot.bambuCloud')}
+                    </span>
+                  )}
+                  {preset.source === 'builtin' && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400">
+                      {t('configureAmsSlot.builtin')}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </button>
+            {canHidePresets && (
+              <button
+                type="button"
+                onClick={() => toggleHiddenPreset(preset.id)}
+                disabled={!presetHidingReady || hiddenPresetsMutation.isPending || (preset.source === 'builtin' && hideBuiltinPresets)}
+                title={
+                  preset.source === 'builtin' && hideBuiltinPresets
+                    ? t('configureAmsSlot.hideBuiltinPresets')
+                    : preset.hidden ? t('configureAmsSlot.unhidePreset') : t('configureAmsSlot.hidePreset')
+                }
+                aria-label={`${preset.hidden ? t('configureAmsSlot.unhidePreset') : t('configureAmsSlot.hidePreset')}: ${preset.name}`}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-bambu-gray"
+              >
+                {preset.hidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              </button>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+
+  // Below the list: bring hidden presets back into view, and (for users who
+  // may change settings) leave the whole built-in fallback tier out.
+  const renderPresetListFooter = () => {
+    if (hiddenPresetCount === 0 && !showHiddenPresets && !canHidePresets) return null;
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 mt-1 text-xs text-bambu-gray shrink-0">
+        {hiddenPresetCount > 0 || showHiddenPresets ? (
+          <button
+            type="button"
+            onClick={() => setShowHiddenPresets((v) => !v)}
+            aria-pressed={showHiddenPresets}
+            className="hover:text-white underline-offset-2 hover:underline"
+          >
+            {showHiddenPresets
+              ? t('configureAmsSlot.hideHiddenPresets')
+              : t('configureAmsSlot.showHiddenPresets', { count: hiddenPresetCount })}
+          </button>
+        ) : (
+          <span />
+        )}
+        {canHidePresets && (
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={hideBuiltinPresets}
+              disabled={!presetHidingReady || hiddenPresetsMutation.isPending}
+              onChange={(e) => hiddenPresetsMutation.mutate({ hide_builtin_filament_presets: e.target.checked })}
+              className="accent-bambu-green"
+            />
+            {t('configureAmsSlot.hideBuiltinPresets')}
+          </label>
+        )}
+      </div>
+    );
+  };
+
   // Get display color (custom or slot default)
   // Not sliced to six: a clear tray reports RRGGBB00, and cutting the alpha off
   // here previewed it as solid black. `colorHex` is the edited form value and is
@@ -1364,54 +1543,8 @@ export function ConfigureAmsSlotModal({
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white placeholder:text-bambu-gray focus:border-bambu-green focus:outline-none mb-2 shrink-0"
                 />
-                <div className="flex-1 min-h-0 overflow-y-auto space-y-1">
-                  {filteredPresets.length === 0 ? (
-                    <p className="text-center py-4 text-bambu-gray">
-                      {(cloudSettings?.filament?.length === 0 && !localPresets?.filament?.length)
-                        ? t('configureAmsSlot.noPresetsAvailable')
-                        : t('configureAmsSlot.noMatchingPresets')}
-                    </p>
-                  ) : (
-                    filteredPresets.map((preset) => (
-                      <button
-                        key={preset.id}
-                        data-preset-id={preset.id}
-                        onClick={() => setSelectedPresetId(preset.id)}
-                        className={`group w-full p-2 rounded-lg border text-left transition-colors ${
-                          selectedPresetId === preset.id
-                            ? 'bg-bambu-green/20 border-bambu-green'
-                            : 'bg-bambu-dark border-bambu-dark-tertiary hover:border-bambu-gray'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-white text-sm truncate group-hover:whitespace-normal group-hover:break-all" title={preset.name}>{preset.name}</span>
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            {preset.source === 'local' && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400">
-                                {t('profiles.localProfiles.badge')}
-                              </span>
-                            )}
-                            {preset.source === 'orca_cloud' && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400">
-                                {t('configureAmsSlot.orcaCloud')}
-                              </span>
-                            )}
-                            {preset.source === 'cloud' && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-blue/20 text-bambu-blue">
-                                {t('configureAmsSlot.bambuCloud')}
-                              </span>
-                            )}
-                            {preset.source === 'builtin' && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400">
-                                {t('configureAmsSlot.builtin')}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
+                {renderPresetList('flex-1 min-h-0 overflow-y-auto space-y-1')}
+                {renderPresetListFooter()}
               </div>
 
               {/* Right column: K Profile + Color */}
@@ -1614,54 +1747,8 @@ export function ConfigureAmsSlotModal({
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white placeholder:text-bambu-gray focus:border-bambu-green focus:outline-none mb-2"
                   />
-                  <div className="max-h-48 overflow-y-auto space-y-1">
-                    {filteredPresets.length === 0 ? (
-                      <p className="text-center py-4 text-bambu-gray">
-                        {(cloudSettings?.filament?.length === 0 && !localPresets?.filament?.length)
-                          ? t('configureAmsSlot.noPresetsAvailable')
-                          : t('configureAmsSlot.noMatchingPresets')}
-                      </p>
-                    ) : (
-                      filteredPresets.map((preset) => (
-                        <button
-                          key={preset.id}
-                          data-preset-id={preset.id}
-                          onClick={() => setSelectedPresetId(preset.id)}
-                          className={`group w-full p-2 rounded-lg border text-left transition-colors ${
-                            selectedPresetId === preset.id
-                              ? 'bg-bambu-green/20 border-bambu-green'
-                              : 'bg-bambu-dark border-bambu-dark-tertiary hover:border-bambu-gray'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="text-white text-sm truncate group-hover:whitespace-normal group-hover:break-all" title={preset.name}>{preset.name}</span>
-                            <div className="flex items-center gap-1 flex-shrink-0">
-                              {preset.source === 'local' && (
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400">
-                                  {t('profiles.localProfiles.badge')}
-                                </span>
-                              )}
-                              {preset.source === 'orca_cloud' && (
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400">
-                                  {t('configureAmsSlot.orcaCloud')}
-                                </span>
-                              )}
-                              {preset.source === 'cloud' && (
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-blue/20 text-bambu-blue">
-                                  {t('configureAmsSlot.bambuCloud')}
-                                </span>
-                              )}
-                              {preset.source === 'builtin' && (
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400">
-                                  {t('configureAmsSlot.builtin')}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </button>
-                      ))
-                    )}
-                  </div>
+                  {renderPresetList('max-h-48 overflow-y-auto space-y-1')}
+                  {renderPresetListFooter()}
                 </div>
               </div>
 

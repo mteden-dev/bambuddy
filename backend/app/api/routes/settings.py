@@ -177,6 +177,7 @@ async def set_setting(db: AsyncSession, key: str, value: str) -> None:
 _BOOL_SETTING_KEYS = frozenset(
     {
         "auto_archive",
+        "hide_builtin_filament_presets",
         "save_thumbnails",
         "capture_finish_photo",
         "finish_photo_restore_plate",
@@ -740,6 +741,11 @@ _UI_FLAG_FIELDS: tuple[str, ...] = (
     # Preselected in the print dialog; withheld below from a caller who may
     # not use that printer.
     "default_printer_id",
+    # The presets the AMS slot picker (printer card and SpoolBuddy) leaves
+    # out. Everyone who configures a slot sees the same list; only
+    # settings:update changes it.
+    "hidden_filament_presets",
+    "hide_builtin_filament_presets",
 )
 
 

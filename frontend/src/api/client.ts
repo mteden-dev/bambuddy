@@ -1670,6 +1670,10 @@ export interface AppSettings {
   bed_temp_presets: string;
   chamber_temp_presets: string;
   fan_speed_presets: string;
+  /** JSON array of filament preset IDs the AMS slot picker leaves out (empty = none). */
+  hidden_filament_presets: string;
+  /** Leave the built-in filament names out of the AMS slot picker. */
+  hide_builtin_filament_presets: boolean;
   // Default sidebar order (admin-set for all users)
   default_sidebar_order: string;
   // LDAP authentication
