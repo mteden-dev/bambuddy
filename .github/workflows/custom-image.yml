@@ -53,7 +53,10 @@ jobs:
             backend/tests/unit/test_hidden_filament_presets.py \
             backend/tests/unit/test_ams_color_palette.py \
             backend/tests/integration/test_hidden_filament_presets_api.py \
-            backend/tests/integration/test_settings_ui_preferences.py
+            backend/tests/integration/test_ams_color_palette_api.py \
+            backend/tests/integration/test_settings_ui_preferences.py \
+            backend/tests/integration/test_settings_ui_flags_3023.py \
+            backend/tests/unit/test_route_auth_coverage.py
 
       - uses: actions/setup-node@v6
         with:
