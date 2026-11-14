@@ -6,6 +6,8 @@ name: Custom image
 on:
   push:
     branches: [custom]
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
 
 permissions:

@@ -64,7 +64,16 @@ Remote'y lokalnie: `origin` = fork (mteden-dev), `upstream` = maziggy.
 
 ## Coolify
 
-W zasobie Docker Compose zmień tylko obraz, wolumeny zostają te same:
+Przed pierwszym przełączeniem:
+
+1. Sprawdź wersję obecnej instalacji (stopka / *Settings → About* w bambuddy).
+   Musi być **taka sama albo starsza** niż wersja obrazu `custom` (np. `1.3.1`).
+   Jeśli działa tam nowsza wersja albo beta/daily, poczekaj, aż `custom`
+   dojdzie do tej wersji: cofnięcie bazy o wersję w dół nie jest wspierane.
+2. Zrób kopię danych: w bambuddy *Settings → Backup* (kopia lokalna) albo
+   kopia wolumenu `/app/data` z poziomu Coolify / Dockera.
+
+Potem w zasobie Docker Compose zmień tylko obraz, wolumeny zostają te same:
 
 ```yaml
 services:
