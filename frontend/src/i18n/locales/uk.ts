@@ -5807,6 +5807,7 @@ export default {
       orderTitle: 'Порядок у черзі',
       incompatible: 'Не можна надіслати на принтери {{model}}: {{files}}',
       notSlicedFor: 'Не нарізано для {{model}}: {{files}}',
+      perFileMappingHint: 'Кожен файл має власне зіставлення філаментів. Файлам, які ви не змінюєте, слоти підбираються під час запуску друку.',
       failed: 'Не поставлено в чергу: {{filename}} ({{message}}). Поставлено раніше: {{queued}}.',
     },
     variants: {

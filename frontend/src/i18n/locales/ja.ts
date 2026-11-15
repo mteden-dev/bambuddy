@@ -5767,6 +5767,7 @@ export default {
       orderTitle: 'キューの順序',
       incompatible: '{{model}} プリンターには送信できません：{{files}}',
       notSlicedFor: '{{model}} 向けにスライスされていません：{{files}}',
+      perFileMappingHint: 'ファイルごとにフィラメントマッピングがあります。変更しないファイルは、印刷開始時にスロットが割り当てられます。',
       failed: 'キューに追加されませんでした：{{filename}}（{{message}}）。これより前に追加済み：{{queued}}。',
     },
     variants: {

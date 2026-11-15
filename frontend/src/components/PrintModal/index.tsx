@@ -41,6 +41,7 @@ import {
   type MultiFileMode,
 } from './multiFile';
 import { fileHasQueuedPair, queueSeparateJobs, runAsapTail } from './separateJobs';
+import { mappingSwapsMaterial, perFileAmsMapping, perFileMappingKey } from './perFileMapping';
 import { CostCenterSelect } from './CostCenterSelect';
 import type {
   AssignmentMode,
@@ -188,6 +189,12 @@ export function PrintModal({
   // Before that a quick Print would send plate_id null: the whole file's time
   // and cost, and plate 1 printing.
   const [candidatePlatesReady, setCandidatePlatesReady] = useState(false);
+  // Separate jobs on one printer: the tray picks of each file's own mapping
+  // panel, keyed by `perFileMappingKey` (printer, file, plate). A reopened run
+  // starts from the picks it was submitted with.
+  const [manualMappingsByFile, setManualMappingsByFile] = useState<Record<string, Record<number, number>>>(
+    () => resumedSettings?.manualMappingsByFile ?? {},
+  );
 
   type FilamentWarningItem = {
     printerId: number;
@@ -849,6 +856,75 @@ export function PrintModal({
     sharedMappingPrinterId,
   );
 
+  // --- Per-file filament mapping (separate jobs on one printer) ------------
+  // Each listed file prints its own slots, so it gets its own panel, matched
+  // against the one selected printer the same way a single file is. Several
+  // printers, or "any printer of the model", leave the trays to the scheduler
+  // as before: a tray id means nothing until the printer is known.
+  const showPerFileFilamentMapping =
+    isSeparateJobs && assignmentMode === 'printer' && selectedPrinters.length === 1 && !!effectivePrinterId;
+
+  // Waits for the plates: a multi-plate file would first be read whole.
+  const perFileReqQueries = useQueries({
+    queries: (showPerFileFilamentMapping ? candidates : []).map((file) => {
+      const plateId = candidatePlates[file.id] ?? null;
+      return {
+        queryKey: ['library-file-filaments', file.id, plateId],
+        queryFn: () => api.getLibraryFileFilamentRequirements(file.id, plateId ?? undefined),
+        enabled: candidatePlatesReady,
+        retry: false,
+      };
+    }),
+  });
+
+  // A file whose filaments can't be read has no panel and sends no mapping:
+  // the scheduler matches it at dispatch, as it did for every file before.
+  const perFileReqs = useMemo(() => {
+    const byFile = new Map<number, FilamentReqsData>();
+    if (!showPerFileFilamentMapping) return byFile;
+    candidates.forEach((file, i) => {
+      const data = perFileReqQueries[i]?.data;
+      if (data) byFile.set(file.id, data);
+    });
+    return byFile;
+    // Keyed on each query's last update stamp, as `perPlateReqs` above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPerFileFilamentMapping, candidates, perFileReqQueries.map((q) => q.dataUpdatedAt).join('|')]);
+
+  const perFileKey = (fileId: number) =>
+    perFileMappingKey(effectivePrinterId ?? 0, fileId, candidatePlates[fileId] ?? null);
+
+  // What each file's item carries; see `perFileAmsMapping` for when that is nothing.
+  const perFileAmsMappings = useMemo(() => {
+    const byFile = new Map<number, number[]>();
+    if (!showPerFileFilamentMapping || !effectivePrinterId) return byFile;
+    const loaded = buildLoadedFilaments(printerStatus);
+    const ftsActive = printerStatus?.fila_switch?.installed === true;
+    const inventoryByTrayId = inventoryByTrayIdPerPrinter.get(effectivePrinterId);
+    for (const file of candidates) {
+      const mapping = perFileAmsMapping(
+        perFileReqs.get(file.id),
+        loaded,
+        manualMappingsByFile[perFileMappingKey(effectivePrinterId, file.id, candidatePlates[file.id] ?? null)],
+        singlePrinterPreferLowest,
+        inventoryByTrayId,
+        ftsActive,
+      );
+      if (mapping) byFile.set(file.id, mapping);
+    }
+    return byFile;
+  }, [
+    showPerFileFilamentMapping,
+    effectivePrinterId,
+    printerStatus,
+    inventoryByTrayIdPerPrinter,
+    candidates,
+    candidatePlates,
+    perFileReqs,
+    manualMappingsByFile,
+    singlePrinterPreferLowest,
+  ]);
+
   // Auto-select first plate when plates load (single or multi-plate). A plate
   // chosen before the plates were known (a reprint's or a queue item's) that
   // the file doesn't have, because the file changed since, is dropped: left
@@ -1505,11 +1581,13 @@ export function PrintModal({
     // per-plate quantities and mappings).
     //
     // Each item carries only what is true of every file: printer or model,
-    // schedule, options, cost centre. No ams_mapping and no filament_overrides:
-    // the mapping and override panels describe the first file's filaments,
-    // which are not the others'. Without a mapping the scheduler resolves one at
-    // dispatch from the item's own 3MF and the printer's loaded trays
-    // (`_ensure_ams_mapping`), as it already does for model-based items. Also
+    // schedule, options, cost centre. No filament_overrides: the override
+    // panel describes the first file's filaments, which are not the others'.
+    // An ams_mapping only from the file's own panel, which exists for one
+    // printer only, and only once the user changed it (`perFileAmsMapping`).
+    // Without one the scheduler resolves it at dispatch from the item's own 3MF
+    // and the printer's loaded trays (`_ensure_ams_mapping`), as it already
+    // does for model-based items. Also
     // left out: estimated_cost (a display hint, the server prices each item
     // itself), skip_filament_check (the spool warning was never shown),
     // nozzle_rack_choice (picked against the first file's filament groups) and
@@ -1580,6 +1658,16 @@ export function PrintModal({
                 item.scheduled_time = new Date(staggerBaseTime + offsetMs).toISOString();
               }
             }
+            // A file mapped by hand in its own panel (one printer only) carries
+            // that mapping, the rest none (see `perFileAmsMapping`).
+            const fileMapping =
+              showPerFileFilamentMapping && printerId === effectivePrinterId ? perFileAmsMappings.get(file.id) : undefined;
+            if (fileMapping) {
+              item.ams_mapping = fileMapping;
+              if (mappingSwapsMaterial(perFileReqs.get(file.id), fileMapping, buildLoadedFilaments(printerStatus))) {
+                item.skip_filament_check = true;
+              }
+            }
             return item;
           },
           addToQueue: (data) => addToQueueMutation.mutateAsync(data),
@@ -1637,6 +1725,7 @@ export function PrintModal({
                 printOptions,
                 scheduleOptions,
                 costCenterId: selectedCostCenterId,
+                manualMappingsByFile,
               },
               queuedFileIds: (variantFiles ?? []).map((f) => f.id).filter((id) => !remainingIds.includes(id)),
               remainingFileIds: remainingIds,
@@ -1932,9 +2021,10 @@ export function PrintModal({
   // A single-printer AMS job must wait for the printer's live status before it
   // can resolve the filament mapping. Submitting mid-load matched against zero
   // known trays and serialized an all-[-1] mapping, which dispatched the print
-  // to the empty external feed (#2589). Separate jobs send no mapping at all
-  // (the scheduler maps each against its own file at dispatch), so they have
-  // nothing to wait for.
+  // to the empty external feed (#2589). Separate jobs have nothing to wait
+  // for: a file sends a mapping only after the user changed it in its panel,
+  // which needs the trays, and the others are mapped by the scheduler at
+  // dispatch.
   const waitingForAmsStatus =
     !isSeparateJobs && assignmentMode === 'printer' && selectedPrinters.length === 1 && printerStatusLoading;
 
@@ -2062,8 +2152,8 @@ export function PrintModal({
   // - Single printer selected
   // - For archives: plate is selected (for multi-plate) or not required (single-plate)
   // - For library files: always show (no plate selection)
-  // Never for separate jobs: the panel maps the first file's filaments, and
-  // each job is mapped against its own file at dispatch.
+  // Never for separate jobs: the panel maps the first file's filaments. They
+  // get one panel per file instead (`showPerFileFilamentMapping`).
   const showFilamentMapping = !isSeparateJobs && effectivePrinterId && selectedPlates.size <= 1 && (
     isLibraryFile || (isMultiPlate ? selectedPlate !== null : true)
   );
@@ -2472,6 +2562,37 @@ export function PrintModal({
                 />
               );
             })}
+
+            {/* Separate jobs on one printer: one panel per listed file, in list
+                order, each mapping that file's own slots. Collapsed, with the
+                file's match status in the header. No force-colour box, rack
+                picker or slicer mapping: none of those is sent per file. */}
+            {showPerFileFilamentMapping && perFileReqs.size > 0 && (
+              <div className="mb-4">
+                <p className="text-xs text-bambu-gray mb-2">{t('printModal.multiFile.perFileMappingHint')}</p>
+                {candidates.map((file) => {
+                  const fileReqs = perFileReqs.get(file.id);
+                  if (!fileReqs?.filaments?.length) return null;
+                  const key = perFileKey(file.id);
+                  return (
+                    <FilamentMapping
+                      key={key}
+                      printerId={effectivePrinterId!}
+                      plateLabel={file.filename}
+                      filamentReqs={fileReqs}
+                      manualMappings={manualMappingsByFile[key] ?? {}}
+                      onManualMappingChange={(next) =>
+                        setManualMappingsByFile((prev) => ({ ...prev, [key]: next }))
+                      }
+                      quantity={effectiveQuantity}
+                      defaultExpanded={false}
+                      currencySymbol={currencySymbol}
+                      defaultCostPerKg={defaultCostPerKg}
+                    />
+                  );
+                })}
+              </div>
+            )}
 
             {/* Print options */}
             {(mode === 'create' || effectivePrinterCount > 0 || (assignmentMode === 'model' && targetModel)) && (

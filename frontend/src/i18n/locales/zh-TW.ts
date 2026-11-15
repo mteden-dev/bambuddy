@@ -5753,6 +5753,7 @@ export default {
       orderTitle: '佇列順序',
       incompatible: '無法傳送到 {{model}} 印表機：{{files}}',
       notSlicedFor: '未為 {{model}} 切片：{{files}}',
+      perFileMappingHint: '每個檔案都有自己的耗材對應。未變更的檔案會在列印開始時自動配對槽位。',
       failed: '未加入佇列：{{filename}}（{{message}}）。此前已加入：{{queued}}。',
     },
     variants: {

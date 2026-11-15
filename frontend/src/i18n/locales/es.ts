@@ -5774,6 +5774,7 @@ export default {
       orderTitle: 'Orden de la cola',
       incompatible: 'No se puede enviar a impresoras {{model}}: {{files}}',
       notSlicedFor: 'No laminado para {{model}}: {{files}}',
+      perFileMappingHint: 'Cada archivo tiene su propio mapeo de filamentos. Los archivos que no cambies reciben sus ranuras al iniciar la impresión.',
       failed: 'No añadido a la cola: {{filename}} ({{message}}). Añadidos antes: {{queued}}.',
     },
     variants: {

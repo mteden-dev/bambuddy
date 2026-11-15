@@ -5812,6 +5812,7 @@ export default {
       orderTitle: 'Volgorde in de wachtrij',
       incompatible: 'Kan niet worden verzonden naar {{model}}-printers: {{files}}',
       notSlicedFor: 'Niet gesliced voor {{model}}: {{files}}',
+      perFileMappingHint: 'Elk bestand heeft een eigen filamenttoewijzing. Bestanden die je niet wijzigt, krijgen hun sleuven toegewezen wanneer de print start.',
       failed: 'Niet in de wachtrij gezet: {{filename}} ({{message}}). Eerder in de wachtrij gezet: {{queued}}.',
     },
     variants: {

@@ -5753,6 +5753,7 @@ export default {
       orderTitle: 'Ordem da fila',
       incompatible: 'Não pode ser enviado para impressoras {{model}}: {{files}}',
       notSlicedFor: 'Não fatiado para {{model}}: {{files}}',
+      perFileMappingHint: 'Cada arquivo tem seu próprio mapeamento de filamento. Os arquivos que você não alterar recebem os slots quando a impressão começar.',
       failed: 'Não adicionado à fila: {{filename}} ({{message}}). Adicionados antes: {{queued}}.',
     },
     variants: {

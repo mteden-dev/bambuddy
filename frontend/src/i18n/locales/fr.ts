@@ -5754,6 +5754,7 @@ export default {
       orderTitle: 'Ordre dans la file',
       incompatible: 'Impossible d\'envoyer aux imprimantes {{model}} : {{files}}',
       notSlicedFor: 'Non tranché pour {{model}} : {{files}}',
+      perFileMappingHint: 'Chaque fichier a son propre mapping filament. Les fichiers que vous ne modifiez pas reçoivent leurs emplacements au démarrage de l’impression.',
       failed: 'Non mis en file : {{filename}} ({{message}}). Mis en file avant : {{queued}}.',
     },
     variants: {

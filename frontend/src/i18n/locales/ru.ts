@@ -5526,6 +5526,7 @@ export default {
       orderTitle: 'Порядок в очереди',
       incompatible: 'Нельзя отправить на принтеры {{model}}: {{files}}',
       notSlicedFor: 'Не нарезано для {{model}}: {{files}}',
+      perFileMappingHint: 'У каждого файла своё сопоставление филаментов. Файлам, которые вы не меняете, слоты подбираются при запуске печати.',
       failed: 'Не поставлено в очередь: {{filename}} ({{message}}). Поставлено ранее: {{queued}}.',
     },
     variants: {

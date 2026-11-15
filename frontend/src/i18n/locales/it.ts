@@ -5753,6 +5753,7 @@ export default {
       orderTitle: 'Ordine in coda',
       incompatible: 'Impossibile inviare alle stampanti {{model}}: {{files}}',
       notSlicedFor: 'Non elaborato per {{model}}: {{files}}',
+      perFileMappingHint: 'Ogni file ha la propria mappatura filamento. Ai file che non modifichi gli slot vengono assegnati all’avvio della stampa.',
       failed: 'Non messo in coda: {{filename}} ({{message}}). Messi in coda prima: {{queued}}.',
     },
     variants: {

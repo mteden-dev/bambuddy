@@ -9,6 +9,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
   - edytowalna paleta szybkich kolorów (podgląd hexa po najechaniu, dodawanie, ukrywanie, kolejność),
   - przycisk *Drukuj* na karcie drukarki otwiera wybór pliku z biblioteki (foldery, szukanie, sortowanie,
     tylko pliki pocięte dla tej drukarki); wysyłanie nowego pliku to opcja w tym samym oknie,
+  - drukowanie kilku plików jako osobne zadania na jednej drukarce: każdy plik ma własny panel
+    mapowania filamentów; plik zmieniony w panelu dostaje to mapowanie, pozostałe jak dotąd
+    dobiera scheduler przy starcie wydruku,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,

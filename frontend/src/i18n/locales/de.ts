@@ -5767,6 +5767,7 @@ export default {
       orderTitle: 'Reihenfolge in der Warteschlange',
       incompatible: 'Kann nicht an {{model}}-Drucker gesendet werden: {{files}}',
       notSlicedFor: 'Nicht für {{model}} gesliced: {{files}}',
+      perFileMappingHint: 'Jede Datei hat ihre eigene Filamentzuordnung. Dateien, die du nicht änderst, bekommen ihre Slots beim Druckstart zugeordnet.',
       failed: 'Nicht eingereiht: {{filename}} ({{message}}). Davor eingereiht: {{queued}}.',
     },
     variants: {

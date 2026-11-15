@@ -145,9 +145,11 @@ describe('PrintModal with several selected files (#3462)', () => {
     expect(screen.queryByText(SEPARATE_HINT)).not.toBeInTheDocument();
 
     // A selected printer would bring up the first file's tray mapping; it is
-    // not shown, because each file is mapped against its own 3MF at dispatch.
+    // not shown, because each file prints its own slots. Each file gets its
+    // own panel instead (PrintModalSeparateJobsMapping.test.tsx).
     await pickPrinterAndWait(user, 'A1 Test');
-    expect(screen.queryByText(/Filament Mapping/)).not.toBeInTheDocument();
+    expect(await screen.findByText('Filament Mapping — part-a.gcode.3mf')).toBeInTheDocument();
+    expect(screen.queryByText('Filament Mapping')).not.toBeInTheDocument();
 
     // Same for the override panel of "Any A1".
     await user.click(screen.getByRole('button', { name: /Any A1/ }));

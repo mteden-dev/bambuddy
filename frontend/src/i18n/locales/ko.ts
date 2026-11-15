@@ -5537,6 +5537,7 @@ export default {
       orderTitle: '대기열 순서',
       incompatible: '{{model}} 프린터로 보낼 수 없음: {{files}}',
       notSlicedFor: '{{model}}용으로 슬라이스되지 않음: {{files}}',
+      perFileMappingHint: '파일마다 필라멘트 매핑이 따로 있습니다. 변경하지 않은 파일은 인쇄가 시작될 때 슬롯이 지정됩니다.',
       failed: '대기열에 추가되지 않음: {{filename}} ({{message}}). 먼저 추가된 항목: {{queued}}.',
     },
     variants: {

@@ -5753,6 +5753,7 @@ export default {
       orderTitle: '队列顺序',
       incompatible: '无法发送到 {{model}} 打印机：{{files}}',
       notSlicedFor: '未为 {{model}} 切片：{{files}}',
+      perFileMappingHint: '每个文件都有自己的耗材映射。未更改的文件会在打印开始时自动匹配槽位。',
       failed: '未加入队列：{{filename}}（{{message}}）。此前已加入：{{queued}}。',
     },
     variants: {

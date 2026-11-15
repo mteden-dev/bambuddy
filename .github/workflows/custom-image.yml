@@ -81,7 +81,10 @@ jobs:
             src/__tests__/pages/SpoolBuddyAmsPageWiring.test.tsx \
             src/__tests__/utils/printPicker.test.ts \
             src/__tests__/components/PrintFromLibraryModal.test.tsx \
-            src/__tests__/pages/PrintersPageDropOnBusy.test.tsx
+            src/__tests__/pages/PrintersPageDropOnBusy.test.tsx \
+            src/__tests__/components/PrintModalPerFileMappingRules.test.ts \
+            src/__tests__/components/PrintModalSeparateJobsMapping.test.tsx \
+            src/__tests__/components/PrintModalSeparateJobs.test.tsx
 
   image:
     name: Build and push arm64 image

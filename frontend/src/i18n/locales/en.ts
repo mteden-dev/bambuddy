@@ -5814,6 +5814,7 @@ export default {
       orderTitle: 'Queue order',
       incompatible: 'Cannot be dispatched to {{model}} printers: {{files}}',
       notSlicedFor: 'Not sliced for {{model}}: {{files}}',
+      perFileMappingHint: 'Each file has its own filament mapping. Files you leave unchanged get their slots matched when the print starts.',
       failed: 'Not queued: {{filename}} ({{message}}). Queued before it: {{queued}}.',
     },
     variants: {

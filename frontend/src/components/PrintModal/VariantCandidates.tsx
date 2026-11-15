@@ -43,10 +43,11 @@ interface VariantCandidatesProps {
  * shared. For alternatives that is already how model-based assignment works:
  * the printer is unknown at queue time, so there is nothing per-machine to
  * configure. Separate jobs do know the printer, but the modal's filament panels
- * describe the first file only, so they are hidden and no job carries them.
- * The AMS mapping in particular is deliberately absent in both uses — the
- * scheduler computes it against the printer and the file each item runs,
- * exactly as it does for a single-model job.
+ * describe the first file only, so they are hidden. With one printer selected
+ * the modal shows one mapping panel per file below this list instead, and a
+ * file changed there carries its mapping. Otherwise the scheduler computes it
+ * against the printer and the file each item runs, exactly as it does for a
+ * single-model job.
  *
  * For alternatives, order is the answer to "which would you rather have when
  * both are free", so it is explicit rather than left to whichever printer the

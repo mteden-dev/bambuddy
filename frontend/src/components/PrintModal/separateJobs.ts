@@ -55,6 +55,10 @@ export interface SeparateJobsSettings {
   printOptions: PrintOptions;
   scheduleOptions: ScheduleOptions;
   costCenterId: number | null;
+  /** Tray picks of the per-file mapping panels (one printer only), keyed by
+   *  `perFileMappingKey`. Without them the rest of the run would print the
+   *  files the user mapped by hand with whatever the scheduler matches. */
+  manualMappingsByFile?: Record<string, Record<number, number>>;
 }
 
 /** Reported after a refusal: the resume state, and which files are done. */

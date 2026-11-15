@@ -5814,6 +5814,7 @@ export default {
       orderTitle: 'Kolejność w kolejce',
       incompatible: 'Nie można wysłać do drukarek {{model}}: {{files}}',
       notSlicedFor: 'Nie pocięto dla {{model}}: {{files}}',
+      perFileMappingHint: 'Każdy plik ma własne mapowanie filamentów. Pliki, których nie zmienisz, dostaną sloty dobrane przy starcie wydruku.',
       failed: 'Nie dodano do kolejki: {{filename}} ({{message}}). Dodano wcześniej: {{queued}}.',
     },
     variants: {

@@ -5743,6 +5743,7 @@ export default {
       orderTitle: 'Kuyruk sırası',
       incompatible: '{{model}} yazıcılarına gönderilemez: {{files}}',
       notSlicedFor: '{{model}} için dilimlenmemiş: {{files}}',
+      perFileMappingHint: 'Her dosyanın kendi filament eşlemesi vardır. Değiştirmediğiniz dosyaların yuvaları baskı başladığında eşleştirilir.',
       failed: 'Kuyruğa eklenmedi: {{filename}} ({{message}}). Önce eklenenler: {{queued}}.',
     },
     variants: {

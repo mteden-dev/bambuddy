@@ -5843,6 +5843,7 @@ errors: {
       orderTitle: 'Köordning',
       incompatible: 'Kan inte skickas till {{model}}-skrivare: {{files}}',
       notSlicedFor: 'Inte slicad för {{model}}: {{files}}',
+      perFileMappingHint: 'Varje fil har en egen filamentmappning. Filer du inte ändrar får sina fack tilldelade när utskriften startar.',
       failed: 'Inte köad: {{filename}} ({{message}}). Köade före: {{queued}}.',
     },
     variants: {
