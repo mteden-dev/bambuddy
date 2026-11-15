@@ -5713,6 +5713,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: '在 {{printer}} 上打印',
+    subtitle: '从你的库中选择已切片的文件',
+    subtitleModel: '从你的库中选择为 {{model}} 切片的文件',
+    library: '库',
+    location: '位置',
+    search: '搜索文件',
+    searchingAll: '正在搜索整个库',
+    sortBy: '排序方式',
+    sortName: '名称',
+    sortNewest: '最新',
+    sortMostPrinted: '打印次数最多',
+    upload: '上传',
+    uploadTo: '上传文件到 {{folder}}',
+    dropHint: '将已切片的文件拖放到此处以上传到 {{folder}}',
+    dropToUpload: '松开以上传到 {{folder}}',
+    onlySliced: '只能打印已切片的文件（.gcode.3mf、.gcode）',
+    printableCount: '可打印文件：{{count}}',
+    printedTimes: '已打印：{{count}} 次',
+    printThis: '在 {{printer}} 上打印',
+    empty: '这里没有可打印的文件',
+    emptyHint: '只能打印已切片的文件（.gcode.3mf、.gcode）。请上传一个，或在文件管理器中切片模型。',
+    noResults: '没有与“{{query}}”匹配的文件',
+    loadError: '无法加载库',
+    showOtherPrinters: '显示其他打印机的文件（{{count}}）',
+    hideOtherPrinters: '隐藏其他打印机的文件',
+    noPermissionLibrary: '你没有浏览库的权限',
+  },
   printModal: {
     multiFile: {
       groupLabel: '所选文件的处理方式',

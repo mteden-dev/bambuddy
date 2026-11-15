@@ -5714,6 +5714,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Imprimer sur {{printer}}',
+    subtitle: 'Choisissez un fichier tranché dans votre bibliothèque',
+    subtitleModel: 'Choisissez un fichier tranché pour {{model}} dans votre bibliothèque',
+    library: 'Bibliothèque',
+    location: 'Emplacement',
+    search: 'Rechercher des fichiers',
+    searchingAll: 'Recherche dans toute la bibliothèque',
+    sortBy: 'Trier par',
+    sortName: 'Nom',
+    sortNewest: 'Plus récents',
+    sortMostPrinted: 'Plus imprimés',
+    upload: 'Téléverser',
+    uploadTo: 'Téléverser un fichier dans {{folder}}',
+    dropHint: 'Déposez ici un fichier tranché pour le téléverser dans {{folder}}',
+    dropToUpload: 'Déposez pour téléverser dans {{folder}}',
+    onlySliced: 'Seuls les fichiers tranchés (.gcode.3mf, .gcode) peuvent être imprimés',
+    printableCount: 'Fichiers à imprimer : {{count}}',
+    printedTimes: 'Imprimé : {{count}}×',
+    printThis: 'Imprimer sur {{printer}}',
+    empty: 'Aucun fichier imprimable ici',
+    emptyHint: 'Seuls les fichiers tranchés (.gcode.3mf, .gcode) peuvent être imprimés. Téléversez-en un ou tranchez un modèle dans le Gestionnaire de fichiers.',
+    noResults: 'Aucun fichier ne correspond à « {{query}} »',
+    loadError: 'Impossible de charger la bibliothèque',
+    showOtherPrinters: 'Afficher les fichiers pour d\'autres imprimantes ({{count}})',
+    hideOtherPrinters: 'Masquer les fichiers pour d\'autres imprimantes',
+    noPermissionLibrary: 'Vous n\'avez pas l\'autorisation de parcourir la bibliothèque',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'Ce que deviennent les fichiers sélectionnés',

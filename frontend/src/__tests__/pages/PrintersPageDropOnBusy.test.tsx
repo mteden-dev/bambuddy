@@ -156,6 +156,15 @@ describe('PrintersPage — drop onto a busy printer (#2849)', () => {
     expect(await screen.findByTitle('Print')).toBeInTheDocument();
   });
 
+  it('opens the library picker from the Print button, not a bare upload', async () => {
+    renderWith({ state: 'IDLE' });
+    await card();
+
+    fireEvent.click(await screen.findByTitle('Print'));
+    expect(await screen.findByRole('dialog', { name: 'Print on X1C' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Search files')).toBeInTheDocument();
+  });
+
   it('opens the Print Modal after a drop on a printer that is mid-print', async () => {
     // Reaching the modal from a busy printer is what this change newly allows,
     // so it is worth proving the modal actually renders rather than the drop

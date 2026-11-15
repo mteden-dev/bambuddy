@@ -5734,6 +5734,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Imprimir en {{printer}}',
+    subtitle: 'Elige un archivo laminado de tu biblioteca',
+    subtitleModel: 'Elige un archivo laminado para {{model}} de tu biblioteca',
+    library: 'Biblioteca',
+    location: 'Ubicación',
+    search: 'Buscar archivos',
+    searchingAll: 'Buscando en toda la biblioteca',
+    sortBy: 'Ordenar por',
+    sortName: 'Nombre',
+    sortNewest: 'Más recientes',
+    sortMostPrinted: 'Más impresos',
+    upload: 'Subir',
+    uploadTo: 'Subir un archivo a {{folder}}',
+    dropHint: 'Suelta aquí un archivo laminado para subirlo a {{folder}}',
+    dropToUpload: 'Suelta para subir a {{folder}}',
+    onlySliced: 'Solo se pueden imprimir archivos laminados (.gcode.3mf, .gcode)',
+    printableCount: 'Archivos para imprimir: {{count}}',
+    printedTimes: 'Impreso: {{count}}×',
+    printThis: 'Imprimir en {{printer}}',
+    empty: 'No hay archivos imprimibles',
+    emptyHint: 'Solo se pueden imprimir archivos laminados (.gcode.3mf, .gcode). Sube uno o lamina un modelo en el Gestor de archivos.',
+    noResults: 'Ningún archivo coincide con "{{query}}"',
+    loadError: 'No se pudo cargar la biblioteca',
+    showOtherPrinters: 'Mostrar archivos para otras impresoras ({{count}})',
+    hideOtherPrinters: 'Ocultar archivos para otras impresoras',
+    noPermissionLibrary: 'No tienes permiso para ver la biblioteca',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'En qué se convierten los archivos seleccionados',

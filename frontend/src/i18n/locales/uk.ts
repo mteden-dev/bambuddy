@@ -5767,6 +5767,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Друк на {{printer}}',
+    subtitle: 'Виберіть нарізаний файл із бібліотеки',
+    subtitleModel: 'Виберіть файл, нарізаний для {{model}}, із бібліотеки',
+    library: 'Бібліотека',
+    location: 'Розташування',
+    search: 'Пошук файлів',
+    searchingAll: 'Пошук у всій бібліотеці',
+    sortBy: 'Сортування',
+    sortName: 'Назва',
+    sortNewest: 'Нові',
+    sortMostPrinted: 'Найчастіше друковані',
+    upload: 'Завантажити',
+    uploadTo: 'Завантажити файл у теку: {{folder}}',
+    dropHint: 'Перетягніть сюди нарізаний файл, щоб завантажити його в теку: {{folder}}',
+    dropToUpload: 'Відпустіть, щоб завантажити в теку: {{folder}}',
+    onlySliced: 'Друкувати можна лише нарізані файли (.gcode.3mf, .gcode)',
+    printableCount: 'Файлів для друку: {{count}}',
+    printedTimes: 'Надруковано: {{count}}×',
+    printThis: 'Друк на {{printer}}',
+    empty: 'Немає файлів для друку',
+    emptyHint: 'Друкувати можна лише нарізані файли (.gcode.3mf, .gcode). Завантажте такий файл або наріжте модель у Менеджері файлів.',
+    noResults: 'Немає файлів за запитом «{{query}}»',
+    loadError: 'Не вдалося завантажити бібліотеку',
+    showOtherPrinters: 'Показати файли для інших принтерів ({{count}})',
+    hideOtherPrinters: 'Сховати файли для інших принтерів',
+    noPermissionLibrary: 'У вас немає прав на перегляд бібліотеки',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'Чим стають вибрані файли',

@@ -7,6 +7,8 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
 - **Branch `custom`** (domyślny w forku) = ostatnie wydanie upstream + lokalne commity:
   - ukrywanie presetów filamentu i wbudowanych nazw w oknie *Configure AMS Slot*,
   - edytowalna paleta szybkich kolorów (podgląd hexa po najechaniu, dodawanie, ukrywanie, kolejność),
+  - przycisk *Drukuj* na karcie drukarki otwiera wybór pliku z biblioteki (foldery, szukanie, sortowanie,
+    tylko pliki pocięte dla tej drukarki); wysyłanie nowego pliku to opcja w tym samym oknie,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,

@@ -194,8 +194,8 @@ import { useToast } from '../contexts/ToastContext';
 import { ChamberLight } from '../components/icons/ChamberLight';
 import { PlateClearedIcon } from '../components/icons/PlateClearedIcon';
 import { SkipObjectsModal, SkipObjectsIcon } from '../components/SkipObjectsModal';
-import { FileUploadModal } from '../components/FileUploadModal';
 import { PrintModal } from '../components/PrintModal';
+import { PrintFromLibraryModal } from '../components/PrintFromLibraryModal';
 import { PrinterInfoModal } from '../components/PrinterInfoModal';
 import { FeedDirectionModal } from '../components/FeedDirectionModal';
 import { plateCheckFailureText } from '../utils/plateCheck';
@@ -2187,7 +2187,7 @@ function PrinterCard({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const { hasPermission, canModify, authEnabled, isAdmin } = useAuth();
+  const { hasPermission, hasAnyPermission, canModify, authEnabled, isAdmin } = useAuth();
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteArchives, setDeleteArchives] = useState(true);
@@ -2223,7 +2223,8 @@ function PrinterCard({
   const [bedJogStep, setBedJogStep] = useState<number>(10);
   const [showResumeConfirm, setShowResumeConfirm] = useState(false);
   const [showSkipObjectsModal, setShowSkipObjectsModal] = useState(false);
-  const [showUploadForPrint, setShowUploadForPrint] = useState(false);
+  const [showPrintPicker, setShowPrintPicker] = useState(false);
+  const canBrowseLibrary = hasAnyPermission('library:read', 'library:read_own', 'library:read_all');
   const [showPrinterInfo, setShowPrinterInfo] = useState(false);
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const closePrinterInfo = useCallback(() => setShowPrinterInfo(false), []);
@@ -6917,18 +6918,17 @@ function PrinterCard({
                 >
                   <HardDrive className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
                 </Button>
-                {/* Shown whatever the printer is doing (#2849): this uploads a
-                    file and queues it, which a busy or offline printer is no
-                    reason to refuse -- it only means the item waits. Hiding it
-                    while the drop zone accepted the same file would have left
-                    the two routes into this flow disagreeing. */}
+                {/* Shown whatever the printer is doing (#2849): picking a file
+                    queues it, which a busy or offline printer is no reason to
+                    refuse -- it only means the item waits. The picker lists the
+                    library first; uploading is an option inside it. */}
                 <Button
                   size="sm"
-                  onClick={() => setShowUploadForPrint(true)}
-                  disabled={!hasPermission('library:upload') || !hasPermission('queue:create')}
+                  onClick={() => setShowPrintPicker(true)}
+                  disabled={!canBrowseLibrary || !hasPermission('queue:create')}
                   title={
-                    !hasPermission('library:upload')
-                      ? t('fileManager.noPermissionUpload')
+                    !canBrowseLibrary
+                      ? t('printPicker.noPermissionLibrary')
                       : !hasPermission('queue:create')
                         ? t('fileManager.noPermissionAddToQueue')
                         : t('common.print')
@@ -6963,33 +6963,13 @@ function PrinterCard({
         />
       )}
 
-      {/* Upload for Print Modal */}
-      {showUploadForPrint && (
-        <FileUploadModal
-          folderId={null}
-          onClose={() => setShowUploadForPrint(false)}
-          onUploadComplete={() => {}}
-          autoUpload
-          accept=".gcode,.3mf"
-          validateFile={(file) => {
-            if (!mayBeSlicedFileName(file.name)) {
-              return t('printers.dropNotPrintable');
-            }
-          }}
-          onFileUploaded={(uploadedFile) => {
-            if (!isSlicedLibraryFile(uploadedFile)) {
-              api.deleteLibraryFile(uploadedFile.id).catch(() => {});
-              return t('printers.dropNotSliced');
-            }
-            // Check printer compatibility if sliced_for_model is available in metadata
-            const slicedFor = (uploadedFile.metadata as Record<string, unknown>)?.sliced_for_model as string | undefined;
-            const printerModel = mapModelCode(printer.model);
-            if (slicedFor && printerModel && slicedFor.toLowerCase() !== printerModel.toLowerCase()) {
-              api.deleteLibraryFile(uploadedFile.id).catch(() => {});
-              return t('printers.incompatibleFile', 'This file was sliced for {{slicedFor}}, but this printer is a {{printerModel}}', { slicedFor, printerModel });
-            }
-            setPrintAfterUpload({ id: uploadedFile.id, filename: uploadedFile.filename });
-          }}
+      {/* Print: pick from the library, or upload into it */}
+      {showPrintPicker && (
+        <PrintFromLibraryModal
+          printerId={printer.id}
+          printerName={printer.name}
+          printerModel={printer.model}
+          onClose={() => setShowPrintPicker(false)}
         />
       )}
 

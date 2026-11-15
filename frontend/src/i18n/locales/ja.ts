@@ -5727,6 +5727,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: '{{printer}} で印刷',
+    subtitle: 'ライブラリからスライス済みファイルを選択',
+    subtitleModel: 'ライブラリから {{model}} 用にスライスしたファイルを選択',
+    library: 'ライブラリ',
+    location: '場所',
+    search: 'ファイルを検索',
+    searchingAll: 'ライブラリ全体を検索中',
+    sortBy: '並べ替え',
+    sortName: '名前',
+    sortNewest: '新しい順',
+    sortMostPrinted: '印刷回数順',
+    upload: 'アップロード',
+    uploadTo: '{{folder}} にファイルをアップロード',
+    dropHint: 'スライス済みファイルをここにドロップして {{folder}} にアップロード',
+    dropToUpload: 'ドロップして {{folder}} にアップロード',
+    onlySliced: '印刷できるのはスライス済みファイル (.gcode.3mf, .gcode) のみです',
+    printableCount: '印刷可能なファイル: {{count}}',
+    printedTimes: '印刷回数: {{count}}',
+    printThis: '{{printer}} で印刷',
+    empty: '印刷可能なファイルがありません',
+    emptyHint: '印刷できるのはスライス済みファイル (.gcode.3mf, .gcode) のみです。アップロードするか、ファイルマネージャーでモデルをスライスしてください。',
+    noResults: '「{{query}}」に一致するファイルはありません',
+    loadError: 'ライブラリを読み込めませんでした',
+    showOtherPrinters: '他のプリンター用のファイルを表示 ({{count}})',
+    hideOtherPrinters: '他のプリンター用のファイルを隠す',
+    noPermissionLibrary: 'ライブラリを閲覧する権限がありません',
+  },
   printModal: {
     multiFile: {
       groupLabel: '選択したファイルの扱い',

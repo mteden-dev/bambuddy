@@ -5774,6 +5774,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Print on {{printer}}',
+    subtitle: 'Choose a sliced file from your library',
+    subtitleModel: 'Choose a file sliced for {{model}} from your library',
+    library: 'Library',
+    location: 'Location',
+    search: 'Search files',
+    searchingAll: 'Searching the whole library',
+    sortBy: 'Sort by',
+    sortName: 'Name',
+    sortNewest: 'Newest',
+    sortMostPrinted: 'Most printed',
+    upload: 'Upload',
+    uploadTo: 'Upload a file into {{folder}}',
+    dropHint: 'Drop a sliced file anywhere here to upload it into {{folder}}',
+    dropToUpload: 'Drop to upload into {{folder}}',
+    onlySliced: 'Only sliced files (.gcode.3mf, .gcode) can be printed',
+    printableCount: 'Files to print: {{count}}',
+    printedTimes: 'Printed: {{count}}×',
+    printThis: 'Print on {{printer}}',
+    empty: 'No printable files here',
+    emptyHint: 'Only sliced files (.gcode.3mf, .gcode) can be printed. Upload one, or slice a model in the File Manager.',
+    noResults: 'No files match "{{query}}"',
+    loadError: 'Could not load the library',
+    showOtherPrinters: 'Show files for other printers ({{count}})',
+    hideOtherPrinters: 'Hide files for other printers',
+    noPermissionLibrary: 'You do not have permission to browse the library',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'What the selected files become',

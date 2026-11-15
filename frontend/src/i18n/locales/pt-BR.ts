@@ -5713,6 +5713,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Imprimir em {{printer}}',
+    subtitle: 'Escolha um arquivo fatiado da sua biblioteca',
+    subtitleModel: 'Escolha um arquivo fatiado para {{model}} da sua biblioteca',
+    library: 'Biblioteca',
+    location: 'Local',
+    search: 'Buscar arquivos',
+    searchingAll: 'Buscando em toda a biblioteca',
+    sortBy: 'Ordenar por',
+    sortName: 'Nome',
+    sortNewest: 'Mais recentes',
+    sortMostPrinted: 'Mais impressos',
+    upload: 'Enviar',
+    uploadTo: 'Enviar um arquivo para {{folder}}',
+    dropHint: 'Solte aqui um arquivo fatiado para enviá-lo para {{folder}}',
+    dropToUpload: 'Solte para enviar para {{folder}}',
+    onlySliced: 'Apenas arquivos fatiados (.gcode.3mf, .gcode) podem ser impressos',
+    printableCount: 'Arquivos para imprimir: {{count}}',
+    printedTimes: 'Impresso: {{count}}×',
+    printThis: 'Imprimir em {{printer}}',
+    empty: 'Nenhum arquivo imprimível aqui',
+    emptyHint: 'Apenas arquivos fatiados (.gcode.3mf, .gcode) podem ser impressos. Envie um ou fatie um modelo no Gerenciador de arquivos.',
+    noResults: 'Nenhum arquivo corresponde a "{{query}}"',
+    loadError: 'Não foi possível carregar a biblioteca',
+    showOtherPrinters: 'Mostrar arquivos para outras impressoras ({{count}})',
+    hideOtherPrinters: 'Ocultar arquivos para outras impressoras',
+    noPermissionLibrary: 'Você não tem permissão para navegar na biblioteca',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'O que os arquivos selecionados se tornam',

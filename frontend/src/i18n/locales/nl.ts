@@ -5772,6 +5772,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Printen op {{printer}}',
+    subtitle: 'Kies een gesliced bestand uit je bibliotheek',
+    subtitleModel: 'Kies een voor {{model}} gesliced bestand uit je bibliotheek',
+    library: 'Bibliotheek',
+    location: 'Locatie',
+    search: 'Bestanden zoeken',
+    searchingAll: 'Zoeken in de hele bibliotheek',
+    sortBy: 'Sorteren op',
+    sortName: 'Naam',
+    sortNewest: 'Nieuwste',
+    sortMostPrinted: 'Meest geprint',
+    upload: 'Uploaden',
+    uploadTo: 'Bestand uploaden naar {{folder}}',
+    dropHint: 'Sleep hier een gesliced bestand naartoe om het naar {{folder}} te uploaden',
+    dropToUpload: 'Loslaten om te uploaden naar {{folder}}',
+    onlySliced: 'Alleen geslicede bestanden (.gcode.3mf, .gcode) kunnen worden geprint',
+    printableCount: 'Bestanden om te printen: {{count}}',
+    printedTimes: 'Geprint: {{count}}×',
+    printThis: 'Printen op {{printer}}',
+    empty: 'Geen printbare bestanden',
+    emptyHint: 'Alleen geslicede bestanden (.gcode.3mf, .gcode) kunnen worden geprint. Upload er een of slice een model in Bestandsbeheer.',
+    noResults: 'Geen bestanden gevonden voor "{{query}}"',
+    loadError: 'Kon de bibliotheek niet laden',
+    showOtherPrinters: 'Bestanden voor andere printers tonen ({{count}})',
+    hideOtherPrinters: 'Bestanden voor andere printers verbergen',
+    noPermissionLibrary: 'Je hebt geen toestemming om de bibliotheek te bekijken',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'Wat er van de geselecteerde bestanden wordt',

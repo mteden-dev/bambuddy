@@ -5713,6 +5713,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: '在 {{printer}} 上列印',
+    subtitle: '從你的資料庫中選擇已切片的檔案',
+    subtitleModel: '從你的資料庫中選擇為 {{model}} 切片的檔案',
+    library: '資料庫',
+    location: '位置',
+    search: '搜尋檔案',
+    searchingAll: '正在搜尋整個資料庫',
+    sortBy: '排序方式',
+    sortName: '名稱',
+    sortNewest: '最新',
+    sortMostPrinted: '列印次數最多',
+    upload: '上傳',
+    uploadTo: '上傳檔案到 {{folder}}',
+    dropHint: '將已切片的檔案拖放到此處以上傳到 {{folder}}',
+    dropToUpload: '放開以上傳到 {{folder}}',
+    onlySliced: '只能列印已切片的檔案（.gcode.3mf、.gcode）',
+    printableCount: '可列印檔案：{{count}}',
+    printedTimes: '已列印：{{count}} 次',
+    printThis: '在 {{printer}} 上列印',
+    empty: '這裡沒有可列印的檔案',
+    emptyHint: '只能列印已切片的檔案（.gcode.3mf、.gcode）。請上傳一個，或在檔案管理員中切片模型。',
+    noResults: '沒有與「{{query}}」相符的檔案',
+    loadError: '無法載入資料庫',
+    showOtherPrinters: '顯示其他印表機的檔案（{{count}}）',
+    hideOtherPrinters: '隱藏其他印表機的檔案',
+    noPermissionLibrary: '你沒有瀏覽資料庫的權限',
+  },
   printModal: {
     multiFile: {
       groupLabel: '所選檔案的處理方式',

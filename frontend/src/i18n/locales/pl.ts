@@ -5774,6 +5774,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Drukuj na {{printer}}',
+    subtitle: 'Wybierz pocięty plik ze swojej biblioteki',
+    subtitleModel: 'Wybierz plik pocięty dla {{model}} ze swojej biblioteki',
+    library: 'Biblioteka',
+    location: 'Lokalizacja',
+    search: 'Szukaj plików',
+    searchingAll: 'Szukanie w całej bibliotece',
+    sortBy: 'Sortuj według',
+    sortName: 'Nazwa',
+    sortNewest: 'Najnowsze',
+    sortMostPrinted: 'Najczęściej drukowane',
+    upload: 'Prześlij',
+    uploadTo: 'Prześlij plik do: {{folder}}',
+    dropHint: 'Upuść tu pocięty plik, aby przesłać go do: {{folder}}',
+    dropToUpload: 'Upuść, aby przesłać do: {{folder}}',
+    onlySliced: 'Drukować można tylko pocięte pliki (.gcode.3mf, .gcode)',
+    printableCount: 'Pliki do druku: {{count}}',
+    printedTimes: 'Drukowano: {{count}}×',
+    printThis: 'Drukuj na {{printer}}',
+    empty: 'Brak plików do druku',
+    emptyHint: 'Drukować można tylko pocięte pliki (.gcode.3mf, .gcode). Prześlij taki plik albo potnij model w Menedżerze plików.',
+    noResults: 'Brak plików pasujących do "{{query}}"',
+    loadError: 'Nie udało się wczytać biblioteki',
+    showOtherPrinters: 'Pokaż pliki dla innych drukarek ({{count}})',
+    hideOtherPrinters: 'Ukryj pliki dla innych drukarek',
+    noPermissionLibrary: 'Nie masz uprawnień do przeglądania biblioteki',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'Czym stają się wybrane pliki',

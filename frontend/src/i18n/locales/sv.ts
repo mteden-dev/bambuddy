@@ -5803,6 +5803,35 @@ errors: {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Skriv ut på {{printer}}',
+    subtitle: 'Välj en slicad fil från ditt bibliotek',
+    subtitleModel: 'Välj en fil slicad för {{model}} från ditt bibliotek',
+    library: 'Bibliotek',
+    location: 'Plats',
+    search: 'Sök filer',
+    searchingAll: 'Söker i hela biblioteket',
+    sortBy: 'Sortera efter',
+    sortName: 'Namn',
+    sortNewest: 'Nyaste',
+    sortMostPrinted: 'Mest utskrivna',
+    upload: 'Ladda upp',
+    uploadTo: 'Ladda upp en fil till {{folder}}',
+    dropHint: 'Släpp en slicad fil här för att ladda upp den till {{folder}}',
+    dropToUpload: 'Släpp för att ladda upp till {{folder}}',
+    onlySliced: 'Endast slicade filer (.gcode.3mf, .gcode) kan skrivas ut',
+    printableCount: 'Filer att skriva ut: {{count}}',
+    printedTimes: 'Utskriven: {{count}}×',
+    printThis: 'Skriv ut på {{printer}}',
+    empty: 'Inga utskrivbara filer här',
+    emptyHint: 'Endast slicade filer (.gcode.3mf, .gcode) kan skrivas ut. Ladda upp en eller slica en modell i Filhanteraren.',
+    noResults: 'Inga filer matchar "{{query}}"',
+    loadError: 'Kunde inte läsa in biblioteket',
+    showOtherPrinters: 'Visa filer för andra skrivare ({{count}})',
+    hideOtherPrinters: 'Dölj filer för andra skrivare',
+    noPermissionLibrary: 'Du har inte behörighet att bläddra i biblioteket',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'Vad de valda filerna blir',

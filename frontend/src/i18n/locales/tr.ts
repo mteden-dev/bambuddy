@@ -5703,6 +5703,35 @@ export default {
   },
 
   // Baskı modali
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: '{{printer}} üzerinde yazdır',
+    subtitle: 'Kitaplığınızdan dilimlenmiş bir dosya seçin',
+    subtitleModel: 'Kitaplığınızdan {{model}} için dilimlenmiş bir dosya seçin',
+    library: 'Kitaplık',
+    location: 'Konum',
+    search: 'Dosya ara',
+    searchingAll: 'Tüm kitaplıkta aranıyor',
+    sortBy: 'Sırala',
+    sortName: 'Ad',
+    sortNewest: 'En yeni',
+    sortMostPrinted: 'En çok yazdırılan',
+    upload: 'Yükle',
+    uploadTo: '{{folder}} klasörüne dosya yükle',
+    dropHint: '{{folder}} klasörüne yüklemek için dilimlenmiş bir dosyayı buraya bırakın',
+    dropToUpload: '{{folder}} klasörüne yüklemek için bırakın',
+    onlySliced: 'Yalnızca dilimlenmiş dosyalar (.gcode.3mf, .gcode) yazdırılabilir',
+    printableCount: 'Yazdırılacak dosya: {{count}}',
+    printedTimes: 'Yazdırıldı: {{count}}×',
+    printThis: '{{printer}} üzerinde yazdır',
+    empty: 'Burada yazdırılabilir dosya yok',
+    emptyHint: 'Yalnızca dilimlenmiş dosyalar (.gcode.3mf, .gcode) yazdırılabilir. Bir tane yükleyin veya Dosya Yöneticisi\'nde bir modeli dilimleyin.',
+    noResults: '"{{query}}" ile eşleşen dosya yok',
+    loadError: 'Kitaplık yüklenemedi',
+    showOtherPrinters: 'Diğer yazıcılar için dosyaları göster ({{count}})',
+    hideOtherPrinters: 'Diğer yazıcılar için dosyaları gizle',
+    noPermissionLibrary: 'Kitaplığa göz atma izniniz yok',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'Seçilen dosyalar neye dönüşür',

@@ -5713,6 +5713,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Stampa su {{printer}}',
+    subtitle: 'Scegli un file slicato dalla tua libreria',
+    subtitleModel: 'Scegli un file slicato per {{model}} dalla tua libreria',
+    library: 'Libreria',
+    location: 'Posizione',
+    search: 'Cerca file',
+    searchingAll: 'Ricerca in tutta la libreria',
+    sortBy: 'Ordina per',
+    sortName: 'Nome',
+    sortNewest: 'Più recenti',
+    sortMostPrinted: 'Più stampati',
+    upload: 'Carica',
+    uploadTo: 'Carica un file in {{folder}}',
+    dropHint: 'Trascina qui un file slicato per caricarlo in {{folder}}',
+    dropToUpload: 'Rilascia per caricare in {{folder}}',
+    onlySliced: 'Si possono stampare solo file slicati (.gcode.3mf, .gcode)',
+    printableCount: 'File da stampare: {{count}}',
+    printedTimes: 'Stampato: {{count}}×',
+    printThis: 'Stampa su {{printer}}',
+    empty: 'Nessun file stampabile qui',
+    emptyHint: 'Si possono stampare solo file slicati (.gcode.3mf, .gcode). Caricane uno o esegui lo slicing di un modello nel Gestore file.',
+    noResults: 'Nessun file corrisponde a "{{query}}"',
+    loadError: 'Impossibile caricare la libreria',
+    showOtherPrinters: 'Mostra i file per altre stampanti ({{count}})',
+    hideOtherPrinters: 'Nascondi i file per altre stampanti',
+    noPermissionLibrary: 'Non hai il permesso di sfogliare la libreria',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'Cosa diventano i file selezionati',

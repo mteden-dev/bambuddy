@@ -5727,6 +5727,35 @@ export default {
   },
 
   // Print modal
+  // Printer card Print button: pick a library file (fork)
+  printPicker: {
+    title: 'Drucken auf {{printer}}',
+    subtitle: 'Wähle eine geslicte Datei aus deiner Bibliothek',
+    subtitleModel: 'Wähle eine für {{model}} geslicte Datei aus deiner Bibliothek',
+    library: 'Bibliothek',
+    location: 'Ort',
+    search: 'Dateien suchen',
+    searchingAll: 'Durchsuche die gesamte Bibliothek',
+    sortBy: 'Sortieren nach',
+    sortName: 'Name',
+    sortNewest: 'Neueste',
+    sortMostPrinted: 'Am häufigsten gedruckt',
+    upload: 'Hochladen',
+    uploadTo: 'Datei nach {{folder}} hochladen',
+    dropHint: 'Geslicte Datei hier ablegen, um sie nach {{folder}} hochzuladen',
+    dropToUpload: 'Ablegen zum Hochladen nach {{folder}}',
+    onlySliced: 'Nur geslicte Dateien (.gcode.3mf, .gcode) können gedruckt werden',
+    printableCount: 'Druckbare Dateien: {{count}}',
+    printedTimes: 'Gedruckt: {{count}}×',
+    printThis: 'Drucken auf {{printer}}',
+    empty: 'Keine druckbaren Dateien',
+    emptyHint: 'Nur geslicte Dateien (.gcode.3mf, .gcode) können gedruckt werden. Lade eine hoch oder slice ein Modell im Dateimanager.',
+    noResults: 'Keine Dateien passend zu "{{query}}"',
+    loadError: 'Bibliothek konnte nicht geladen werden',
+    showOtherPrinters: 'Dateien für andere Drucker anzeigen ({{count}})',
+    hideOtherPrinters: 'Dateien für andere Drucker ausblenden',
+    noPermissionLibrary: 'Du hast keine Berechtigung, die Bibliothek zu durchsuchen',
+  },
   printModal: {
     multiFile: {
       groupLabel: 'Was aus den gewählten Dateien wird',
