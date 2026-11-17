@@ -13456,6 +13456,16 @@ app.include_router(metrics.router, prefix=app_settings.api_prefix)
 app.include_router(virtual_printers.router, prefix=app_settings.api_prefix)
 app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix)
 
+# Fork: OrcaSlicer uploads to Bambuddy as to an OctoPrint host (ORCA_SLICER_UPLOAD.md).
+# The OctoPrint routes sit at the root (/api/version, /api/files/local), outside the
+# API prefix. The middleware is added last, so it runs first: it must see the request
+# before the auth middleware reads its X-API-Key.
+from backend.app.api.routes import octoprint_compat  # noqa: E402
+
+app.include_router(octoprint_compat.router)
+app.include_router(octoprint_compat.inbox_router, prefix=app_settings.api_prefix)
+app.add_middleware(octoprint_compat.PreferSessionOverInjectedApiKey)
+
 
 # Serve static files (React build)
 if app_settings.static_dir.exists() and any(app_settings.static_dir.iterdir()):

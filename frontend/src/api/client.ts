@@ -1676,6 +1676,10 @@ export interface AppSettings {
   hide_builtin_filament_presets: boolean;
   /** JSON array of {name, hex, hidden} quick colours for the AMS slot picker (empty = defaults). */
   ams_color_palette: string;
+  /** Library folder uploads from OrcaSlicer land in (null = an "OrcaSlicer" folder made on the first upload). */
+  slicer_inbox_folder_id: number | null;
+  /** Queue items added from an OrcaSlicer upload wait for a manual start. */
+  slicer_inbox_manual_start: boolean;
   // Default sidebar order (admin-set for all users)
   default_sidebar_order: string;
   // LDAP authentication
@@ -9852,4 +9856,25 @@ export const sponsorPromptApi = {
       method: 'POST',
       body: JSON.stringify({ milestone }),
     }),
+};
+
+// Uploads from OrcaSlicer (fork; it sends to Bambuddy as to an OctoPrint host,
+// see backend/app/api/routes/octoprint_compat.py). A file waits here until its
+// uploader prints, queues, keeps or discards it.
+export interface PendingSlicerUpload {
+  id: number;
+  filename: string;
+  folder_id: number | null;
+  /** The 1-based plate the user sliced in OrcaSlicer, when it said. */
+  plate: number | null;
+  /** Sent with OrcaSlicer's "Upload and print". */
+  print: boolean;
+  sliced_for_model: string | null;
+  print_time_seconds: number | null;
+  filament_used_grams: number | null;
+  created_at: string;
+}
+
+export const slicerInboxApi = {
+  getPending: () => request<PendingSlicerUpload[]>('/slicer-inbox/pending'),
 };

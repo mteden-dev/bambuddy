@@ -17,6 +17,7 @@ import { useSponsorPrompt } from '../hooks/useSponsorPrompt';
 import { useUnknownTagPrompt } from '../hooks/useUnknownTagPrompt';
 import { UnknownSpoolModal } from './UnknownSpoolModal';
 import { ConfirmOutcomeDialog } from './ConfirmOutcomeDialog';
+import { SlicerImportDialog } from './SlicerImportDialog';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { Card, CardHeader, CardContent } from './Card';
@@ -1222,6 +1223,9 @@ export function Layout() {
           onClose={() => setConfirmOutcomeArchiveId(null)}
         />
       )}
+
+      {/* Uploads from OrcaSlicer waiting for a decision (fork) */}
+      <SlicerImportDialog />
 
       {/* Change Password Modal */}
       {showChangePasswordModal && (

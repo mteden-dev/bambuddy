@@ -56,6 +56,8 @@ jobs:
             backend/tests/integration/test_ams_color_palette_api.py \
             backend/tests/integration/test_settings_ui_preferences.py \
             backend/tests/integration/test_settings_ui_flags_3023.py \
+            backend/tests/unit/test_octoprint_compat.py \
+            backend/tests/integration/test_octoprint_compat_api.py \
             backend/tests/unit/test_route_auth_coverage.py
 
       - uses: actions/setup-node@v6
@@ -84,7 +86,9 @@ jobs:
             src/__tests__/pages/PrintersPageDropOnBusy.test.tsx \
             src/__tests__/components/PrintModalPerFileMappingRules.test.ts \
             src/__tests__/components/PrintModalSeparateJobsMapping.test.tsx \
-            src/__tests__/components/PrintModalSeparateJobs.test.tsx
+            src/__tests__/components/PrintModalSeparateJobs.test.tsx \
+            src/__tests__/utils/slicerInbox.test.ts \
+            src/__tests__/components/SlicerImportDialog.test.tsx
 
   image:
     name: Build and push arm64 image

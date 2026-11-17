@@ -47,6 +47,9 @@ export interface PrintModalProps {
   /** Delete the LibraryFile after dispatch — used by the Printers-page Direct-Print flow
    *  so transient uploads don't linger in File Manager. Only applies to library-file prints. */
   cleanupLibraryAfterDispatch?: boolean;
+  /** Schedule options to start from in create mode (fork: the OrcaSlicer import
+   *  dialog opens the queue choice this way when a one-click queue was refused). */
+  initialScheduleOptions?: Partial<ScheduleOptions>;
   /**
    * Several sliced files to print at once, in the order given.
    *

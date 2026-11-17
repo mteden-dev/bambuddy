@@ -4,6 +4,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../api/client';
 import { inventoryLocationsQueryKey, inventorySuppliersQueryKey } from '../utils/inventoryQueries';
+import { SLICER_UPLOAD_EVENT } from '../utils/slicerInbox';
 
 // The auth-failure close code of /api/v1/ws (websocket.py
 // _WS_CLOSE_UNAUTHORIZED). It reaches the browser only for a socket the server
@@ -414,6 +415,18 @@ export function useWebSocket() {
         const detail = (message as unknown as { data?: { archive_id?: number; run_id?: number | null; print_name?: string } }).data;
         if (detail?.archive_id != null) {
           window.dispatchEvent(new CustomEvent('print-confirm-request', { detail }));
+        }
+        break;
+      }
+
+      case 'slicer_upload': {
+        // Fork: a file came in from OrcaSlicer. The globally mounted
+        // SlicerImportDialog asks what to do with it.
+        debouncedInvalidate('library-files');
+        debouncedInvalidate('library-folders');
+        const detail = (message as unknown as { data?: { file_id?: number } }).data;
+        if (detail?.file_id != null) {
+          window.dispatchEvent(new CustomEvent(SLICER_UPLOAD_EVENT, { detail }));
         }
         break;
       }

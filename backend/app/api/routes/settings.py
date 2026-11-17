@@ -178,6 +178,7 @@ _BOOL_SETTING_KEYS = frozenset(
     {
         "auto_archive",
         "hide_builtin_filament_presets",
+        "slicer_inbox_manual_start",
         "save_thumbnails",
         "capture_finish_photo",
         "finish_photo_restore_plate",
@@ -307,8 +308,11 @@ async def _build_settings_response(db: AsyncSession, is_api_key: bool = False, m
                 settings_dict[setting.key] = float(setting.value)
             except (TypeError, ValueError):
                 settings_dict[setting.key] = None
-        elif setting.key == "default_printer_id":
-            settings_dict[setting.key] = int(setting.value) if setting.value and setting.value != "None" else None
+        elif setting.key in ("default_printer_id", "slicer_inbox_folder_id"):
+            try:
+                settings_dict[setting.key] = int(setting.value) if setting.value and setting.value != "None" else None
+            except ValueError:
+                settings_dict[setting.key] = None
         elif setting.key == "open_in_slicer":
             # None means "inherit from preferred_slicer" (#1329). The PUT path
             # serializes None as the literal string "None"; strip it back so
@@ -749,6 +753,9 @@ _UI_FLAG_FIELDS: tuple[str, ...] = (
     # The picker's quick colours, with names typed on this install; shared
     # the same way.
     "ams_color_palette",
+    # Whether a queue item added from an OrcaSlicer upload waits for a
+    # manual start (the app's import dialog sends it with the item).
+    "slicer_inbox_manual_start",
 )
 
 

@@ -183,6 +183,7 @@ class TestWhatItExposes:
             "hidden_filament_presets",
             "hide_builtin_filament_presets",
             "ams_color_palette",
+            "slicer_inbox_manual_start",
             "has_gcode_snippets",
         }
 

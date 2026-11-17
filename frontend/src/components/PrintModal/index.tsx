@@ -108,6 +108,7 @@ export function PrintModal({
   onSuccess,
   projectId,
   cleanupLibraryAfterDispatch,
+  initialScheduleOptions,
   variantFiles,
   separateJobsAllowed,
   resumeSeparateJobs,
@@ -286,7 +287,7 @@ export function PrintModal({
         staggerIntervalMinutes: DEFAULT_SCHEDULE_OPTIONS.staggerIntervalMinutes,
       };
     }
-    return resumedSettings?.scheduleOptions ?? DEFAULT_SCHEDULE_OPTIONS;
+    return resumedSettings?.scheduleOptions ?? { ...DEFAULT_SCHEDULE_OPTIONS, ...initialScheduleOptions };
   });
 
   // Manual slot overrides: slot_id (1-indexed) -> globalTrayId (default mapping for single printer or all printers)

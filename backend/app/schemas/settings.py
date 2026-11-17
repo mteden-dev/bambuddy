@@ -634,6 +634,18 @@ class AppSettings(BaseModel):
         default="",
         description="JSON array of {name, hex, hidden} quick colours for the AMS slot picker (empty = defaults)",
     )
+    # Uploads from OrcaSlicer (its OctoPrint host type, see
+    # api/routes/octoprint_compat.py) land in this library folder and wait
+    # there for the uploader to print, queue, keep or discard them. Empty =
+    # a top-level "OrcaSlicer" folder, made on the first upload.
+    slicer_inbox_folder_id: int | None = Field(
+        default=None,
+        description="Library folder that uploads from OrcaSlicer land in (empty = an 'OrcaSlicer' folder)",
+    )
+    slicer_inbox_manual_start: bool = Field(
+        default=False,
+        description="Queue items added from an OrcaSlicer upload wait for a manual start",
+    )
 
     # Local login (#1589) — when False, /auth/login rejects username+password
     # credentials with HTTP 403 and the login page hides the credentials form,
@@ -909,6 +921,8 @@ class AppSettingsUpdate(BaseModel):
     hidden_filament_presets: str | None = None
     hide_builtin_filament_presets: bool | None = None
     ams_color_palette: str | None = None
+    slicer_inbox_folder_id: int | None = None
+    slicer_inbox_manual_start: bool | None = None
     gcode_snippets: str | None = None
     local_backup_enabled: bool | None = None
     local_backup_schedule: str | None = None

@@ -12,6 +12,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
   - drukowanie kilku plików jako osobne zadania na jednej drukarce: każdy plik ma własny panel
     mapowania filamentów; plik zmieniony w panelu dostaje to mapowanie, pozostałe jak dotąd
     dobiera scheduler przy starcie wydruku,
+  - wysyłanie z OrcaSlicer jak do SimplyPrint: bambuddy udaje hosta OctoPrint
+    (`/api/version`, `/api/files/local`), plik czeka w folderze-skrzynce
+    „OrcaSlicer”, a aplikacja pyta wysyłającego: drukuj / dodaj do kolejki /
+    zapisz w plikach / odrzuć (szczegóły i ustawienia Orca w
+    [ORCA_SLICER_UPLOAD.md](ORCA_SLICER_UPLOAD.md)),
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,
@@ -21,9 +26,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
 Branch `custom` bazuje na **wydaniach** (`main` / tagi `vX.Y.Z`), nie na `dev`.
 Dzięki temu baza danych dostaje tylko migracje z wydanych wersji i zawsze można
 wrócić na oficjalny obraz tej samej lub nowszej wersji. Poprawki dokładają do
-bazy wyłącznie trzy wiersze w tabeli ustawień (`hidden_filament_presets`,
-`hide_builtin_filament_presets`, `ams_color_palette`), które oficjalna wersja
-po prostu pomija.
+bazy wyłącznie wiersze w tabeli ustawień (`hidden_filament_presets`,
+`hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
+`slicer_inbox_manual_start`), które oficjalna wersja po prostu pomija. Pliki
+wysłane z OrcaSlicer to zwykłe pliki biblioteki (z `source_type = "orcaslicer"`),
+więc po powrocie na oficjalny obraz zostają w folderze „OrcaSlicer”.
 
 ## Jak działa aktualizacja
 

@@ -47,6 +47,7 @@ import { ColorCatalogSettings } from '../components/ColorCatalogSettings';
 import { ProfileDefaultsSettings } from '../components/ProfileDefaultsSettings';
 import { ExternalLinksSettings } from '../components/ExternalLinksSettings';
 import { VirtualPrinterList } from '../components/VirtualPrinterList';
+import { SlicerUploadSettings } from '../components/SlicerUploadSettings';
 import { SpoolBuddySettings } from '../components/SpoolBuddySettings';
 import { GitHubBackupSettings } from '../components/GitHubBackupSettings';
 import { FailureDetectionSettings } from '../components/FailureDetectionSettings';
@@ -5167,6 +5168,7 @@ export function SettingsPage() {
       {activeTab === 'virtual-printer' && (
         <div id="card-vp">
           <VirtualPrinterList />
+          <SlicerUploadSettings />
         </div>
       )}
 
