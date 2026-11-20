@@ -4267,6 +4267,14 @@ export default {
     bundleStepBuild: 'Destek paketi ZIP oluşturuluyor',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Boş',
+    subfolderCount: 'Alt klasörler: {{count}}',
+    fileCount: 'Dosyalar: {{count}}',
+    folderType: 'Klasör',
+  },
+
   // Dosya yöneticisi
   fileManager: {
     combine: {

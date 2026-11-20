@@ -4259,6 +4259,14 @@ export default {
     bundleStepBuild: 'Criando o ZIP do pacote de suporte',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Vazia',
+    subfolderCount: 'Subpastas: {{count}}',
+    fileCount: 'Arquivos: {{count}}',
+    folderType: 'Pasta',
+  },
+
   // File manager
   fileManager: {
     combine: {

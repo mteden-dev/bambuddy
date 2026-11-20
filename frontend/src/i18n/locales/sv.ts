@@ -4334,6 +4334,14 @@ errors: {
     bundleStepBuild: 'Bygger supportpaket-ZIP',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Tom',
+    subfolderCount: 'Undermappar: {{count}}',
+    fileCount: 'Filer: {{count}}',
+    folderType: 'Mapp',
+  },
+
   // File manager
   fileManager: {
     combine: {

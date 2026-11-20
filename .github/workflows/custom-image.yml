@@ -88,7 +88,8 @@ jobs:
             src/__tests__/components/PrintModalSeparateJobsMapping.test.tsx \
             src/__tests__/components/PrintModalSeparateJobs.test.tsx \
             src/__tests__/utils/slicerInbox.test.ts \
-            src/__tests__/components/SlicerImportDialog.test.tsx
+            src/__tests__/components/SlicerImportDialog.test.tsx \
+            src/__tests__/pages/FileManagerSubfolderCards.test.tsx
 
   image:
     name: Build and push arm64 image

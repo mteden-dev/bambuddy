@@ -1231,6 +1231,199 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
   );
 }
 
+// Subfolders in the grid and list views (fork). The open folder's subfolders
+// sit above its files, as SimplyPrint shows them, so a folder that only holds
+// subfolders no longer looks empty. One click opens a folder; each one keeps
+// the sidebar's kebab and is a folder drag source and drop target.
+interface SubfolderItemProps {
+  folder: LibraryFolderTree;
+  onOpen: (id: number) => void;
+  onDelete: (id: number) => void;
+  onLink: (folder: LibraryFolderTree) => void;
+  onRename: (folder: LibraryFolderTree) => void;
+  onMove: (folder: LibraryFolderTree) => void;
+  onToggleShared: (folder: LibraryFolderTree) => void;
+  folderDrag: FolderDragProps;
+  showModified: boolean;
+  hasPermission: (permission: Permission) => boolean;
+  t: TFunction;
+}
+
+// What a folder holds, as icon + number (no plural forms to translate) with
+// the words in the tooltip and for screen readers.
+function FolderContentsSummary({ folder, t }: { folder: LibraryFolderTree; t: TFunction }) {
+  const subfolders = folder.children.length;
+  const files = folder.file_count;
+  if (subfolders === 0 && files === 0) {
+    return <span className="text-xs text-bambu-gray">{t('folderCards.empty')}</span>;
+  }
+  const parts: { key: string; icon: React.ReactNode; count: number; label: string }[] = [];
+  if (subfolders > 0) {
+    parts.push({ key: 'folders', icon: <FolderOpen className="w-3 h-3" />, count: subfolders, label: t('folderCards.subfolderCount', { count: subfolders }) });
+  }
+  if (files > 0) {
+    parts.push({ key: 'files', icon: <File className="w-3 h-3" />, count: files, label: t('folderCards.fileCount', { count: files }) });
+  }
+  return (
+    <span className="flex items-center gap-3 text-xs text-bambu-gray">
+      {parts.map((part) => (
+        <span key={part.key} className="flex items-center gap-1" title={part.label} data-testid={`folder-card-${part.key}`}>
+          {part.icon}
+          <span aria-hidden="true">{part.count}</span>
+          <span className="sr-only">{part.label}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function FolderBadges({ folder, t }: { folder: LibraryFolderTree; t: TFunction }) {
+  return (
+    <>
+      {(folder.project_id || folder.archive_id) && (
+        <Link2 className="w-3.5 h-3.5 flex-shrink-0 text-blue-700 dark:text-blue-400" />
+      )}
+      {folder.shared && (
+        <span title={t('fileManager.sharedFolder')}>
+          <Users className="w-3.5 h-3.5 flex-shrink-0 text-bambu-gray" />
+        </span>
+      )}
+      {folder.is_external && folder.external_readonly && (
+        <span title={t('fileManager.readOnly')}>
+          <Lock className="w-3.5 h-3.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+        </span>
+      )}
+    </>
+  );
+}
+
+// The same folder icons as the tree and the columns view.
+function SubfolderIcon({ folder, className }: { folder: LibraryFolderTree; className: string }) {
+  return folder.is_external ? (
+    <FolderSymlink className={`${className} text-purple-600 dark:text-purple-400`} />
+  ) : (
+    <FolderOpen className={`${className} text-bambu-green`} />
+  );
+}
+
+function SubfolderActions({ folder, onDelete, onLink, onRename, onMove, onToggleShared, hasPermission, t }: SubfolderItemProps) {
+  return (
+    <FolderActionsMenu
+      folder={folder}
+      onDelete={onDelete}
+      onLink={onLink}
+      onRename={onRename}
+      onMove={onMove}
+      onToggleShared={onToggleShared}
+      hasPermission={hasPermission}
+      revealOnHover
+      t={t}
+    />
+  );
+}
+
+function SubfolderCard(props: SubfolderItemProps) {
+  const { folder, onOpen, folderDrag, showModified, t } = props;
+  const canDrag = folderDrag.canDrag(folder);
+  return (
+    // The card is a div, not the button itself: the kebab is a button of its
+    // own and buttons don't nest.
+    <FolderDropZone
+      folderDrag={folderDrag}
+      destinationId={folder.id}
+      data-subfolder-id={folder.id}
+      draggable={canDrag || undefined}
+      onDragStart={canDrag ? (e) => folderDrag.onDragStart(folder, e) : undefined}
+      onDragEnd={canDrag ? folderDrag.onDragEnd : undefined}
+      className="group flex items-center pr-1.5 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary hover:border-bambu-green/50 transition-colors"
+    >
+      <button
+        type="button"
+        onClick={() => onOpen(folder.id)}
+        className="flex-1 min-w-0 flex items-center gap-3 p-3 text-left rounded-lg focus:outline-none focus-visible:ring-1 focus-visible:ring-bambu-green"
+        title={folder.name}
+      >
+        <span className="w-10 h-10 rounded bg-bambu-dark flex-shrink-0 flex items-center justify-center">
+          <SubfolderIcon folder={folder} className="w-6 h-6" />
+        </span>
+        <span className="flex-1 min-w-0 flex flex-col gap-1">
+          <span className="flex items-start gap-1.5 min-w-0">
+            <span className="text-sm font-medium text-white line-clamp-2 [overflow-wrap:anywhere]">{folder.name}</span>
+            <FolderBadges folder={folder} t={t} />
+          </span>
+          <FolderContentsSummary folder={folder} t={t} />
+          {showModified && folder.latest_activity_at && (
+            <span className="flex items-center gap-1 text-xs text-bambu-gray" title={t('fileManager.lastActivity')}>
+              <CalendarClock className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{formatDate(folder.latest_activity_at)}</span>
+            </span>
+          )}
+        </span>
+      </button>
+      <SubfolderActions {...props} />
+    </FolderDropZone>
+  );
+}
+
+// The list view's row for a subfolder: same columns as a file row, with the
+// folder's contents where a file shows its size.
+function SubfolderListRow(props: SubfolderItemProps & { authEnabled: boolean }) {
+  const { folder, onOpen, folderDrag, showModified, authEnabled, t } = props;
+  const canDrag = folderDrag.canDrag(folder);
+  return (
+    <FolderDropZone
+      folderDrag={folderDrag}
+      destinationId={folder.id}
+      data-subfolder-id={folder.id}
+      draggable={canDrag || undefined}
+      onDragStart={canDrag ? (e) => folderDrag.onDragStart(folder, e) : undefined}
+      onDragEnd={canDrag ? folderDrag.onDragEnd : undefined}
+      className={`group grid ${fileListGridColumns(authEnabled)} ${fileListGridMinWidth} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary last:border-b-0 cursor-pointer hover:bg-bambu-dark/50 transition-colors`}
+      onClick={() => onOpen(folder.id)}
+    >
+      <div className="w-6" />
+      <button
+        type="button"
+        onClick={(e) => {
+          // The row opens the folder too; one open per click.
+          e.stopPropagation();
+          onOpen(folder.id);
+        }}
+        className="flex items-center gap-3 min-w-0 text-left rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-bambu-green"
+        title={folder.name}
+      >
+        <span className="w-10 h-10 rounded bg-bambu-dark flex-shrink-0 flex items-center justify-center">
+          <SubfolderIcon folder={folder} className="w-6 h-6" />
+        </span>
+        <span className="min-w-0 flex flex-col">
+          <span className="flex items-center gap-1.5 min-w-0">
+            <span className="text-sm text-white truncate">{folder.name}</span>
+            <FolderBadges folder={folder} t={t} />
+          </span>
+          {showModified && folder.latest_activity_at && (
+            <span className="text-xs text-bambu-gray flex items-center gap-1 mt-0.5" title={t('fileManager.lastActivity')}>
+              <CalendarClock className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{formatDate(folder.latest_activity_at)}</span>
+            </span>
+          )}
+        </span>
+      </button>
+      {authEnabled && <div className="text-sm text-bambu-gray">-</div>}
+      <div>
+        <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-bambu-green/10 text-bambu-green">
+          {t('folderCards.folderType')}
+        </span>
+      </div>
+      <div className="col-span-3">
+        <FolderContentsSummary folder={folder} t={t} />
+      </div>
+      <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+        <SubfolderActions {...props} />
+      </div>
+    </FolderDropZone>
+  );
+}
+
 // File Card
 // The mark on a file a ?highlight= link points at; the Archives page's colour.
 const HIGHLIGHT_CARD_STYLE = { outline: '4px solid #facc15', outlineOffset: '2px' } as const;
@@ -2678,6 +2871,27 @@ export function FileManagerPage() {
     return path;
   }, [sortedFolders, selectedFolderId]);
 
+  // The open folder's subfolders, listed above its files in the grid and list
+  // views (fork; the columns view has its own folder columns). Hidden while a
+  // search or tag filter is on: those results span every descendant folder,
+  // so the cards would misstate what the list below them covers. The type and
+  // user filters only narrow the files, so the folders stay for those.
+  const currentSubfolders = folderPath.length > 0 ? folderPath[folderPath.length - 1].children : [];
+  const hasSubfolderCards = viewMode !== 'columns' && currentSubfolders.length > 0;
+  const showSubfolders = hasSubfolderCards && !columnsFilterActive;
+  const subfolderItemProps = {
+    onOpen: setSelectedFolderId,
+    onDelete: (id: number) => setDeleteConfirm({ type: 'folder', id }),
+    onLink: setLinkFolder,
+    onRename: (f: LibraryFolderTree) => setRenameItem({ type: 'folder', id: f.id, name: f.name }),
+    onMove: setMoveFolder,
+    onToggleShared: toggleFolderShared,
+    folderDrag,
+    showModified,
+    hasPermission,
+    t,
+  };
+
   // Which half of the tree the current location lives in: the selected path's
   // bucket when there is one, otherwise the sidebar's top-level choice. Drives
   // both the path bar's root crumb and the columns view's first column.
@@ -3484,8 +3698,10 @@ export function FileManagerPage() {
               </Button>
             </div>
           )}
-          {/* Search, Filter, Sort toolbar - sticky on mobile for easier access */}
-          {files && files.length > 0 && (
+          {/* Search, Filter, Sort toolbar - sticky on mobile for easier access.
+              Also over a folder that holds only subfolders, whose files a
+              search reaches. */}
+          {files && (files.length > 0 || hasSubfolderCards) && (
             <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 p-2 sm:p-3 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary sticky top-0 z-10 lg:static">
               {/* Search */}
               <div className="relative w-full sm:w-auto sm:flex-1 sm:max-w-xs">
@@ -3952,7 +4168,7 @@ export function FileManagerPage() {
                 </div>
               </div>
             </div>
-          ) : files?.length === 0 ? (
+          ) : files?.length === 0 && !hasSubfolderCards ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">
                 <FileBox className="w-12 h-12 text-bambu-gray/50" />
@@ -3980,7 +4196,7 @@ export function FileManagerPage() {
                 {t('fileManager.uploadFiles')}
               </Button>
             </div>
-          ) : filteredAndSortedFiles.length === 0 ? (
+          ) : filteredAndSortedFiles.length === 0 && !showSubfolders ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">
                 <Search className="w-12 h-12 text-bambu-gray/50" />
@@ -3995,6 +4211,27 @@ export function FileManagerPage() {
             </div>
           ) : viewMode === 'grid' ? (
             <div className="flex-1 lg:overflow-y-auto">
+              {showSubfolders && (
+                <div
+                  // One column fewer than the file cards: a folder card has its
+                  // name beside the icon, not under a thumbnail.
+                  className={`grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 ${(files?.length ?? 0) > 0 ? 'mb-4' : ''}`}
+                  data-testid="subfolder-grid"
+                >
+                  {currentSubfolders.map((folder) => (
+                    <SubfolderCard key={folder.id} folder={folder} {...subfolderItemProps} />
+                  ))}
+                </div>
+              )}
+              {showSubfolders && filteredAndSortedFiles.length === 0 && (files?.length ?? 0) > 0 && (
+                <div className="flex flex-wrap items-center gap-3 px-1 text-sm text-bambu-gray">
+                  <span>{t('fileManager.noMatchingFiles')}</span>
+                  <Button variant="secondary" size="sm" onClick={() => { setSearchQuery(''); setFilterType('all'); setFilterUsername(''); }}>
+                    {t('fileManager.clearFilters')}
+                  </Button>
+                </div>
+              )}
+              {filteredAndSortedFiles.length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
                 {filteredAndSortedFiles.map((file) => (
                   <FileCard
@@ -4026,6 +4263,7 @@ export function FileManagerPage() {
                   />
                 ))}
               </div>
+              )}
             </div>
           ) : (
             <div className="flex-1 lg:overflow-y-auto">
@@ -4054,6 +4292,18 @@ export function FileManagerPage() {
                   <div>{t('fileManager.tags.title')}</div>
                   <div />
                 </div>
+                {/* Subfolder rows, above the files (fork) */}
+                {showSubfolders && currentSubfolders.map((folder) => (
+                  <SubfolderListRow key={folder.id} folder={folder} authEnabled={authEnabled} {...subfolderItemProps} />
+                ))}
+                {showSubfolders && filteredAndSortedFiles.length === 0 && (files?.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm text-bambu-gray">
+                    <span>{t('fileManager.noMatchingFiles')}</span>
+                    <Button variant="secondary" size="sm" onClick={() => { setSearchQuery(''); setFilterType('all'); setFilterUsername(''); }}>
+                      {t('fileManager.clearFilters')}
+                    </Button>
+                  </div>
+                )}
                 {/* List rows */}
                 {filteredAndSortedFiles.map((file) => (
                   <div

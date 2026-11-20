@@ -4304,6 +4304,14 @@ export default {
     bundleStepBuild: 'Tworzenie pliku ZIP pakietu wsparcia',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Pusty',
+    subfolderCount: 'Podfoldery: {{count}}',
+    fileCount: 'Pliki: {{count}}',
+    folderType: 'Folder',
+  },
+
   // File manager
   fileManager: {
     combine: {

@@ -4260,6 +4260,14 @@ export default {
     bundleStepBuild: 'Création du ZIP du paquet de support',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Vide',
+    subfolderCount: 'Sous-dossiers : {{count}}',
+    fileCount: 'Fichiers : {{count}}',
+    folderType: 'Dossier',
+  },
+
   // File manager
   fileManager: {
     combine: {

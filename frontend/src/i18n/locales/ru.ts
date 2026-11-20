@@ -4076,6 +4076,14 @@ export default {
     bundleStepLogScan: "Поиск известных проблем в последних журналах",
     bundleStepBuild: "Создание ZIP-пакета для поддержки",
   },
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Пусто',
+    subfolderCount: 'Подпапки: {{count}}',
+    fileCount: 'Файлы: {{count}}',
+    folderType: 'Папка',
+  },
+
   fileManager: {
     combine: {
       action: 'Объединить в 3MF',

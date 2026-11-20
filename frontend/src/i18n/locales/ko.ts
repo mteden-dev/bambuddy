@@ -4084,6 +4084,14 @@ export default {
     bundleStepLogScan: '알려진 문제가 있는지 최근 로그 스캔 중',
     bundleStepBuild: '지원 번들 ZIP 빌드 중'
   },
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: '비어 있음',
+    subfolderCount: '하위 폴더: {{count}}',
+    fileCount: '파일: {{count}}',
+    folderType: '폴더',
+  },
+
   fileManager: {
     combine: {
       action: '3MF로 결합',

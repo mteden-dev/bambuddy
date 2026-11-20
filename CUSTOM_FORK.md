@@ -17,6 +17,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     „OrcaSlicer”, a aplikacja pyta wysyłającego: drukuj / dodaj do kolejki /
     zapisz w plikach / odrzuć (szczegóły i ustawienia Orca w
     [ORCA_SLICER_UPLOAD.md](ORCA_SLICER_UPLOAD.md)),
+  - w plikach (widok siatki i listy) podfoldery otwartego folderu są nad jego plikami, jak w
+    SimplyPrint: klik otwiera folder, można na nie upuścić inny folder, mają to samo menu co w
+    drzewku; folder z samymi podfolderami nie pokazuje już „Folder jest pusty”,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,

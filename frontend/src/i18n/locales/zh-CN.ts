@@ -4259,6 +4259,14 @@ export default {
     bundleStepBuild: '正在构建支持包 ZIP 文件',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: '空',
+    subfolderCount: '子文件夹：{{count}}',
+    fileCount: '文件：{{count}}',
+    folderType: '文件夹',
+  },
+
   // File manager
   fileManager: {
     combine: {

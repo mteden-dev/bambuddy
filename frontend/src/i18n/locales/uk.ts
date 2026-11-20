@@ -4299,6 +4299,14 @@ export default {
     bundleStepBuild: "Створення ZIP-пакета підтримки",
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Порожньо',
+    subfolderCount: 'Підпапки: {{count}}',
+    fileCount: 'Файли: {{count}}',
+    folderType: 'Папка',
+  },
+
   // File manager
   fileManager: {
     combine: {

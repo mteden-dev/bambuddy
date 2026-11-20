@@ -4259,6 +4259,14 @@ export default {
     bundleStepBuild: '正在建立支援套件 ZIP 檔案',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: '空',
+    subfolderCount: '子資料夾：{{count}}',
+    fileCount: '檔案：{{count}}',
+    folderType: '資料夾',
+  },
+
   // File manager
   fileManager: {
     combine: {

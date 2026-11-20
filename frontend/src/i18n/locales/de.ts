@@ -4272,6 +4272,14 @@ export default {
     bundleStepBuild: 'Support-Bundle-ZIP wird erstellt',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Leer',
+    subfolderCount: 'Unterordner: {{count}}',
+    fileCount: 'Dateien: {{count}}',
+    folderType: 'Ordner',
+  },
+
   // File manager
   fileManager: {
     combine: {

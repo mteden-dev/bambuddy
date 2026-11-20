@@ -4304,6 +4304,14 @@ export default {
     bundleStepBuild: 'Building the support bundle ZIP',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: 'Empty',
+    subfolderCount: 'Subfolders: {{count}}',
+    fileCount: 'Files: {{count}}',
+    folderType: 'Folder',
+  },
+
   // File manager
   fileManager: {
     combine: {

@@ -4272,6 +4272,14 @@ export default {
     bundleStepBuild: 'サポートバンドル ZIP を作成中',
   },
 
+  // File Manager: subfolders above the files in grid and list views (fork)
+  folderCards: {
+    empty: '空',
+    subfolderCount: 'サブフォルダー: {{count}}',
+    fileCount: 'ファイル: {{count}}',
+    folderType: 'フォルダー',
+  },
+
   // File manager
   fileManager: {
     combine: {
