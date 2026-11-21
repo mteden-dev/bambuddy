@@ -20,6 +20,13 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
   - w plikach (widok siatki i listy) podfoldery otwartego folderu są nad jego plikami, jak w
     SimplyPrint: klik otwiera folder, można na nie upuścić inny folder, mają to samo menu co w
     drzewku; folder z samymi podfolderami nie pokazuje już „Folder jest pusty”,
+  - **przeniesiony z upstream PR [#3643](https://github.com/maziggy/bambuddy/pull/3643)**
+    (jeszcze niezmergowany, stan `f579f75b`): grupa wersji („Grupuj jako wersje”) to jedna
+    karta / wiersz w siatce, liście i kolumnach; wersje otwierają się w miejscu (lista, kolumny)
+    albo w popoverze pod kartą (siatka, na telefonie dolny panel). Backend: lista plików ma
+    `?with_variant_members=true`, a endpointy grup pokazują tylko wersje, które użytkownik
+    może czytać, i zmianę grupy pozwalają tylko właścicielowi **wszystkich** jej aktywnych
+    plików (albo z uprawnieniem update-all). Bez migracji bazy; wpis w CHANGELOG pominięty,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,
@@ -76,6 +83,11 @@ git push --force-with-lease origin custom
 ```
 
 Remote'y lokalnie: `origin` = fork (mteden-dev), `upstream` = maziggy.
+
+Commity przeniesione z PR-ów upstream (np. #3643) wyrzuca się z `custom`, gdy
+ich PR wejdzie do wydania, na którym robimy rebase: przy konflikcie w tych
+plikach `git rebase --skip` dla tego commita, a jeśli rebase przeszedł bez
+konfliktu, sprawdź `git log`, czy commit nie został zdublowany.
 
 ## Coolify
 

@@ -58,7 +58,10 @@ jobs:
             backend/tests/integration/test_settings_ui_flags_3023.py \
             backend/tests/unit/test_octoprint_compat.py \
             backend/tests/integration/test_octoprint_compat_api.py \
-            backend/tests/unit/test_route_auth_coverage.py
+            backend/tests/unit/test_route_auth_coverage.py \
+            backend/tests/integration/test_library_variant_visibility_3628.py \
+            backend/tests/integration/test_library_variants_api.py \
+            backend/tests/integration/test_queue_variants_api.py
 
       - uses: actions/setup-node@v6
         with:
@@ -89,7 +92,11 @@ jobs:
             src/__tests__/components/PrintModalSeparateJobs.test.tsx \
             src/__tests__/utils/slicerInbox.test.ts \
             src/__tests__/components/SlicerImportDialog.test.tsx \
-            src/__tests__/pages/FileManagerSubfolderCards.test.tsx
+            src/__tests__/pages/FileManagerSubfolderCards.test.tsx \
+            src/__tests__/pages/FileManagerVariantGroups.test.tsx \
+            src/__tests__/pages/FileManagerVariantSelection.test.tsx \
+            src/__tests__/pages/fileManager/variantGroups.test.ts \
+            src/__tests__/pages/FileManagerPage.test.tsx
 
   image:
     name: Build and push arm64 image
