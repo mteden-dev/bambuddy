@@ -187,6 +187,9 @@ import { AMSHistoryModal } from '../components/AMSHistoryModal';
 import { AmsBackupModal } from '../components/AmsBackupModal';
 import { HeaterHistoryModal } from '../components/HeaterHistoryModal';
 import type { HeaterSensorKind } from '../api/client';
+import { SlotSpoolActions, SlotSpoolAdjustModal, SlotSpoolBadge } from '../components/slotSpool/SlotSpoolSlotUi';
+import { useKeepSameRoll, useSlotSpoolPrompts } from '../hooks/useSlotSpools';
+import { SLOT_SPOOL_ORIGIN, slotSpoolRingClass, slotSpoolState } from '../utils/slotSpools';
 import { FilamentHoverCard, EmptySlotHoverCard } from '../components/FilamentHoverCard';
 import { AssignSpoolModal } from '../components/AssignSpoolModal';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
@@ -2337,6 +2340,8 @@ function PrinterCard({
     caliIdx?: number | null;
     savedPresetId?: string;
     label?: string;
+    // Fork (slot spools): opened to load a roll, so it also asks how much is on it.
+    trackSlotSpool?: boolean;
   } | null>(null);
   const [showFirmwareModal, setShowFirmwareModal] = useState(false);
   const [plateCheckResult, setPlateCheckResult] = useState<{
@@ -2542,6 +2547,49 @@ function PrinterCard({
   const amsSwitchInlet = (status?.ams_switch_inlet && Object.keys(status.ams_switch_inlet).length > 0)
     ? status.ams_switch_inlet
     : cachedAmsSwitchInlet.current;
+
+  // Fork (slot spools): which slots light up ("new" roll, "same roll?") and what
+  // their cards offer. Built-in inventory only; utils/slotSpools has the rules.
+  const slotSpoolsEnabled = !spoolmanModeOn && !spoolmanEnabled && hasPermission('inventory:update');
+  const hasSlotSpoolPrompt = useSlotSpoolPrompts(slotSpoolsEnabled);
+  const keepSameRoll = useKeepSameRoll();
+  const [slotSpoolAdjust, setSlotSpoolAdjust] = useState<InventorySpool | null>(null);
+  const slotSpoolView = (amsId: number, slotId: number, tray: AMSTray | undefined, savedPresetId: string | undefined) => {
+    const assignment = onGetAssignment?.(printer.id, amsId, slotId);
+    const state = slotSpoolState({
+      enabled: slotSpoolsEnabled && hasPermission('printers:control'),
+      tray,
+      hasAssignment: !!assignment,
+      isBambuSpool: !!tray && isBambuLabSpool(tray),
+      hasPrompt: hasSlotSpoolPrompt(printer.id, amsId, slotId),
+    });
+    const slotSpool = slotSpoolsEnabled && assignment?.spool?.data_origin === SLOT_SPOOL_ORIGIN ? assignment.spool : null;
+    return {
+      ring: slotSpoolRingClass(state),
+      badge: <SlotSpoolBadge state={state} />,
+      actions: (
+        <SlotSpoolActions
+          state={state}
+          slotSpool={slotSpool}
+          busy={keepSameRoll.isPending}
+          onSameRoll={() => keepSameRoll.mutate({ printerId: printer.id, amsId, trayId: slotId })}
+          onAdjust={setSlotSpoolAdjust}
+          onNewRoll={() => setConfigureSlotModal({
+            amsId,
+            trayId: slotId,
+            trayType: tray?.tray_type || undefined,
+            trayColor: tray?.tray_color || undefined,
+            traySubBrands: tray?.tray_sub_brands || undefined,
+            trayInfoIdx: tray?.tray_info_idx || undefined,
+            extruderId: resolveSlotExtruder(amsId, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
+            caliIdx: tray?.cali_idx,
+            savedPresetId,
+            trackSlotSpool: true,
+          })}
+        />
+      ),
+    };
+  };
 
   // Cache AMS data to prevent it disappearing on idle/offline printers
   const cachedAmsData = useRef<AMSUnit[]>([]);
@@ -3728,17 +3776,21 @@ function PrinterCard({
     loadTrayId,
     isRefreshing,
     includeRfid = true,
+    slotSpoolActions,
   }: {
     amsId: number;
     slotId: number;
     loadTrayId: number;
     isRefreshing?: boolean;
     includeRfid?: boolean;
+    // Fork (slot spools): load a roll, "same roll", correct the amount.
+    slotSpoolActions?: React.ReactNode;
   }) => {
     const printerBusy = status?.state === 'RUNNING';
 
     return (
       <>
+        {slotSpoolActions}
         {includeRfid && (
           <button
             className={`w-full px-2 py-1.5 text-left text-xs flex items-center gap-2 rounded transition-colors ${
@@ -5734,6 +5786,7 @@ function PrinterCard({
                                 const slotPresetName = slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx)
                                   ? slotPreset?.preset_name
                                   : undefined;
+                                const slotSpoolUi = slotSpoolView(ams.id, slotIdx, tray, slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx) ? slotPreset?.preset_id : undefined);
 
                                 // Fill level fallback chain: Spoolman → Inventory → AMS remain
                                 const trayTag = (tray?.tray_uuid || tray?.tag_uid || getFallbackSpoolTag(printer.serial_number, ams.id, slotIdx))?.toUpperCase();
@@ -5817,7 +5870,7 @@ function PrinterCard({
                                           ? 'ring-2 ring-red-500/60 ring-offset-1 ring-offset-bambu-dark'
                                           : isActive
                                             ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark'
-                                            : ''
+                                            : slotSpoolUi.ring
                                     }`}
                                   >
                                     {isExpectedSlot && (
@@ -5838,6 +5891,7 @@ function PrinterCard({
                                         {activePrintSlotLabel}
                                       </span>
                                     )}
+                                    {slotSpoolUi.badge}
                                     {/* Filament color circle with 1-based slot number centered inside */}
                                     <FilamentSlotCircle
                                       trayColor={tray?.tray_color}
@@ -5884,6 +5938,7 @@ function PrinterCard({
                                           slotId: slotIdx,
                                           loadTrayId: globalTrayId,
                                           isRefreshing,
+                                          slotSpoolActions: slotSpoolUi.actions,
                                         })}
                                         spoolman={{
                                           enabled: spoolmanEnabled,
@@ -5992,6 +6047,7 @@ function PrinterCard({
                                           slotId: slotIdx,
                                           loadTrayId: globalTrayId,
                                           isRefreshing,
+                                          slotSpoolActions: slotSpoolUi.actions,
                                         })}
                                         configureSlot={{
                                           enabled: hasPermission('printers:control'),
@@ -6049,6 +6105,7 @@ function PrinterCard({
                         ? slotPreset?.preset_name
                         : undefined;
                       const htSlotId = tray?.id ?? 0;
+                      const htSlotSpoolUi = slotSpoolView(ams.id, htSlotId, tray, slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx) ? slotPreset?.preset_id : undefined);
 
                         // Fill level fallback chain: Spoolman → Inventory → AMS remain
                         const htTrayTag = (tray?.tray_uuid || tray?.tag_uid || getFallbackSpoolTag(printer.serial_number, ams.id, htSlotId))?.toUpperCase();
@@ -6122,7 +6179,7 @@ function PrinterCard({
                                   ? 'ring-2 ring-red-500/60 ring-offset-1 ring-offset-bambu-dark'
                                   : isActive
                                     ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark'
-                                    : ''
+                                    : htSlotSpoolUi.ring
                             }`}
                           >
                             {isExpectedSlot && (
@@ -6143,6 +6200,7 @@ function PrinterCard({
                                 {htActivePrintSlotLabel}
                               </span>
                             )}
+                            {htSlotSpoolUi.badge}
                             {/* Filament color circle with 1-based slot number centered inside */}
                             <FilamentSlotCircle
                               trayColor={tray?.tray_color}
@@ -6303,6 +6361,7 @@ function PrinterCard({
                                       // An AMS-HT holds one tray, numbered by its unit id (as tray_now).
                                       loadTrayId: ams.id,
                                       isRefreshing: isHtRefreshing,
+                                      slotSpoolActions: htSlotSpoolUi.actions,
                                     })}
                                     spoolman={{
                                       enabled: spoolmanEnabled,
@@ -6410,6 +6469,7 @@ function PrinterCard({
                                       // An AMS-HT holds one tray, numbered by its unit id (as tray_now).
                                       loadTrayId: ams.id,
                                       isRefreshing: isHtRefreshing,
+                                      slotSpoolActions: htSlotSpoolUi.actions,
                                     })}
                                     configureSlot={{
                                       enabled: hasPermission('printers:control'),
@@ -7523,6 +7583,7 @@ function PrinterCard({
           printerModel={mapModelCode(printer.model) || undefined}
           nozzleDiameter={resolveSlotNozzleDiameter(status, configureSlotModal.amsId)}
           printerState={status?.state}
+          trackSlotSpool={configureSlotModal.trackSlotSpool}
           onSuccess={() => {
             // Refresh slot presets to show updated profile name
             queryClient.invalidateQueries({ queryKey: ['slotPresets', printer.id] });
@@ -7530,6 +7591,11 @@ function PrinterCard({
             queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
           }}
         />
+      )}
+
+      {/* Fork (slot spools): correct how much is left on a slot's roll */}
+      {slotSpoolAdjust && (
+        <SlotSpoolAdjustModal spool={slotSpoolAdjust} onClose={() => setSlotSpoolAdjust(null)} />
       )}
 
       {/* Which hotend to feed — only asked on a printer with a Filament Track Switch */}

@@ -351,6 +351,8 @@ export function useWebSocket() {
     queryClient.invalidateQueries({ queryKey: ['slotPresets'] });
     // Both modes' bindings, which the print dialog prices and weighs slots from.
     queryClient.invalidateQueries({ queryKey: ['printer-inventory-remain'] });
+    // Fork: a slot's "same roll?" prompt goes with the spool it asks about.
+    queryClient.invalidateQueries({ queryKey: ['slot-spool-prompts'] });
   }, [queryClient]);
 
   const handleMessage = useCallback((message: WebSocketMessage) => {
@@ -522,6 +524,12 @@ export function useWebSocket() {
         // slot row is gone, so a cached map kept the spool on its old slot in
         // every tab but the one that moved it. Fetched in Spoolman mode only.
         queryClient.invalidateQueries({ queryKey: ['linked-spools'] });
+        break;
+
+      case 'slot_spool_prompts_changed':
+        // Fork (slot spools): a slot was emptied and refilled under its spool,
+        // or its "same roll?" prompt was answered.
+        queryClient.invalidateQueries({ queryKey: ['slot-spool-prompts'] });
         break;
 
       case 'spool_assignment_verified': {

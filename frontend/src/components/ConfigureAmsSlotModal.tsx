@@ -23,6 +23,8 @@ import {
   serializeHiddenFilamentPresets,
   toggleHiddenFilamentPreset,
 } from '../utils/hiddenFilamentPresets';
+import { SlotSpoolAmountSection } from './slotSpool/SlotSpoolAmountSection';
+import { slotSpoolAmountRequest, slotSpoolAmountValid, type SlotSpoolAmount } from '../utils/slotSpools';
 
 interface SlotInfo {
   amsId: number;
@@ -51,6 +53,9 @@ interface ConfigureAmsSlotModalProps {
   fullScreen?: boolean;
   // The printer's gcode state; a reset is refused while a print is loaded.
   printerState?: string | null;
+  // Fork (slot spools): the dialog loads a roll. It asks how much is on it and,
+  // once the slot is configured, starts counting on a slot spool.
+  trackSlotSpool?: boolean;
 }
 
 // Known filament material types
@@ -241,6 +246,7 @@ export function ConfigureAmsSlotModal({
   onSuccess,
   fullScreen,
   printerState,
+  trackSlotSpool,
 }: ConfigureAmsSlotModalProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
@@ -272,6 +278,10 @@ export function ConfigureAmsSlotModal({
   // here would inherit the very flush ordering this exists to escape.
   const selectedKProfileRef = useRef<KProfile | null>(null);
   selectedKProfileRef.current = selectedKProfile;
+  // Fork (slot spools): the roll's amount, read at execute time like the K profile.
+  const [slotSpoolAmount, setSlotSpoolAmount] = useState<SlotSpoolAmount>({ kind: 'full' });
+  const slotSpoolAmountRef = useRef<SlotSpoolAmount>(slotSpoolAmount);
+  slotSpoolAmountRef.current = slotSpoolAmount;
   const [colorHex, setColorHex] = useState<string>(''); // Just the 6-char hex, no alpha
   const [colorInput, setColorInput] = useState<string>(''); // User's text input (name or hex)
   const [searchQuery, setSearchQuery] = useState('');
@@ -676,6 +686,37 @@ export function ConfigureAmsSlotModal({
       } catch (e) {
         console.warn('Failed to save slot preset mapping:', e);
         // Don't fail the whole operation - slot was configured successfully
+      }
+
+      // Fork (slot spools): count the roll on a spool that describes the slot
+      // exactly as it was just configured, so the next AMS report reads as the
+      // same roll. The preset id is stored as the inventory keeps it.
+      if (trackSlotSpool) {
+        const amount = slotSpoolAmountRequest(slotSpoolAmountRef.current);
+        const kProfile = selectedKProfileRef.current;
+        const namedColor = colorInput.trim() && !/^#?[0-9a-f]{3,8}$/i.test(colorInput.trim()) ? colorInput.trim() : null;
+        await api.loadSlotSpool({
+          printer_id: printerId,
+          ams_id: slotInfo.amsId,
+          tray_id: slotInfo.trayId,
+          material: trayType,
+          rgba: color + 'FF',
+          color_name: namedColor,
+          slicer_filament: isLocal ? String(localId) : isBuiltin ? builtinFilamentId : isOrca ? orcaSettingId : selectedPresetId,
+          slicer_filament_name: presetName,
+          ...amount,
+          k_profile: caliIdx > 0
+            ? {
+                cali_idx: caliIdx,
+                k_value: kValue,
+                extruder: slotInfo.extruderId ?? 0,
+                nozzle_diameter: nozzleDiameter,
+                name: kProfile?.name ?? null,
+                setting_id: kProfile?.setting_id || null,
+              }
+            : null,
+        });
+        showToast(t('slotSpool.toastLoaded'), 'success');
       }
 
       return result;
@@ -1292,7 +1333,8 @@ export function ConfigureAmsSlotModal({
   }, [selectedPresetId, isLoading]);
 
   if (!isOpen) return null;
-  const canSave = selectedPresetId && !configureMutation.isPending;
+  const canSave = selectedPresetId && !configureMutation.isPending
+    && (!trackSlotSpool || slotSpoolAmountValid(slotSpoolAmount));
 
   // The preset list, shared by the kiosk and the regular layout. Each row is
   // the select button plus, for users who may change settings, a sibling
@@ -1830,6 +1872,13 @@ export function ConfigureAmsSlotModal({
                 )}
               </div>
             </>
+          )}
+          {trackSlotSpool && (
+            <SlotSpoolAmountSection
+              value={slotSpoolAmount}
+              onChange={setSlotSpoolAmount}
+              rgba={colorHex || slotInfo.trayColor || undefined}
+            />
           )}
         </div>
 

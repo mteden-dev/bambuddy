@@ -153,6 +153,9 @@ class TestWhatItExposes:
             "preferred_slicer",
             "disable_filament_warnings",
             "prefer_lowest_filament",
+            # Fork: slot spools' filament check.
+            "filament_check_per_slot",
+            "filament_check_margin_pct",
             "per_printer_mapping_expanded",
             "default_filament_cost",
             "default_bed_levelling",

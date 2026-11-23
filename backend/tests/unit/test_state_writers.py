@@ -42,6 +42,8 @@ GUARDED_FIELDS = [
             ("backend/app/api/routes/inventory.py", "create_spool"): "Spool(**payload) from the add form",
             ("backend/app/api/routes/inventory.py", "bulk_create_spools"): "Spool(**payload) per bulk-added spool",
             ("backend/app/api/routes/inventory.py", "import_spools_csv"): "Spool(**row) from CSV import",
+            # Fork: a roll loaded into an AMS slot (new, or restored with a corrected amount).
+            ("backend/app/services/slot_spools.py", "load_slot_spool"): "slot spool loaded into a slot",
         },
         # Reached through setattr loops or Spool(**payload) built from user input;
         # the static scan cannot see the field name, so these are listed by hand.

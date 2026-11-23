@@ -1546,6 +1546,10 @@ export interface AppSettings {
   // Filament tracking
   disable_filament_warnings: boolean;  // Disable filament warnings (print insufficiency and assignment mismatch)
   prefer_lowest_filament: boolean;  // When multiple spools match, prefer lowest remaining filament
+  // Fork (slot spools): weigh every slot against its own spool, never the spools
+  // AMS Filament Backup could switch to, and ask for this many percent more.
+  filament_check_per_slot?: boolean;
+  filament_check_margin_pct?: number;
   spoolman_enabled: boolean;  // True when the user has switched filament tracking to Spoolman; backend includes this in the /settings/ response even though earlier consumers read it from the dedicated /settings/spoolman endpoint as a string
   auto_add_unknown_rfid: boolean;  // When false, the backend skips auto-creating inventory spools for unknown RFID tags and instead broadcasts an unknown_tag event for the confirmation modal
   spoolman_url: string;
@@ -4469,6 +4473,50 @@ export interface InventoryRemainResponse {
   inventory_remain_g: Record<string, number>;
   /** Every inventory binding on the printer, with identity + extruder side. */
   slot_materials: SlotMaterial[];
+}
+
+/** Fork (slot spools): a slot emptied and refilled under its slot spool, asking "same roll?". */
+export interface SlotSpoolPrompt {
+  printer_id: number;
+  ams_id: number;
+  tray_id: number;
+  spool_id: number;
+  created_at: string;
+}
+
+/** Fork (slot spools): a roll taken out of a slot with filament left on it. */
+export interface RestorableSlotSpool {
+  id: number;
+  material: string;
+  color_name: string | null;
+  rgba: string | null;
+  slicer_filament_name: string | null;
+  remaining_grams: number;
+  label_weight: number;
+  archived_at: string | null;
+}
+
+/** Fork (slot spools): start counting the roll in a slot just configured. */
+export interface SlotSpoolLoadRequest {
+  printer_id: number;
+  ams_id: number;
+  tray_id: number;
+  material: string;
+  rgba?: string | null;
+  color_name?: string | null;
+  slicer_filament?: string | null;
+  slicer_filament_name?: string | null;
+  /** Grams on the roll; omitted = a full roll, or what a restored roll had. */
+  remaining_grams?: number | null;
+  restore_spool_id?: number | null;
+  k_profile?: {
+    cali_idx: number;
+    k_value: number;
+    extruder?: number;
+    nozzle_diameter?: string;
+    name?: string | null;
+    setting_id?: string | null;
+  } | null;
 }
 
 export interface SpoolAssignment {
@@ -7529,6 +7577,22 @@ export const api = {
     }),
   unassignSpool: (printerId: number, amsId: number, trayId: number) =>
     request<{ status: string }>(`/inventory/assignments/${printerId}/${amsId}/${trayId}`, { method: 'DELETE' }),
+  // Fork (slot spools): a roll counted per AMS slot without naming it.
+  loadSlotSpool: (data: SlotSpoolLoadRequest) =>
+    request<SpoolAssignment>('/slot-spools', { method: 'POST', body: JSON.stringify(data) }),
+  getSlotSpoolPrompts: () => request<SlotSpoolPrompt[]>('/slot-spools/prompts'),
+  keepSameSlotRoll: (printerId: number, amsId: number, trayId: number) =>
+    request<{ status: string; cleared: boolean }>(
+      `/slot-spools/prompts/${printerId}/${amsId}/${trayId}/same`,
+      { method: 'POST' },
+    ),
+  getRestorableSlotSpools: (material?: string, rgba?: string) => {
+    const params = new URLSearchParams();
+    if (material) params.set('material', material);
+    if (rgba) params.set('rgba', rgba);
+    const query = params.toString();
+    return request<RestorableSlotSpool[]>(`/slot-spools/restorable${query ? `?${query}` : ''}`);
+  },
   // ── Spool label printing (#809) ──────────────────────────────────────────
   // The print endpoints return a PDF, a PNG, or a ZIP of PNGs (#2981); the
   // preview endpoints one PNG. Callers get the Blob and decide what to do.

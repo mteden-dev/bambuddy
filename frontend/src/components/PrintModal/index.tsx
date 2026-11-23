@@ -15,6 +15,7 @@ import {
   buildLoadedFilaments,
   useFilamentMapping,
 } from '../../hooks/useFilamentMapping';
+import { withFilamentMargin } from '../../utils/slotSpools';
 import { useMultiPrinterFilamentMapping, type PerPrinterConfig } from '../../hooks/useMultiPrinterFilamentMapping';
 import { getColorName } from '../../utils/colors';
 import { productLineOf, useFilamentNameByIdx } from './useFilamentLabels';
@@ -241,6 +242,9 @@ export function PrintModal({
     /** True when AMS Filament Backup pooled more than one spool for this slot;
      *  `requiredGrams` / `remainingGrams` are then the pooled totals. */
     pooled?: boolean;
+    /** Fork (slot spools): a roll nothing counts — no spool bound, and the AMS
+     *  cannot say either. `remainingGrams` is then meaningless. */
+    unknown?: boolean;
   };
 
   // Multiple printer selection (used for all modes now)
@@ -1266,11 +1270,17 @@ export function PrintModal({
   const filamentWarningMessage = useMemo(() => {
     if (!filamentWarningItems || filamentWarningItems.length === 0) return '';
     const lines = filamentWarningItems.map((item) =>
+      item.unknown
+        ? t('slotSpool.unknownAmountLine', {
+            printer: item.printerName,
+            slot: item.slotLabel,
+            required: Math.round(item.requiredGrams),
+          })
       // Under AMS Filament Backup the shortfall is against the pooled spools,
       // not the one slot — quoting that slot's remaining next to a pooled
       // requirement reads as a contradiction ("needs 1441g, remaining 1000g"
       // while a second full spool sits next to it).
-      item.pooled
+      : item.pooled
         ? t('printModal.insufficientFilamentLinePooled', {
             printer: item.printerName,
             slot: item.slotLabel,
@@ -1439,13 +1449,18 @@ export function PrintModal({
 
           const loadedFilaments = buildLoadedFilaments(printerStatusForWarning);
           const slotLabelByTray = new Map(loadedFilaments.map((f) => [f.globalTrayId, f.label]));
+          const loadedByTray = new Map(loadedFilaments.map((f) => [f.globalTrayId, f]));
+          // Fork (slot spools): weigh each slot on its own spool, never the pool
+          // a backup switch would draw on, with the dispatcher's margin on top.
+          const perSlot = settings?.filament_check_per_slot === true;
+          const marginPct = settings?.filament_check_margin_pct;
           // Slots the backend could price. A slot missing here is one with no
           // inventory binding, or one whose Spoolman spool it could not read —
           // both mean "nothing to weigh", never "empty".
           const slotMaterials = slotMaterialsPerPrinter.get(printerId);
           const printerName = printers?.find((p) => p.id === printerId)?.name ?? `Printer ${printerId}`;
 
-          if (!slotMaterials || slotMaterials.size === 0) continue;
+          if (!slotMaterials) continue;
 
           const gramsByTray = new Map<number, number>();
           for (const job of plateJobs) {
@@ -1458,7 +1473,10 @@ export function PrintModal({
               if (!req.slot_id || req.slot_id <= 0) return;
               const globalTrayId = printerMapping[req.slot_id - 1];
               if (!Number.isFinite(globalTrayId) || globalTrayId < 0) return;
-              gramsByTray.set(globalTrayId, (gramsByTray.get(globalTrayId) ?? 0) + req.used_grams);
+              gramsByTray.set(
+                globalTrayId,
+                (gramsByTray.get(globalTrayId) ?? 0) + withFilamentMargin(req.used_grams, marginPct),
+              );
             });
           }
 
@@ -1469,7 +1487,7 @@ export function PrintModal({
           // Dual-extruder printers pool per side: the firmware cannot cross
           // nozzles even with the backup bit set, which is why `extruder` is part
           // of the key the backend hands us.
-          const backupOn = printerStatusForWarning?.ams_filament_backup === true;
+          const backupOn = !perSlot && printerStatusForWarning?.ams_filament_backup === true;
           const poolKey = (slot: SlotMaterial) => `${slot.material_key}#${slot.extruder}`;
 
           const pooledGrams = new Map<string, number>();
@@ -1491,7 +1509,22 @@ export function PrintModal({
 
           for (const [globalTrayId, requiredGrams] of gramsByTray) {
             const slot = slotMaterials.get(globalTrayId);
-            if (!slot) continue;
+            if (!slot) {
+              // Fork (slot spools): an AMS roll nothing counts, so nothing can
+              // say whether it will last. Asked about, never blocked.
+              const loaded = loadedByTray.get(globalTrayId);
+              if (perSlot && !settings?.spoolman_enabled && loaded && !loaded.isExternal && loaded.remain < 0) {
+                warningItems.push({
+                  printerId,
+                  printerName,
+                  slotLabel: loaded.label,
+                  requiredGrams,
+                  remainingGrams: 0,
+                  unknown: true,
+                });
+              }
+              continue;
+            }
 
             const slotLabel = slotLabelByTray.get(globalTrayId) ?? `Tray ${globalTrayId}`;
 

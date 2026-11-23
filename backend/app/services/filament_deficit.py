@@ -45,6 +45,7 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 from backend.app.services.filament_requirements import extract_filament_requirements
 from backend.app.services.printer_manager import printer_tray_layout
+from backend.app.services.slot_spools import load_check_settings  # fork
 from backend.app.utils.filament_ids import normalize_slicer_filament
 from backend.app.utils.tray_ids import TrayLayout
 
@@ -713,6 +714,11 @@ async def compute_deficit_for_queue_item(
 
     spoolman_mode = await _is_spoolman_mode(db)
     backup_on, ams_extruder_map, is_dual = await _get_printer_backup_context(printer_id)
+    # Fork (services/slot_spools): every slot on its own spool, never the pool
+    # a backup switch would draw on, and a margin over the sliced grams.
+    check = await load_check_settings(db)
+    if check.per_slot:
+        backup_on = False
     live_keys = _live_tray_keys(printer_id) if backup_on else {}
     layout = printer_tray_layout(printer_id)
 
@@ -843,7 +849,7 @@ async def compute_deficit_for_queue_item(
                 ams_id=ams_id,
                 tray_id=tray_id,
                 global_tray_id=global_tray_id,
-                required=float(used_grams),
+                required=check.with_margin(float(used_grams)),
                 # Must key the same way as ``build_slot_materials``, or the
                 # slot's demand lands in a pool its own grams are not in.
                 identity=live_keys.get(global_tray_id, identity),
@@ -860,17 +866,22 @@ async def compute_deficit_for_queue_item(
     unknown = undetermined if require_known else []
 
     if not backup_on:
+        # Two of the file's filaments mapped to one tray both draw on its spool,
+        # so the tray is weighed against their sum (fork).
+        required_by_tray: dict[int, float] = defaultdict(float)
+        for row in resolved:
+            required_by_tray[row.global_tray_id] += row.required
         return unknown + [
             FilamentDeficit(
                 slot_id=row.slot_id,
                 ams_id=row.ams_id,
                 tray_id=row.tray_id,
                 filament_type=row.filament_type,
-                required_grams=row.required,
+                required_grams=required_by_tray[row.global_tray_id],
                 remaining_grams=row.remaining,
             )
             for row in resolved
-            if row.remaining is not None and row.remaining < row.required
+            if row.remaining is not None and row.remaining < required_by_tray[row.global_tray_id]
         ]
 
     # ------------------------------------------------------------------ phase 3

@@ -21,6 +21,7 @@ import { SECRET_PLACEHOLDER, secretsToReenter, selectPlaceholderOnFocus } from '
 import { PreheatFilamentTargetsEditor } from '../components/PreheatFilamentTargetsEditor';
 import type { Printer as PrinterInfo, APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode, ModelDispatchOrder } from '../api/client';
 import { Card, CardContent, CardDensityProvider, CardHeader } from '../components/Card';
+import { SlotSpoolCheckSettings } from '../components/slotSpool/SlotSpoolCheckSettings';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { CameraTokensSection } from './CameraTokensPage';
 import { ConnectedAppsSection } from '../components/ConnectedAppsSection';
@@ -1306,6 +1307,8 @@ export function SettingsPage() {
       baseline.printer_sensor_history_retention_days !== localSettings.printer_sensor_history_retention_days ||
       baseline.disable_filament_warnings !== localSettings.disable_filament_warnings ||
       baseline.prefer_lowest_filament !== localSettings.prefer_lowest_filament ||
+      (baseline.filament_check_per_slot ?? false) !== (localSettings.filament_check_per_slot ?? false) ||
+      (baseline.filament_check_margin_pct ?? 0) !== (localSettings.filament_check_margin_pct ?? 0) ||
       (baseline.queue_drying_enabled ?? false) !== (localSettings.queue_drying_enabled ?? false) ||
       (baseline.queue_drying_block ?? false) !== (localSettings.queue_drying_block ?? false) ||
       (baseline.ambient_drying_enabled ?? false) !== (localSettings.ambient_drying_enabled ?? false) ||
@@ -1436,6 +1439,8 @@ export function SettingsPage() {
         printer_sensor_history_retention_days: localSettings.printer_sensor_history_retention_days,
         disable_filament_warnings: localSettings.disable_filament_warnings,
         prefer_lowest_filament: localSettings.prefer_lowest_filament,
+        filament_check_per_slot: localSettings.filament_check_per_slot ?? false,
+        filament_check_margin_pct: localSettings.filament_check_margin_pct ?? 0,
         queue_drying_enabled: localSettings.queue_drying_enabled,
         queue_drying_block: localSettings.queue_drying_block,
         ambient_drying_enabled: localSettings.ambient_drying_enabled,
@@ -6430,6 +6435,12 @@ export function SettingsPage() {
                     <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
                   </label>
                 </div>
+                <SlotSpoolCheckSettings
+                  perSlot={localSettings.filament_check_per_slot ?? false}
+                  marginPct={localSettings.filament_check_margin_pct ?? 0}
+                  onPerSlotChange={(value) => updateSetting('filament_check_per_slot', value)}
+                  onMarginChange={(value) => updateSetting('filament_check_margin_pct', value)}
+                />
               </CardContent>
             </Card>
 

@@ -188,6 +188,7 @@ _BOOL_SETTING_KEYS = frozenset(
         "auto_add_unknown_rfid",
         "disable_filament_warnings",
         "prefer_lowest_filament",
+        "filament_check_per_slot",  # fork: slot spools
         "check_updates",
         "check_printer_firmware",
         "include_beta_updates",
@@ -271,6 +272,7 @@ _INT_SETTING_KEYS = frozenset(
         "pause_warning_minutes",
         "obico_poll_interval",
         "octoeverywhere_poll_interval",
+        "filament_check_margin_pct",  # fork: slot spools
     }
 )
 
@@ -715,6 +717,10 @@ _UI_FLAG_FIELDS: tuple[str, ...] = (
     "preferred_slicer",
     "disable_filament_warnings",
     "prefer_lowest_filament",
+    # Fork (services/slot_spools): the print dialog weighs filament the way the
+    # dispatcher does.
+    "filament_check_per_slot",
+    "filament_check_margin_pct",
     "per_printer_mapping_expanded",
     "default_filament_cost",
     "default_bed_levelling",

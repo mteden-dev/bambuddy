@@ -708,6 +708,7 @@ async def init_db():
         shopping_list,
         slicer_pipeline,
         slot_preset,
+        slot_spool_prompt,
         smart_plug,
         smart_plug_energy_snapshot,
         spool,

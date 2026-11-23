@@ -54,6 +54,7 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         ("spool_usage_history", "archive_id"),
         # spool
         ("spool_usage_history", "spool_id"),
+        ("custom_slot_reload_prompts", "spool_id"),  # fork: slot spools
         ("telegram_pending_verdicts", "archive_id"),
         ("wallet_transactions", "print_archive_id"),
         # library_files. print_queue.library_file_id is CASCADE in the model, but
@@ -98,6 +99,7 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         # Fork: a job reserved on the timeline would wait for the next printer
         # given the id.
         ("custom_queue_reservations", "printer_id"),
+        ("custom_slot_reload_prompts", "printer_id"),  # fork: slot spools
         # A printer given a deleted one's id would never be told about the
         # faults that printer was notified about (#3486).
         ("hms_notified_faults", "printer_id"),

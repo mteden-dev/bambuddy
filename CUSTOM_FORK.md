@@ -75,6 +75,24 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     lupy +/−, Ctrl + kółko lub szczypanie na touchpadzie i dwoma palcami na telefonie (czas pod
     kursorem zostaje na miejscu); poziom zapamiętuje przeglądarka. Na telefonie oś przewija się
     w poziomie. Bez zmian w bazie,
+  - **szpule slotów** (licznik filamentu bez numerów, tagów i QR): rolka w slocie AMS bez
+    przypisanej szpuli świeci się na karcie drukarki („NOWY”). „Nowa szpula…” w karcie slotu
+    otwiera okno konfiguracji slotu (preset, profil K, kolor) z wyborem ilości: **pełna 1 kg**,
+    inna ilość w gramach albo **przywrócenie** wcześniej wyjętej szpuli z jej resztą. Po zapisie
+    slot dostaje zwykłą szpulę magazynu z `data_origin = "slot_quick"`, więc zużycie liczy
+    istniejący tracker (gramy z 3MF, przerwany wydruk do warstwy), a braki sprawdza istniejąca
+    kontrola przed drukiem. Szpula slotu odpięta od slotu (slot pusty 2 min poza drukiem, slot
+    przestawiony na inny filament, ręczne odpięcie) trafia do archiwum z resztą gramów. Slot
+    opróżniony i napełniony, zanim szpula się odpięła (szybka podmiana, dołożenie po runoucie w
+    trakcie druku), pyta „Ta sama szpula?” (pomarańczowa ramka, „?”): „Ta sama szpula” liczy dalej,
+    „Nowa szpula…” zakłada nową. Śledzona szpula slotu ma w karcie „Popraw pozostałą ilość”.
+    Kontrola braków dostała dwa ustawienia (Ustawienia → Kontrola filamentu): **każdy slot
+    osobno** (nie liczy szpul, na które przełączyłby AMS Filament Backup, bo przełączenie zostawia
+    ślad na wydruku; sam backup na drukarce zostaje) i **zapas** w procentach ponad gramy z pliku
+    (domyślnie 5 %). Obie działają w schedulerze, przy Start w kolejce i w oknie druku; okno druku
+    pyta też o slot AMS, którego ilości nikt nie liczy. Dwa filamenty pliku zmapowane na jeden slot
+    są ważone razem. Tylko wbudowany magazyn (nie Spoolman). Logika: `services/slot_spools.py`,
+    API `/slot-spools`,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,
@@ -86,11 +104,16 @@ Dzięki temu baza danych dostaje tylko migracje z wydanych wersji i zawsze możn
 wrócić na oficjalny obraz tej samej lub nowszej wersji. Poprawki dokładają do
 bazy wiersze w tabeli ustawień (`hidden_filament_presets`,
 `hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
-`slicer_inbox_manual_start`, `printer_tags`), które oficjalna wersja po prostu pomija,
-i dwie własne tabele: `custom_queue_item_tags` (tagi ustawione zadaniu w oknie druku) i
-`custom_queue_reservations` (rezerwacje z planu osi czasu), zakładane przez `create_all` bez
-migracji. Oficjalny obraz ich nie zna i nie czyta, więc powrót działa jak dotąd (zarezerwowane
-zadania wracają do „Dowolna”); wiersz zadania usuniętego w tym czasie jest pomijany. Pliki
+`slicer_inbox_manual_start`, `printer_tags`, `filament_check_per_slot`,
+`filament_check_margin_pct`), które oficjalna wersja po prostu pomija, i trzy własne tabele
+zakładane przez `create_all` bez migracji: `custom_queue_item_tags` (tagi ustawione zadaniu w
+oknie druku), `custom_queue_reservations` (rezerwacje z planu osi czasu) i
+`custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”). Oficjalny obraz ich nie zna i
+nie czyta, więc powrót działa jak dotąd (zarezerwowane zadania wracają do „Dowolna”); wiersz
+zadania usuniętego w tym czasie jest pomijany. Dwa ustawienia kontroli filamentu fork zapisuje
+przy starcie, jeśli ich nie ma (każdy slot osobno, 5 %); bez nich kontrola działa jak w
+upstream. Szpule slotów to zwykłe szpule magazynu i po powrocie zostają w nim (aktywne i
+zarchiwizowane). Pliki
 wysłane z OrcaSlicer to zwykłe pliki biblioteki (z `source_type = "orcaslicer"`),
 więc po powrocie na oficjalny obraz zostają w folderze „OrcaSlicer”.
 

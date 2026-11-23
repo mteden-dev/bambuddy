@@ -3414,6 +3414,10 @@ async def on_ams_change(printer_id: int, ams_data: list):
         logger.warning("Failed to broadcast AMS change for printer %s: %s", printer_id, e)
 
     await _unlink_stale_assignments(printer_id, ams_data, printing_now)
+    # Fork: a slot emptied and refilled under its slot spool asks "same roll?".
+    from backend.app.services import slot_spools
+
+    await slot_spools.observe_ams(printer_id, ams_data)
 
     # Spools whose tag this pass assigned to a slot; their other slots are
     # released below, once this printer's lock is let go (#3427).
@@ -12278,6 +12282,10 @@ async def lifespan(app: FastAPI):
     warn_if_running_on_uvloop()
 
     await init_db()
+    # Fork: the filament check's per-slot and margin settings (services/slot_spools).
+    from backend.app.services import slot_spools
+
+    await slot_spools.seed_settings()
 
     # Browser download tokens expire after five minutes. Remove abandoned
     # prepared ZIPs at startup as well as before each new preparation so a
@@ -13470,6 +13478,11 @@ app.add_middleware(octoprint_compat.PreferSessionOverInjectedApiKey)
 from backend.app.api.routes import printer_tags  # noqa: E402
 
 app.include_router(printer_tags.router, prefix=app_settings.api_prefix)
+
+# Fork: slot spools count a roll per AMS slot without naming it (services/slot_spools.py).
+from backend.app.api.routes import slot_spools as slot_spools_routes  # noqa: E402
+
+app.include_router(slot_spools_routes.router, prefix=app_settings.api_prefix)
 
 
 # Serve static files (React build)

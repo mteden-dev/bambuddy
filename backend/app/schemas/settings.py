@@ -117,6 +117,21 @@ class AppSettings(BaseModel):
         default=False,
         description="When multiple AMS spools match, prefer the one with lowest remaining filament",
     )
+    # Fork (services/slot_spools): how the filament check weighs a print. The
+    # defaults are upstream's behaviour; startup stores the fork's (on, 5).
+    filament_check_per_slot: bool = Field(
+        default=False,
+        description=(
+            "Check every slot against its own spool, without counting the spools AMS Filament Backup "
+            "could switch to (the switch leaves a mark on the print)"
+        ),
+    )
+    filament_check_margin_pct: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description="Ask for this much more filament than the sliced file needs (percent)",
+    )
 
     # Updates
     check_updates: bool = Field(default=True, description="Automatically check for updates on startup")
@@ -817,6 +832,8 @@ class AppSettingsUpdate(BaseModel):
     auto_add_unknown_rfid: bool | None = None
     disable_filament_warnings: bool | None = None
     prefer_lowest_filament: bool | None = None
+    filament_check_per_slot: bool | None = None
+    filament_check_margin_pct: int | None = Field(default=None, ge=0, le=100)
     check_updates: bool | None = None
     check_printer_firmware: bool | None = None
     include_beta_updates: bool | None = None
