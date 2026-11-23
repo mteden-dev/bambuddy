@@ -4307,6 +4307,7 @@ export default {
       inLibraryRoot: 'kütüphane kökünde',
       print: 'Tüm sürümleri tek iş olarak yazdır',
       printVersion: 'Yalnızca bu sürümü yazdır',
+      printOn: 'Şurada yazdır…',
       ungroup: 'Grubu çöz',
       ungrouping: 'Grup çözülüyor...',
       ungroupTitle: 'Sürümleri gruptan çıkar',
@@ -5831,6 +5832,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'Seçilen dosyalar neye dönüşür',
+      groupModeLabel: 'Sürümlerin basılacağı yer',
       alternatives: 'Alternatifler',
       separate: 'Ayrı işler',
       alternativesHint: 'Tek iş. Boşa çıkan ilk uygun yazıcı kendi dosyasını yazdırır.',
@@ -5841,6 +5843,12 @@ export default {
       notSlicedFor: '{{model}} için dilimlenmemiş: {{files}}',
       perFileMappingHint: 'Her dosyanın kendi filament eşlemesi vardır. Değiştirmediğiniz dosyaların yuvaları baskı başladığında eşleştirilir.',
       failed: 'Kuyruğa eklenmedi: {{filename}} ({{message}}). Önce eklenenler: {{queued}}.',
+      firstFree: 'İlk boşalan yazıcı',
+      pickPrinters: 'Seçilen yazıcılar',
+      firstFreeHint: 'Tek iş. Bir sürümün uyduğu ilk boşalan yazıcı basar. Bir sürümü dışarıda bırakmak için işaretini kaldırın.',
+      pickPrintersHint: 'Yazıcıları seçin. Her biri, kendi modeli için dilimlenmiş sürümle ayrı bir kuyruk öğesi alır.',
+      versionsTitle: 'Sürümler',
+      noVersionFor: 'Bu gruptaki hiçbir sürüm {{printers}} için uygun değil.',
     },
     variants: {
       editNote: 'Bu alternatifler iş kuyruğa alınırken belirlendi. Değiştirmek için iptal edip yeniden kuyruğa alın.',
@@ -5851,6 +5859,9 @@ export default {
       moveUp: 'Yukarı taşı',
       moveDown: 'Aşağı taşı',
       queued: '{{count}} alternatifle kuyruğa alındı',
+      include: '{{filename}} dahil et',
+      printsOn: 'Basacak yazıcı: {{printers}}',
+      noPrinterChosen: 'Yazıcı seçilmedi',
     },
     selectPrinter: 'Yazıcı Seç',
     selectPlate: 'Plaka Seç',

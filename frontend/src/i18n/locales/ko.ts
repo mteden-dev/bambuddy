@@ -4123,6 +4123,7 @@ export default {
       inLibraryRoot: '라이브러리 최상위에 있음',
       print: '모든 버전을 하나의 작업으로 인쇄',
       printVersion: '이 버전만 인쇄',
+      printOn: '프린터 선택해 출력…',
       ungroup: '그룹 해제',
       ungrouping: '그룹 해제 중...',
       ungroupTitle: '버전 그룹 해제',
@@ -5625,6 +5626,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: '선택한 파일의 처리 방식',
+      groupModeLabel: '버전을 출력할 위치',
       alternatives: '대안',
       separate: '개별 작업',
       alternativesHint: '작업 하나입니다. 가장 먼저 비는 호환 프린터가 자기 파일을 인쇄합니다.',
@@ -5635,6 +5637,12 @@ export default {
       notSlicedFor: '{{model}}용으로 슬라이스되지 않음: {{files}}',
       perFileMappingHint: '파일마다 필라멘트 매핑이 따로 있습니다. 변경하지 않은 파일은 인쇄가 시작될 때 슬롯이 지정됩니다.',
       failed: '대기열에 추가되지 않음: {{filename}} ({{message}}). 먼저 추가된 항목: {{queued}}.',
+      firstFree: '처음 비는 프린터',
+      pickPrinters: '선택한 프린터',
+      firstFreeHint: '작업 하나입니다. 버전이 맞는 프린터 중 처음 비는 프린터가 출력합니다. 제외할 버전은 체크를 해제하세요.',
+      pickPrintersHint: '프린터를 선택하세요. 각 프린터에 해당 모델용으로 슬라이스된 버전의 대기열 항목이 하나씩 생깁니다.',
+      versionsTitle: '버전',
+      noVersionFor: '이 그룹에 {{printers}}에 맞는 버전이 없습니다.',
     },
     variants: {
       editNote: '이 대안은 대기열에 추가할 때 정해집니다. 변경하려면 취소 후 다시 추가하세요.',
@@ -5645,6 +5653,9 @@ export default {
       moveUp: '위로',
       moveDown: '아래로',
       queued: '대안 {{count}}개와 함께 대기열에 추가했습니다',
+      include: '{{filename}} 포함',
+      printsOn: '출력 프린터: {{printers}}',
+      noPrinterChosen: '선택한 프린터 없음',
     },
     selectPrinter: '프린터 선택',
     selectPlate: '플레이트 선택',

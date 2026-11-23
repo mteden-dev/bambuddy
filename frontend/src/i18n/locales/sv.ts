@@ -4374,6 +4374,7 @@ errors: {
       inLibraryRoot: 'i bibliotekets rot',
       print: 'Skriv ut alla versioner som ett jobb',
       printVersion: 'Skriv bara ut den här versionen',
+      printOn: 'Skriv ut på…',
       ungroup: 'Dela upp gruppen',
       ungrouping: 'Delar upp gruppen...',
       ungroupTitle: 'Dela upp versioner',
@@ -5931,6 +5932,7 @@ errors: {
   printModal: {
     multiFile: {
       groupLabel: 'Vad de valda filerna blir',
+      groupModeLabel: 'Var versionerna skrivs ut',
       alternatives: 'Alternativ',
       separate: 'Separata jobb',
       alternativesHint: 'Ett jobb. Den första matchande skrivaren som blir ledig skriver ut sin fil.',
@@ -5941,6 +5943,12 @@ errors: {
       notSlicedFor: 'Inte slicad för {{model}}: {{files}}',
       perFileMappingHint: 'Varje fil har en egen filamentmappning. Filer du inte ändrar får sina fack tilldelade när utskriften startar.',
       failed: 'Inte köad: {{filename}} ({{message}}). Köade före: {{queued}}.',
+      firstFree: 'Första lediga skrivare',
+      pickPrinters: 'Valda skrivare',
+      firstFreeHint: 'Ett jobb. Den första lediga skrivaren som en version passar skriver ut det. Avmarkera en version för att utesluta den.',
+      pickPrintersHint: 'Välj skrivarna. Var och en får en egen köpost med versionen som slicats för dess modell.',
+      versionsTitle: 'Versioner',
+      noVersionFor: 'Ingen version i den här gruppen passar {{printers}}.',
     },
     variants: {
       editNote: 'Dessa alternativ sattes när jobbet köades. Avbryt och köa om för att ändra dem.',
@@ -5951,6 +5959,9 @@ errors: {
       moveUp: 'Flytta upp',
       moveDown: 'Flytta ner',
       queued: 'Köat med {{count}} alternativ',
+      include: 'Ta med {{filename}}',
+      printsOn: 'Skrivs ut på: {{printers}}',
+      noPrinterChosen: 'Ingen skrivare vald',
     },
     selectPrinter: 'Välj skrivare',
     selectPlate: 'Välj platta',

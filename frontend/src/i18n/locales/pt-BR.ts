@@ -4299,6 +4299,7 @@ export default {
       inLibraryRoot: 'na raiz da biblioteca',
       print: 'Imprimir todas as versões como um único trabalho',
       printVersion: 'Imprimir somente esta versão',
+      printOn: 'Imprimir em…',
       ungroup: 'Desagrupar',
       ungrouping: 'Desagrupando...',
       ungroupTitle: 'Desagrupar versões',
@@ -5841,6 +5842,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'O que os arquivos selecionados se tornam',
+      groupModeLabel: 'Onde as versões são impressas',
       alternatives: 'Alternativas',
       separate: 'Trabalhos separados',
       alternativesHint: 'Um único trabalho. A primeira impressora compatível que ficar livre imprime o seu arquivo.',
@@ -5851,6 +5853,12 @@ export default {
       notSlicedFor: 'Não fatiado para {{model}}: {{files}}',
       perFileMappingHint: 'Cada arquivo tem seu próprio mapeamento de filamento. Os arquivos que você não alterar recebem os slots quando a impressão começar.',
       failed: 'Não adicionado à fila: {{filename}} ({{message}}). Adicionados antes: {{queued}}.',
+      firstFree: 'Primeira impressora livre',
+      pickPrinters: 'Impressoras escolhidas',
+      firstFreeHint: 'Um trabalho. A primeira impressora livre à qual uma versão serve o imprime. Desmarque uma versão para deixá-la de fora.',
+      pickPrintersHint: 'Escolha as impressoras. Cada uma recebe seu próprio item na fila com a versão fatiada para o seu modelo.',
+      versionsTitle: 'Versões',
+      noVersionFor: 'Nenhuma versão deste grupo serve para {{printers}}.',
     },
     variants: {
       editNote: 'Estas alternativas foram definidas ao enfileirar o trabalho. Cancele e enfileire de novo para alterá-las.',
@@ -5861,6 +5869,9 @@ export default {
       moveUp: 'Mover para cima',
       moveDown: 'Mover para baixo',
       queued: 'Na fila com {{count}} alternativas',
+      include: 'Incluir {{filename}}',
+      printsOn: 'Imprime em: {{printers}}',
+      noPrinterChosen: 'Nenhuma impressora escolhida',
     },
     selectPrinter: 'Selecionar Impressora',
     selectPlate: 'Selecionar Placa',

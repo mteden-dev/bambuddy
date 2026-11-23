@@ -27,6 +27,12 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     `?with_variant_members=true`, a endpointy grup pokazują tylko wersje, które użytkownik
     może czytać, i zmianę grupy pozwalają tylko właścicielowi **wszystkich** jej aktywnych
     plików (albo z uprawnieniem update-all). Bez migracji bazy; wpis w CHANGELOG pominięty,
+  - druk grupy wersji (na wierzchu #3643): okno druku ma przełącznik **Pierwsza wolna drukarka**
+    (alternatywy jak dotąd, ale wersję można odznaczyć) / **Wybrane drukarki** (lista tylko
+    drukarek, do których pasuje któraś wersja; każda zaznaczona dostaje osobne zadanie z wersją
+    dla swojego modelu, dla P1P wersję P1S z ostrzeżeniem). W menu karty grupy jest
+    **Drukuj na…**, a druk grupy z karty drukarki od razu bierze wersję dla tej drukarki.
+    Tylko frontend, backend dostaje zwykłe zadania lub alternatywy,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,

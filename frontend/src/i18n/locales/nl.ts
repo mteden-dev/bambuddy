@@ -4342,6 +4342,7 @@ export default {
       inLibraryRoot: 'in de hoofdmap van de bibliotheek',
       print: 'Alle versies als één taak afdrukken',
       printVersion: 'Alleen deze versie afdrukken',
+      printOn: 'Printen op…',
       ungroup: 'Groep opheffen',
       ungrouping: 'Groep wordt opgeheven...',
       ungroupTitle: 'Versies uit groep halen',
@@ -5900,6 +5901,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'Wat er van de geselecteerde bestanden wordt',
+      groupModeLabel: 'Waar de versies geprint worden',
       alternatives: 'Alternatieven',
       separate: 'Aparte opdrachten',
       alternativesHint: 'Eén opdracht. De eerste passende printer die vrijkomt print zijn bestand.',
@@ -5910,6 +5912,12 @@ export default {
       notSlicedFor: 'Niet gesliced voor {{model}}: {{files}}',
       perFileMappingHint: 'Elk bestand heeft een eigen filamenttoewijzing. Bestanden die je niet wijzigt, krijgen hun sleuven toegewezen wanneer de print start.',
       failed: 'Niet in de wachtrij gezet: {{filename}} ({{message}}). Eerder in de wachtrij gezet: {{queued}}.',
+      firstFree: 'Eerste vrije printer',
+      pickPrinters: 'Gekozen printers',
+      firstFreeHint: 'Eén taak. De eerste vrije printer waar een versie bij past, print hem. Vink een versie uit om die over te slaan.',
+      pickPrintersHint: 'Kies de printers. Elke printer krijgt een eigen wachtrij-item met de versie die voor zijn model gesliced is.',
+      versionsTitle: 'Versies',
+      noVersionFor: 'Geen versie van deze groep past bij {{printers}}.',
     },
     variants: {
       editNote: 'Deze alternatieven zijn ingesteld toen de taak in de wachtrij werd geplaatst. Annuleer en plaats opnieuw in de wachtrij om ze te wijzigen.',
@@ -5920,6 +5928,9 @@ export default {
       moveUp: 'Omhoog verplaatsen',
       moveDown: 'Omlaag verplaatsen',
       queued: 'In wachtrij met {{count}} alternatieven',
+      include: '{{filename}} meenemen',
+      printsOn: 'Print op: {{printers}}',
+      noPrinterChosen: 'Geen printer gekozen',
     },
     selectPrinter: 'Printer selecteren',
     selectPlate: 'Plaat selecteren',

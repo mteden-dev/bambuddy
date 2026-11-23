@@ -31,6 +31,15 @@ interface VariantCandidatesProps {
    *  An empty string drops the line, for when something above the list
    *  already explains it (the mode toggle, #3462). */
   help?: string;
+  /** Alternatives only (fork): files left out of the job, with a tick box on
+   *  each row to leave a file out or take it back. */
+  excludedIds?: ReadonlySet<number>;
+  onToggleExcluded?: (fileId: number) => void;
+  /** Offer the move buttons (default). Off where the order means nothing. */
+  reorderable?: boolean;
+  /** "Chosen printers" of a version group (fork): file id -> names of the
+   *  selected printers that print it. A file missing here prints on none. */
+  assignedPrinters?: Record<number, string[]>;
 }
 
 /**
@@ -65,6 +74,10 @@ export function VariantCandidates({
   readOnlyNote,
   title,
   help,
+  excludedIds,
+  onToggleExcluded,
+  reorderable = true,
+  assignedPrinters,
 }: VariantCandidatesProps) {
   const { t } = useTranslation();
 
@@ -139,12 +152,29 @@ export function VariantCandidates({
           // resolves the candidate; echoing its own words here avoids a second,
           // possibly disagreeing, normalizer in the browser.
           const model = candidate.sliced_for_model;
+          const excluded = excludedIds?.has(candidate.id) ?? false;
+          const printerNames = assignedPrinters ? assignedPrinters[candidate.id] ?? [] : null;
+          // Dimmed when it is not part of what Print queues.
+          const idle = excluded || (printerNames !== null && printerNames.length === 0);
           return (
             <div
               key={candidate.id}
-              className="flex flex-wrap items-center gap-2 rounded border border-bambu-dark-tertiary p-2"
+              data-testid="variant-candidate"
+              className={`flex flex-wrap items-center gap-2 rounded border border-bambu-dark-tertiary p-2${
+                idle ? ' opacity-50' : ''
+              }`}
             >
-              <span className="text-xs font-mono text-bambu-gray w-5 shrink-0">{index + 1}.</span>
+              {onToggleExcluded && !readOnly ? (
+                <input
+                  type="checkbox"
+                  checked={!excluded}
+                  onChange={() => onToggleExcluded(candidate.id)}
+                  className="w-4 h-4 shrink-0 accent-bambu-green"
+                  aria-label={t('printModal.variants.include', { filename: candidate.filename })}
+                />
+              ) : (
+                <span className="text-xs font-mono text-bambu-gray w-5 shrink-0">{index + 1}.</span>
+              )}
               <span className="px-2 py-0.5 rounded-full bg-bambu-green/10 text-bambu-green text-xs shrink-0">
                 {model || t('printModal.variants.unknownModel')}
               </span>
@@ -170,7 +200,7 @@ export function VariantCandidates({
                 </label>
               )}
 
-              {!readOnly && (
+              {!readOnly && reorderable && (
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     type="button"
@@ -191,6 +221,13 @@ export function VariantCandidates({
                     <ArrowDown className="w-3.5 h-3.5" />
                   </button>
                 </div>
+              )}
+              {printerNames !== null && (
+                <span className="basis-full pl-7 text-xs text-bambu-gray">
+                  {printerNames.length > 0
+                    ? t('printModal.variants.printsOn', { printers: printerNames.join(', ') })
+                    : t('printModal.variants.noPrinterChosen')}
+                </span>
               )}
             </div>
           );

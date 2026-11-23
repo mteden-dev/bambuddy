@@ -4312,6 +4312,7 @@ export default {
       inLibraryRoot: 'ライブラリのルート',
       print: 'すべてのバージョンを1つのジョブとして印刷',
       printVersion: 'このバージョンのみ印刷',
+      printOn: '印刷先を選ぶ…',
       ungroup: 'グループ解除',
       ungrouping: 'グループを解除中...',
       ungroupTitle: 'バージョンのグループ解除',
@@ -5855,6 +5856,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: '選択したファイルの扱い',
+      groupModeLabel: 'バージョンの印刷先',
       alternatives: '候補',
       separate: '個別のジョブ',
       alternativesHint: '1つのジョブです。条件に合う最初に空いたプリンターがそのファイルを印刷します。',
@@ -5865,6 +5867,12 @@ export default {
       notSlicedFor: '{{model}} 向けにスライスされていません：{{files}}',
       perFileMappingHint: 'ファイルごとにフィラメントマッピングがあります。変更しないファイルは、印刷開始時にスロットが割り当てられます。',
       failed: 'キューに追加されませんでした：{{filename}}（{{message}}）。これより前に追加済み：{{queued}}。',
+      firstFree: '最初に空いたプリンター',
+      pickPrinters: '選択したプリンター',
+      firstFreeHint: '1つのジョブです。いずれかのバージョンが合う最初に空いたプリンターで印刷します。除外するバージョンはチェックを外してください。',
+      pickPrintersHint: 'プリンターを選んでください。各プリンターに、そのモデル用にスライスされたバージョンのキュー項目が作られます。',
+      versionsTitle: 'バージョン',
+      noVersionFor: 'このグループには {{printers}} に合うバージョンがありません。',
     },
     variants: {
       editNote: 'これらの候補はキュー追加時に決まります。変更するにはキャンセルして追加し直してください。',
@@ -5875,6 +5883,9 @@ export default {
       moveUp: '上へ',
       moveDown: '下へ',
       queued: '{{count}}件の候補付きでキューに追加しました',
+      include: '{{filename}} を含める',
+      printsOn: '印刷先: {{printers}}',
+      noPrinterChosen: 'プリンター未選択',
     },
     selectPrinter: 'プリンターを選択',
     selectPlate: 'プレートを選択',

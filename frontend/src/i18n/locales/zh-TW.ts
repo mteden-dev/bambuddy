@@ -4299,6 +4299,7 @@ export default {
       inLibraryRoot: '位於資料庫根目錄',
       print: '將所有版本作為一個工作列印',
       printVersion: '僅列印此版本',
+      printOn: '列印到…',
       ungroup: '取消群組',
       ungrouping: '正在取消群組...',
       ungroupTitle: '取消版本群組',
@@ -5841,6 +5842,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: '所選檔案的處理方式',
+      groupModeLabel: '版本的列印位置',
       alternatives: '備選',
       separate: '獨立工作',
       alternativesHint: '一項工作。第一台空閒且相符的印表機會列印它對應的檔案。',
@@ -5851,6 +5853,12 @@ export default {
       notSlicedFor: '未為 {{model}} 切片：{{files}}',
       perFileMappingHint: '每個檔案都有自己的耗材對應。未變更的檔案會在列印開始時自動配對槽位。',
       failed: '未加入佇列：{{filename}}（{{message}}）。此前已加入：{{queued}}。',
+      firstFree: '第一台空閒印表機',
+      pickPrinters: '選定的印表機',
+      firstFreeHint: '一個工作。由第一台空閒且有相符版本的印表機列印。取消勾選某個版本即可將其排除。',
+      pickPrintersHint: '選擇印表機。每台印表機都會獲得一個佇列項目，使用為其型號切片的版本。',
+      versionsTitle: '版本',
+      noVersionFor: '此群組中沒有適合 {{printers}} 的版本。',
     },
     variants: {
       editNote: '這些備選在工作加入佇列時確定。如需變更，請取消後重新加入佇列。',
@@ -5861,6 +5869,9 @@ export default {
       moveUp: '上移',
       moveDown: '下移',
       queued: '已加入佇列，含 {{count}} 個備選',
+      include: '包含 {{filename}}',
+      printsOn: '列印於：{{printers}}',
+      noPrinterChosen: '未選擇印表機',
     },
     selectPrinter: '選擇印表機',
     selectPlate: '選擇板',

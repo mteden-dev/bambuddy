@@ -4344,6 +4344,7 @@ export default {
       inLibraryRoot: 'in the library root',
       print: 'Print all versions as one job',
       printVersion: 'Print this version only',
+      printOn: 'Print on…',
       ungroup: 'Ungroup',
       ungrouping: 'Ungrouping...',
       ungroupTitle: 'Ungroup versions',
@@ -5902,6 +5903,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'What the selected files become',
+      groupModeLabel: 'Where the versions print',
       alternatives: 'Alternatives',
       separate: 'Separate jobs',
       alternativesHint: 'One job. The first matching printer to free up prints its file.',
@@ -5912,6 +5914,12 @@ export default {
       notSlicedFor: 'Not sliced for {{model}}: {{files}}',
       perFileMappingHint: 'Each file has its own filament mapping. Files you leave unchanged get their slots matched when the print starts.',
       failed: 'Not queued: {{filename}} ({{message}}). Queued before it: {{queued}}.',
+      firstFree: 'First free printer',
+      pickPrinters: 'Chosen printers',
+      firstFreeHint: 'One job. The first free printer that a version fits prints it. Untick a version to leave it out.',
+      pickPrintersHint: 'Pick the printers. Each one gets its own queue item with the version sliced for its model.',
+      versionsTitle: 'Versions',
+      noVersionFor: 'No version of this group fits {{printers}}.',
     },
     variants: {
       editNote: 'These alternatives were set when the job was queued. Cancel and re-queue to change them.',
@@ -5922,6 +5930,9 @@ export default {
       moveUp: 'Move up',
       moveDown: 'Move down',
       queued: 'Queued with {{count}} alternatives',
+      include: 'Include {{filename}}',
+      printsOn: 'Prints on: {{printers}}',
+      noPrinterChosen: 'No printer chosen',
     },
     selectPrinter: 'Select Printer',
     selectPlate: 'Select Plate',

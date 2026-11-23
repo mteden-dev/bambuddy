@@ -4299,6 +4299,7 @@ export default {
       inLibraryRoot: 'nella radice della libreria',
       print: 'Stampa tutte le versioni come un unico lavoro',
       printVersion: 'Stampa solo questa versione',
+      printOn: 'Stampa su…',
       ungroup: 'Separa',
       ungrouping: 'Separazione in corso...',
       ungroupTitle: 'Separa le versioni',
@@ -5841,6 +5842,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'Cosa diventano i file selezionati',
+      groupModeLabel: 'Dove vengono stampate le versioni',
       alternatives: 'Alternative',
       separate: 'Lavori separati',
       alternativesHint: 'Un solo lavoro. La prima stampante compatibile che si libera stampa il proprio file.',
@@ -5851,6 +5853,12 @@ export default {
       notSlicedFor: 'Non elaborato per {{model}}: {{files}}',
       perFileMappingHint: 'Ogni file ha la propria mappatura filamento. Ai file che non modifichi gli slot vengono assegnati all’avvio della stampa.',
       failed: 'Non messo in coda: {{filename}} ({{message}}). Messi in coda prima: {{queued}}.',
+      firstFree: 'Prima stampante libera',
+      pickPrinters: 'Stampanti scelte',
+      firstFreeHint: 'Un lavoro. Lo stampa la prima stampante libera a cui si adatta una versione. Deseleziona una versione per escluderla.',
+      pickPrintersHint: 'Scegli le stampanti. Ognuna riceve il proprio elemento in coda con la versione sliced per il suo modello.',
+      versionsTitle: 'Versioni',
+      noVersionFor: 'Nessuna versione di questo gruppo è adatta a {{printers}}.',
     },
     variants: {
       editNote: 'Queste alternative sono state definite al momento dell\'accodamento. Annulla e riaccoda per modificarle.',
@@ -5861,6 +5869,9 @@ export default {
       moveUp: 'Sposta su',
       moveDown: 'Sposta giù',
       queued: 'In coda con {{count}} alternative',
+      include: 'Includi {{filename}}',
+      printsOn: 'Stampa su: {{printers}}',
+      noPrinterChosen: 'Nessuna stampante scelta',
     },
     selectPrinter: 'Seleziona stampante',
     selectPlate: 'Seleziona piatto',

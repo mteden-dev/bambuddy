@@ -2709,7 +2709,7 @@ export function FileManagerPage() {
   }, []);
 
   const variantGroup = useVariantGroupActions({
-    onPrintGroup: (row) => void bulkPrint.printVariantGroup(row),
+    onPrintGroup: (row, groupMode) => void bulkPrint.printVariantGroup(row, groupMode),
     onFilesDeleted: (ids) => setSelectedFiles((prev) => prev.filter((id) => !ids.includes(id))),
   });
 
@@ -4758,14 +4758,15 @@ export function FileManagerPage() {
           would show a single-file print for a file that has alternatives. */}
       {printFile && (printOverride || !printFile.variant_group_id || printFileGroup !== undefined) && (
         <PrintModal
-          key={`${printFile.id}-${printOverride ? 'group' : 'files'}`}
+          key={`${printFile.id}-${printOverride ? `group-${printOverride.groupMode ?? 'first'}` : 'files'}`}
           mode="create"
           libraryFileId={printVariantFiles?.[0]?.id ?? printFile.id}
           variantFiles={printVariantFiles}
-          // A version group is by definition alternatives; only an explicit
-          // selection (the same one printVariantFiles prefers) may mean separate
-          // jobs (#3462).
+          // A version group prints on the first free printer or on chosen
+          // printers (fork), never as separate jobs; only an explicit
+          // selection (the same one printVariantFiles prefers) may (#3462).
           separateJobsAllowed={!printOverride && (selectedSlicedFiles.length > 1 || resumeRun)}
+          initialMultiFileMode={printOverride?.groupMode}
           resumeSeparateJobs={resumeRun ? separateJobsRun! : undefined}
           onSeparateJobsProgress={setSeparateJobsRun}
           // Naming a cross-model job after one of its files reads as though the

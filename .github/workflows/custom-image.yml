@@ -96,7 +96,11 @@ jobs:
             src/__tests__/pages/FileManagerVariantGroups.test.tsx \
             src/__tests__/pages/FileManagerVariantSelection.test.tsx \
             src/__tests__/pages/fileManager/variantGroups.test.ts \
-            src/__tests__/pages/FileManagerPage.test.tsx
+            src/__tests__/pages/FileManagerPage.test.tsx \
+            src/__tests__/components/PrintModalVersionGroupPrinters.test.tsx \
+            src/__tests__/components/PrintModalCrossModel.test.tsx \
+            src/__tests__/components/PrintModalSeparateJobsQueue.test.ts \
+            src/__tests__/components/VariantCandidates.test.tsx
 
   image:
     name: Build and push arm64 image

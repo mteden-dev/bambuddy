@@ -2,11 +2,13 @@ import { isGcodeCompatible } from '../../utils/printer';
 import type { VariantCandidate } from './VariantCandidates';
 
 /**
- * Rules for choosing between the two ways of printing several selected sliced
- * files (#3462): "alternatives" (one job, the first free printer of a matching
- * model prints its file, #671) or "separate" (one queue item per file).
+ * Rules for choosing between the ways of printing several sliced files:
+ * "alternatives" (one job, the first free printer of a matching model prints
+ * its file, #671), "separate" (one queue item per selected file, #3462) or,
+ * for a version group only, "printers" (fork: the user picks the printers and
+ * each one gets a queue item with the version sliced for its model).
  */
-export type MultiFileMode = 'alternatives' | 'separate';
+export type MultiFileMode = 'alternatives' | 'separate' | 'printers';
 
 // Case and outer spaces only, not isGcodeCompatible's looser normalizer: a
 // duplicate blocks "Alternatives", so it has to be certain, and the backend's
@@ -52,4 +54,22 @@ export function filesIncompatibleWith(files: VariantCandidate[], targetModel: st
 export function filesNotSlicedFor(files: VariantCandidate[], printerModel: string | null): VariantCandidate[] {
   if (!printerModel) return [];
   return files.filter((f) => f.sliced_for_model && f.sliced_for_model !== printerModel);
+}
+
+// The spelling rule of isGcodeCompatible: case, spaces and hyphens don't count.
+const modelKey = (m: string) => m.trim().toUpperCase().replace(/[\s-]/g, '');
+
+/**
+ * The version a printer of `printerModel` prints (fork, "printers" mode of a
+ * version group): the one sliced for its model, else the first in list order
+ * whose G-code its model may run (#2578, e.g. a P1S slice on a P1P). A
+ * version that names no model is never picked: nothing says it fits. Null
+ * when no version fits, or the printer's model is unknown.
+ */
+export function versionForModel(files: VariantCandidate[], printerModel: string | null | undefined): VariantCandidate | null {
+  if (!printerModel) return null;
+  const key = modelKey(printerModel);
+  const exact = files.find((f) => f.sliced_for_model && modelKey(f.sliced_for_model) === key);
+  if (exact) return exact;
+  return files.find((f) => f.sliced_for_model && isGcodeCompatible(f.sliced_for_model, printerModel)) ?? null;
 }

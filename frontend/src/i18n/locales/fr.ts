@@ -4300,6 +4300,7 @@ export default {
       inLibraryRoot: 'à la racine de la bibliothèque',
       print: 'Imprimer toutes les versions en un seul travail',
       printVersion: 'Imprimer cette version uniquement',
+      printOn: 'Imprimer sur…',
       ungroup: 'Dissocier',
       ungrouping: 'Dissociation...',
       ungroupTitle: 'Dissocier les versions',
@@ -5842,6 +5843,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'Ce que deviennent les fichiers sélectionnés',
+      groupModeLabel: 'Où les versions sont imprimées',
       alternatives: 'Alternatives',
       separate: 'Tâches séparées',
       alternativesHint: 'Une seule tâche. La première imprimante compatible qui se libère imprime son fichier.',
@@ -5852,6 +5854,12 @@ export default {
       notSlicedFor: 'Non tranché pour {{model}} : {{files}}',
       perFileMappingHint: 'Chaque fichier a son propre mapping filament. Les fichiers que vous ne modifiez pas reçoivent leurs emplacements au démarrage de l’impression.',
       failed: 'Non mis en file : {{filename}} ({{message}}). Mis en file avant : {{queued}}.',
+      firstFree: 'Première imprimante libre',
+      pickPrinters: 'Imprimantes choisies',
+      firstFreeHint: 'Une tâche. La première imprimante libre à laquelle une version convient l’imprime. Décochez une version pour l’exclure.',
+      pickPrintersHint: 'Choisissez les imprimantes. Chacune reçoit son propre élément de file avec la version découpée pour son modèle.',
+      versionsTitle: 'Versions du groupe',
+      noVersionFor: 'Aucune version de ce groupe ne convient à {{printers}}.',
     },
     variants: {
       editNote: 'Ces alternatives ont été définies lors de la mise en file. Annulez et remettez en file pour les modifier.',
@@ -5862,6 +5870,9 @@ export default {
       moveUp: 'Monter',
       moveDown: 'Descendre',
       queued: 'Mis en file avec {{count}} alternatives',
+      include: 'Inclure {{filename}}',
+      printsOn: 'Imprime sur : {{printers}}',
+      noPrinterChosen: 'Aucune imprimante choisie',
     },
     selectPrinter: 'Choisir l\'imprimante',
     selectPlate: 'Choisir le plateau',

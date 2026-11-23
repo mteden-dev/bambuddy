@@ -78,6 +78,14 @@ export interface PrintModalProps {
    */
   separateJobsAllowed?: boolean;
   /**
+   * How a version group (`variantFiles` without `separateJobsAllowed`) opens
+   * (fork). 'alternatives' (default): one job for the first free printer.
+   * 'printers': the user picks printers, and each one gets a queue item with
+   * the version sliced for its model. The dialog offers both, except with
+   * `initialSelectedPrinterIds`, where the printer is already chosen.
+   */
+  initialMultiFileMode?: 'alternatives' | 'printers';
+  /**
    * The rest of a partly queued separate-jobs run, closed after a refusal and
    * opened again on the files still to queue (#3471 review). Its pairs are
    * skipped and its ASAP positions continued; the mode is not offered again,

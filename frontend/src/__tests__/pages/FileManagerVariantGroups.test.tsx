@@ -886,6 +886,20 @@ describe('version groups in the File Manager', () => {
 
       expect(await screen.findByText(/vase_X1C\.gcode\.3mf \+1 more/)).toBeInTheDocument();
       expect(screen.queryByRole('radiogroup', { name: 'What the selected files become' })).not.toBeInTheDocument();
+      // Fork: it opens on the first free printer, with chosen printers on offer.
+      expect(screen.getByRole('radio', { name: 'First free printer' })).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('opens the group on chosen printers from "Print on…" (fork)', async () => {
+      twoVersions();
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await screen.findByTestId('variant-group-card');
+      await user.click(screen.getByRole('button', { name: 'Actions for version group Vase' }));
+      await user.click(await screen.findByRole('button', { name: 'Print on…' }));
+
+      expect(await screen.findByText(/vase_X1C\.gcode\.3mf \+1 more/)).toBeInTheDocument();
+      expect(screen.getByRole('radio', { name: 'Chosen printers' })).toHaveAttribute('aria-checked', 'true');
     });
 
     it('prints a single version without offering the rest', async () => {

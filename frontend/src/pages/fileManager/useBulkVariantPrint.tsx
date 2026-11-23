@@ -11,6 +11,8 @@ import { planBulkPrint, promotePartialGroups, type BulkPrintPlan } from './varia
 interface PrintOverride {
   ids: number[];
   variantFiles: { id: number; filename: string; sliced_for_model: string | null }[] | undefined;
+  /** A group opened on "chosen printers" rather than the first free one (fork). */
+  groupMode?: 'printers';
 }
 
 type PrintQueue = { groups: GroupRow[]; loose: LibraryFileListItem[] };
@@ -69,12 +71,14 @@ export function useBulkVariantPrint({
     [setPrintFile],
   );
 
-  // The whole group as one job with printer alternatives. Each version's model
-  // is the one the server dispatches to (its durable override, else what the
-  // file declares), which the list does not carry but the group does; the
-  // file's own declared model stands in when that cannot be fetched.
+  // The whole group as one job with printer alternatives, or with `printers`
+  // on the printers the user picks, each with the version for its model
+  // (fork). Each version's model is the one the server dispatches to (its
+  // durable override, else what the file declares), which the list does not
+  // carry but the group does; the file's own declared model stands in when
+  // that cannot be fetched.
   const printVariantGroup = useCallback(
-    async (row: GroupRow) => {
+    async (row: GroupRow, groupMode?: 'printers') => {
       const sliced = row.members.filter(isSlicedLibraryFile);
       if (sliced.length === 0) return;
       const request = ++printRequest.current;
@@ -98,6 +102,7 @@ export function useBulkVariantPrint({
           filename: f.filename,
           sliced_for_model: targets.get(f.id) ?? f.sliced_for_model,
         })),
+        groupMode,
       });
       setPrintFile(sliced[0]);
     },

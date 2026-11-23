@@ -4314,6 +4314,7 @@ export default {
       inLibraryRoot: 'en la raíz de la biblioteca',
       print: 'Imprimir todas las versiones como un solo trabajo',
       printVersion: 'Imprimir solo esta versión',
+      printOn: 'Imprimir en…',
       ungroup: 'Desagrupar',
       ungrouping: 'Desagrupando...',
       ungroupTitle: 'Desagrupar versiones',
@@ -5862,6 +5863,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'En qué se convierten los archivos seleccionados',
+      groupModeLabel: 'Dónde se imprimen las versiones',
       alternatives: 'Alternativas',
       separate: 'Trabajos separados',
       alternativesHint: 'Un solo trabajo. La primera impresora compatible que quede libre imprime su archivo.',
@@ -5872,6 +5874,12 @@ export default {
       notSlicedFor: 'No laminado para {{model}}: {{files}}',
       perFileMappingHint: 'Cada archivo tiene su propio mapeo de filamentos. Los archivos que no cambies reciben sus ranuras al iniciar la impresión.',
       failed: 'No añadido a la cola: {{filename}} ({{message}}). Añadidos antes: {{queued}}.',
+      firstFree: 'Primera impresora libre',
+      pickPrinters: 'Impresoras elegidas',
+      firstFreeHint: 'Un trabajo. Lo imprime la primera impresora libre a la que se ajuste una versión. Desmarca una versión para dejarla fuera.',
+      pickPrintersHint: 'Elige las impresoras. Cada una recibe su propio elemento en la cola con la versión laminada para su modelo.',
+      versionsTitle: 'Versiones',
+      noVersionFor: 'Ninguna versión de este grupo se ajusta a {{printers}}.',
     },
     variants: {
       editNote: 'Estas alternativas se fijaron al poner el trabajo en cola. Cancela y vuelve a encolar para cambiarlas.',
@@ -5882,6 +5890,9 @@ export default {
       moveUp: 'Subir',
       moveDown: 'Bajar',
       queued: 'En cola con {{count}} alternativas',
+      include: 'Incluir {{filename}}',
+      printsOn: 'Imprime en: {{printers}}',
+      noPrinterChosen: 'Ninguna impresora elegida',
     },
     selectPrinter: 'Seleccionar impresora',
     selectPlate: 'Seleccionar cama',

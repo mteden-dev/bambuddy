@@ -112,12 +112,16 @@ describe('PrintModal with several selected files (#3462)', () => {
     mockBackend();
   });
 
-  it('keeps a version group as alternatives, without the toggle', async () => {
+  it('opens a version group on the first free printer, without separate jobs', async () => {
     renderModal([PART_A, PART_C]);
     expect(await screen.findByText('part-c.gcode.3mf')).toBeInTheDocument();
     expect(screen.getByText('Printer alternatives')).toBeInTheDocument();
-    expect(screen.getByText(ALTERNATIVES_LIST_HELP)).toBeInTheDocument();
-    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    // A group chooses between the first free printer and chosen printers
+    // (fork), never separate jobs; the toggle's hint is its one explanation.
+    expect(screen.getByRole('radio', { name: 'First free printer' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Chosen printers' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Separate jobs' })).not.toBeInTheDocument();
+    expect(screen.queryByText(ALTERNATIVES_LIST_HELP)).not.toBeInTheDocument();
   });
 
   it('explains each mode once, under the toggle', async () => {

@@ -38,6 +38,7 @@ import {
   duplicateModel,
   filesIncompatibleWith,
   filesNotSlicedFor,
+  versionForModel,
   type MultiFileMode,
 } from './multiFile';
 import { fileHasQueuedPair, queueSeparateJobs, runAsapTail } from './separateJobs';
@@ -111,6 +112,7 @@ export function PrintModal({
   initialScheduleOptions,
   variantFiles,
   separateJobsAllowed,
+  initialMultiFileMode,
   resumeSeparateJobs,
   onSeparateJobsProgress,
 }: PrintModalProps) {
@@ -139,14 +141,28 @@ export function PrintModal({
   // What those files become (#3462): one job with a candidate per file (#671),
   // or one queue item per file. Only a selection made in the File Manager may
   // be split into separate jobs; a version group is the same job sliced for
-  // different printers, so without `separateJobsAllowed` it stays alternatives
-  // and the dialog behaves exactly as before.
+  // different printers, so it is never split per file.
+  // A version group (fork) is the list without `separateJobsAllowed`: one job
+  // for the first free printer, or printers the user picks, each getting the
+  // version sliced for its model.
+  const isVersionGroup = isMultiFile && !separateJobsAllowed;
   const [multiFileMode, setMultiFileMode] = useState<MultiFileMode>(() =>
-    resumed ? 'separate' : separateJobsAllowed && isMultiFile ? defaultMultiFileMode(variantFiles!) : 'alternatives',
+    resumed
+      ? 'separate'
+      : separateJobsAllowed && isMultiFile
+        ? defaultMultiFileMode(variantFiles!)
+        : isVersionGroup && (initialMultiFileMode === 'printers' || !!initialSelectedPrinterIds?.length)
+          ? 'printers'
+          : 'alternatives',
   );
   // Cross-model alternatives (#671).
   const isCrossModel = isMultiFile && multiFileMode === 'alternatives';
-  const isSeparateJobs = isMultiFile && multiFileMode === 'separate';
+  // A version group on the printers the user picks (fork). It runs as
+  // separate jobs whose pairs are each printer and the version for its model,
+  // so every separate-jobs rule (per-file plates and mapping panels, no shared
+  // filament panels, stop at the first refusal) holds for it too.
+  const isGroupPrinters = isVersionGroup && multiFileMode === 'printers';
+  const isSeparateJobs = isMultiFile && (multiFileMode === 'separate' || isGroupPrinters);
   // Set once separate jobs were partly queued and the rest is still listed.
   // The rest is the remainder of those jobs, so the mode is no longer offered:
   // as alternatives it could be a job of one candidate, or one whose filament
@@ -166,7 +182,10 @@ export function PrintModal({
   // in the queue as it is at the next submit.
   const [runItemIds, setRunItemIds] = useState<number[]>(() => (resumed ? resumeSeparateJobs!.queuedItemIds ?? [] : []));
   const [runBatchIds, setRunBatchIds] = useState<number[]>(() => (resumed ? resumeSeparateJobs!.queuedBatchIds ?? [] : []));
-  const showModeToggle = isMultiFile && !!separateJobsAllowed && !partlyQueued;
+  // A group opened for a printer already chosen (the printer card) prints the
+  // version for that printer; there is nothing to choose between.
+  const showModeToggle =
+    isMultiFile && !partlyQueued && (!!separateJobsAllowed || (isVersionGroup && !initialSelectedPrinterIds?.length));
   // Editing an already-queued cross-model item. The candidates are shown so the
   // dialog doesn't misrepresent the job as a plain "Any H2D" — which is what it
   // did before, offering a printer picker whose Save would have left a row with
@@ -190,6 +209,20 @@ export function PrintModal({
   // Before that a quick Print would send plate_id null: the whole file's time
   // and cost, and plate 1 printing.
   const [candidatePlatesReady, setCandidatePlatesReady] = useState(false);
+  // Alternatives (fork): files the user left out of the job. Kept across a
+  // switch to "chosen printers" and back, where they are not used.
+  const [excludedIds, setExcludedIds] = useState<ReadonlySet<number>>(() => new Set());
+  const includedCandidates = useMemo(
+    () => candidates.filter((c) => !excludedIds.has(c.id)),
+    [candidates, excludedIds],
+  );
+  const toggleExcluded = (fileId: number) =>
+    setExcludedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(fileId)) next.delete(fileId);
+      else next.add(fileId);
+      return next;
+    });
   // Separate jobs on one printer: the tray picks of each file's own mapping
   // panel, keyed by `perFileMappingKey` (printer, file, plate). A reopened run
   // starts from the picks it was submitted with.
@@ -534,7 +567,53 @@ export function PrintModal({
   // Separate jobs print every listed file, not just the first one the dialog
   // was opened with (which may already be queued and gone from the list after
   // a refusal), so they offer the model all of them share, or none.
-  const selectorModel = isSeparateJobs ? commonModel(candidates) : slicedForModel;
+  // A group's chosen printers come pre-filtered to the models it has a
+  // version for, so the picker filters on nothing more.
+  const selectorModel = isGroupPrinters ? null : isSeparateJobs ? commonModel(candidates) : slicedForModel;
+
+  // "Chosen printers" of a version group (fork): the version each printer
+  // prints, the printers the picker offers (those some version fits), and
+  // which selected printers print each version.
+  const versionByPrinter = useMemo(() => {
+    const byPrinter = new Map<number, VariantCandidate>();
+    if (!isGroupPrinters) return byPrinter;
+    for (const printer of printers ?? []) {
+      const version = versionForModel(candidates, printer.model);
+      if (version) byPrinter.set(printer.id, version);
+    }
+    return byPrinter;
+  }, [isGroupPrinters, printers, candidates]);
+  const groupPrinterChoices = useMemo(
+    () => (isGroupPrinters ? (printers ?? []).filter((p) => versionByPrinter.has(p.id)) : []),
+    [isGroupPrinters, printers, versionByPrinter],
+  );
+  const assignedPrinters = useMemo(() => {
+    const byFile: Record<number, string[]> = {};
+    if (!isGroupPrinters) return byFile;
+    for (const printerId of selectedPrinters) {
+      const version = versionByPrinter.get(printerId);
+      if (!version) continue;
+      const name = printers?.find((p) => p.id === printerId)?.name ?? `#${printerId}`;
+      (byFile[version.id] ??= []).push(name);
+    }
+    return byFile;
+  }, [isGroupPrinters, selectedPrinters, versionByPrinter, printers]);
+  // The versions that get a queue item, in list order.
+  const groupJobFiles = useMemo(
+    () => (isGroupPrinters ? candidates.filter((c) => assignedPrinters[c.id]?.length) : []),
+    [isGroupPrinters, candidates, assignedPrinters],
+  );
+  // Selected printers no version fits: only a printer chosen before the
+  // dialog opened (the printer card) can be one.
+  const printersWithoutVersion = useMemo(
+    () =>
+      isGroupPrinters && printers
+        ? selectedPrinters.filter((id) => !versionByPrinter.has(id)).map((id) => printers.find((p) => p.id === id)?.name ?? `#${id}`)
+        : [],
+    [isGroupPrinters, printers, selectedPrinters, versionByPrinter],
+  );
+  // The files the per-file mapping panels and the queue loop work on.
+  const separateJobFiles = isGroupPrinters ? groupJobFiles : candidates;
   // The model gate (#2578) per file: each separate job runs its own file, and
   // the backend refuses each one sliced for an incompatible model. A file that
   // names no model passes, as a single file does.
@@ -561,7 +640,9 @@ export function PrintModal({
     setAssignmentMode(next === 'alternatives' ? 'model' : 'printer');
     setTargetModel(null);
     setTargetLocation(null);
-    if (next === 'alternatives') setSelectedPrinters([]);
+    // A group's chosen printers start from none (or the default printer, if
+    // a version fits it): a printer left from the other mode may fit none.
+    if (next === 'alternatives' || next === 'printers') setSelectedPrinters([]);
   };
 
   // The archive's own saved AMS-slot pick from the slicer (see the "Save AMS
@@ -867,7 +948,7 @@ export function PrintModal({
 
   // Waits for the plates: a multi-plate file would first be read whole.
   const perFileReqQueries = useQueries({
-    queries: (showPerFileFilamentMapping ? candidates : []).map((file) => {
+    queries: (showPerFileFilamentMapping ? separateJobFiles : []).map((file) => {
       const plateId = candidatePlates[file.id] ?? null;
       return {
         queryKey: ['library-file-filaments', file.id, plateId],
@@ -883,14 +964,14 @@ export function PrintModal({
   const perFileReqs = useMemo(() => {
     const byFile = new Map<number, FilamentReqsData>();
     if (!showPerFileFilamentMapping) return byFile;
-    candidates.forEach((file, i) => {
+    separateJobFiles.forEach((file, i) => {
       const data = perFileReqQueries[i]?.data;
       if (data) byFile.set(file.id, data);
     });
     return byFile;
     // Keyed on each query's last update stamp, as `perPlateReqs` above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showPerFileFilamentMapping, candidates, perFileReqQueries.map((q) => q.dataUpdatedAt).join('|')]);
+  }, [showPerFileFilamentMapping, separateJobFiles, perFileReqQueries.map((q) => q.dataUpdatedAt).join('|')]);
 
   const perFileKey = (fileId: number) =>
     perFileMappingKey(effectivePrinterId ?? 0, fileId, candidatePlates[fileId] ?? null);
@@ -902,7 +983,7 @@ export function PrintModal({
     const loaded = buildLoadedFilaments(printerStatus);
     const ftsActive = printerStatus?.fila_switch?.installed === true;
     const inventoryByTrayId = inventoryByTrayIdPerPrinter.get(effectivePrinterId);
-    for (const file of candidates) {
+    for (const file of separateJobFiles) {
       const mapping = perFileAmsMapping(
         perFileReqs.get(file.id),
         loaded,
@@ -919,7 +1000,7 @@ export function PrintModal({
     effectivePrinterId,
     printerStatus,
     inventoryByTrayIdPerPrinter,
-    candidates,
+    separateJobFiles,
     candidatePlates,
     perFileReqs,
     manualMappingsByFile,
@@ -967,7 +1048,10 @@ export function PrintModal({
       defaultPrinterOffered.current = true;
       return;
     }
-    const activePrinters = printers?.filter(p => p.is_active) || [];
+    // A group's chosen printers: only the printers some version fits.
+    const activePrinters = (printers?.filter(p => p.is_active) || []).filter(
+      p => !isGroupPrinters || versionByPrinter.has(p.id),
+    );
     const defaultId = settings?.default_printer_id;
     const preferred =
       defaultId != null && !isCrossModel && assignmentMode === 'printer' && !sourceDetailsPending
@@ -979,7 +1063,7 @@ export function PrintModal({
     } else if (activePrinters.length === 1) {
       setSelectedPrinters([activePrinters[0].id]);
     }
-  }, [mode, printers, selectedPrinters.length, settings?.default_printer_id, isCrossModel, assignmentMode, selectorModel, sourceDetailsPending]);
+  }, [mode, printers, selectedPrinters.length, settings?.default_printer_id, isCrossModel, assignmentMode, selectorModel, sourceDetailsPending, isGroupPrinters, versionByPrinter]);
 
   // Clear manual mappings and per-printer configs when printer or plate changes.
   // The per-plate mappings go with them: a manual override holds a global tray id,
@@ -1546,7 +1630,9 @@ export function PrintModal({
     if (isCrossModel) {
       try {
         await api.addToQueue({
-          variants: candidates.map((c) => ({
+          // Only the files the user kept in (fork); a single one is "any
+          // printer of its model".
+          variants: includedCandidates.map((c) => ({
             library_file_id: c.id,
             plate_id: candidatePlates[c.id] ?? null,
             filament_overrides: filamentOverridesArray,
@@ -1563,7 +1649,7 @@ export function PrintModal({
           ...printOptions,
           project_id: projectId ?? undefined,
         });
-        showToast(t('printModal.variants.queued', { count: candidates.length }), 'success');
+        showToast(t('printModal.variants.queued', { count: includedCandidates.length }), 'success');
         queryClient.invalidateQueries({ queryKey: ['queue'] });
         onSuccess?.();
         onClose();
@@ -1609,7 +1695,11 @@ export function PrintModal({
           : Date.now())
         : 0;
       const asap = scheduleOptions.scheduleType === 'asap';
-      setSubmitProgress({ current: 0, total: candidates.length * printerIds.length });
+      // A group's chosen printers (fork): each printer once, with its version.
+      setSubmitProgress({
+        current: 0,
+        total: isGroupPrinters ? selectedPrinters.length : candidates.length * printerIds.length,
+      });
       try {
         // The rest of a partly queued run goes in right behind the run's own
         // ASAP items as the queue stands now: since the refusal, items may have
@@ -1626,9 +1716,12 @@ export function PrintModal({
           }
         }
         const outcome = await queueSeparateJobs({
-          files: candidates,
+          files: separateJobFiles,
           plateByFile: candidatePlates,
           printerIds,
+          includes: isGroupPrinters
+            ? (file, printerId) => printerId != null && versionByPrinter.get(printerId)?.id === file.id
+            : undefined,
           alreadyQueued: queuedPairs,
           asapInsertedBefore,
           quantity: effectiveQuantity,
@@ -1708,8 +1801,9 @@ export function PrintModal({
           // the refused file on an earlier printer.
           if (outcome.itemsCreated > 0) setPartlyQueued(true);
           // The opener keeps this if the dialog is closed now: without it the
-          // same selection would open empty-handed and queue them again.
-          if (allQueued.size > 0) {
+          // same selection would open empty-handed and queue them again. Not
+          // for a version group, which is no selection to resume.
+          if (allQueued.size > 0 && separateJobsAllowed) {
             const remainingIds = remaining.map((c) => c.id);
             onSeparateJobsProgress?.({
               queuedPairs: [...allQueued],
@@ -2047,6 +2141,10 @@ export function PrintModal({
     if (separateJobsIncompatible.length > 0) return false;
     // Each listed file's plate comes from the list, in either mode.
     if (isMultiFile && !candidatePlatesReady) return false;
+    // Alternatives need a file left in; a group's chosen printers need a
+    // version for each of them (fork).
+    if (isCrossModel && includedCandidates.length === 0) return false;
+    if (isGroupPrinters && (groupJobFiles.length === 0 || printersWithoutVersion.length > 0)) return false;
 
     // For multi-plate files, need at least one plate selected. Separate jobs
     // take each file's plate from the candidate list, not from this selection.
@@ -2078,6 +2176,10 @@ export function PrintModal({
     isSeparateJobs,
     separateJobsIncompatible,
     candidatePlatesReady,
+    includedCandidates.length,
+    isGroupPrinters,
+    groupJobFiles.length,
+    printersWithoutVersion.length,
     billingEnabled,
     loadingCostCenters,
     selectedCostCenter,
@@ -2305,8 +2407,10 @@ export function PrintModal({
               <MultiFileModeToggle
                 value={multiFileMode}
                 onChange={handleMultiFileModeChange}
-                blockedModel={duplicateModel(candidates)}
+                // A group never has two versions for one model.
+                blockedModel={isVersionGroup ? null : duplicateModel(candidates)}
                 disabled={isPending}
+                group={isVersionGroup}
               />
             )}
 
@@ -2324,9 +2428,37 @@ export function PrintModal({
                   setCandidatePlates((prev) => ({ ...prev, [fileId]: plateId }))
                 }
                 onPlatesReadyChange={setCandidatePlatesReady}
-                title={isSeparateJobs ? t('printModal.multiFile.orderTitle') : undefined}
-                help={showModeToggle ? '' : isSeparateJobs ? t('printModal.multiFile.separateHint') : undefined}
+                title={
+                  isGroupPrinters
+                    ? t('printModal.multiFile.versionsTitle')
+                    : isSeparateJobs
+                      ? t('printModal.multiFile.orderTitle')
+                      : undefined
+                }
+                help={
+                  showModeToggle
+                    ? ''
+                    : isGroupPrinters
+                      ? t('printModal.multiFile.pickPrintersHint')
+                      : isSeparateJobs
+                        ? t('printModal.multiFile.separateHint')
+                        : undefined
+                }
+                excludedIds={isCrossModel ? excludedIds : undefined}
+                onToggleExcluded={isCrossModel ? toggleExcluded : undefined}
+                reorderable={!isGroupPrinters}
+                assignedPrinters={isGroupPrinters ? assignedPrinters : undefined}
               />
+            )}
+
+            {/* A printer chosen before the dialog opened that no version fits. */}
+            {printersWithoutVersion.length > 0 && (
+              <div className="p-3 mb-2 bg-red-50 dark:bg-red-500/10 border border-red-300 dark:border-red-500/30 rounded-lg flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0" />
+                <span className="text-sm text-red-700 dark:text-red-400">
+                  {t('printModal.multiFile.noVersionFor', { printers: printersWithoutVersion.join(', ') })}
+                </span>
+              </div>
             )}
 
             {hasEditingVariants && (
@@ -2343,7 +2475,8 @@ export function PrintModal({
             {/* Printer selection with per-printer mapping — hidden when printer is pre-selected via props */}
             {!isCrossModel && !hasEditingVariants && !initialSelectedPrinterIds?.length && (
               <PrinterSelector
-                printers={printers || []}
+                // A group's chosen printers: only those some version fits.
+                printers={isGroupPrinters ? groupPrinterChoices : printers || []}
                 selectedPrinterIds={selectedPrinters}
                 onMultiSelect={setSelectedPrinters}
                 isLoading={loadingPrinters}
@@ -2362,9 +2495,10 @@ export function PrintModal({
                 onAutoConfigurePrinter={multiPrinterMapping.autoConfigurePrinter}
                 onUpdatePrinterConfig={multiPrinterMapping.updatePrinterConfig}
                 assignmentMode={assignmentMode}
-                onAssignmentModeChange={setAssignmentMode}
+                // "Any printer of a model" is the other mode of a group.
+                onAssignmentModeChange={isGroupPrinters ? undefined : setAssignmentMode}
                 targetModel={targetModel}
-                onTargetModelChange={setTargetModel}
+                onTargetModelChange={isGroupPrinters ? undefined : setTargetModel}
                 targetLocation={targetLocation}
                 onTargetLocationChange={setTargetLocation}
                 slicedForModel={selectorModel}
@@ -2449,6 +2583,30 @@ export function PrintModal({
                 files the picker shows all printers unfiltered. A warning, not
                 a block, as for one file. */}
             {isSeparateJobs && assignmentMode === 'printer' && (() => {
+              // A group's chosen printers each print one version: warn for a
+              // version sliced for a related model only (fork, a P1S slice on
+              // a P1P), once per printer model.
+              if (isGroupPrinters) {
+                const shown = new Set<string>();
+                return selectedPrinters.map((printerId) => {
+                  const printerModel = printers?.find((p) => p.id === printerId)?.model ?? null;
+                  const version = versionByPrinter.get(printerId);
+                  if (!printerModel || !version || shown.has(printerModel)) return null;
+                  if (filesNotSlicedFor([version], printerModel).length === 0) return null;
+                  shown.add(printerModel);
+                  return (
+                    <div
+                      key={printerModel}
+                      className="p-3 mb-2 bg-yellow-50 dark:bg-yellow-500/10 border border-yellow-300 dark:border-yellow-500/30 rounded-lg flex items-center gap-2"
+                    >
+                      <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 flex-shrink-0" />
+                      <span className="text-sm text-yellow-700 dark:text-yellow-400">
+                        {t('printModal.multiFile.notSlicedFor', { model: printerModel, files: version.filename })}
+                      </span>
+                    </div>
+                  );
+                });
+              }
               const printerModels = new Set(
                 selectedPrinters
                   .map((id) => printers?.find((p) => p.id === id)?.model)
@@ -2571,7 +2729,7 @@ export function PrintModal({
             {showPerFileFilamentMapping && perFileReqs.size > 0 && (
               <div className="mb-4">
                 <p className="text-xs text-bambu-gray mb-2">{t('printModal.multiFile.perFileMappingHint')}</p>
-                {candidates.map((file) => {
+                {separateJobFiles.map((file) => {
                   const fileReqs = perFileReqs.get(file.id);
                   if (!fileReqs?.filaments?.length) return null;
                   const key = perFileKey(file.id);
@@ -2644,7 +2802,7 @@ export function PrintModal({
                   <span className="text-xs text-bambu-gray">
                     {/* Separate jobs post the quantity once per listed file. */}
                     {t('queue.quantityHint', 'Creates {{count}} queue items', {
-                      count: isSeparateJobs ? quantity * candidates.length : quantity,
+                      count: isGroupPrinters ? quantity : isSeparateJobs ? quantity * candidates.length : quantity,
                     })}
                   </span>
                 )}

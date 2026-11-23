@@ -4344,6 +4344,7 @@ export default {
       inLibraryRoot: 'w katalogu głównym biblioteki',
       print: 'Drukuj wszystkie wersje jako jedno zadanie',
       printVersion: 'Drukuj tylko tę wersję',
+      printOn: 'Drukuj na…',
       ungroup: 'Rozgrupuj',
       ungrouping: 'Rozgrupowywanie...',
       ungroupTitle: 'Rozgrupuj wersje',
@@ -5902,6 +5903,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'Czym stają się wybrane pliki',
+      groupModeLabel: 'Gdzie drukują się wersje',
       alternatives: 'Alternatywy',
       separate: 'Osobne zadania',
       alternativesHint: 'Jedno zadanie. Pierwsza pasująca drukarka, która się zwolni, drukuje swój plik.',
@@ -5912,6 +5914,12 @@ export default {
       notSlicedFor: 'Nie pocięto dla {{model}}: {{files}}',
       perFileMappingHint: 'Każdy plik ma własne mapowanie filamentów. Pliki, których nie zmienisz, dostaną sloty dobrane przy starcie wydruku.',
       failed: 'Nie dodano do kolejki: {{filename}} ({{message}}). Dodano wcześniej: {{queued}}.',
+      firstFree: 'Pierwsza wolna drukarka',
+      pickPrinters: 'Wybrane drukarki',
+      firstFreeHint: 'Jedno zadanie. Drukuje je pierwsza wolna drukarka, do której pasuje któraś wersja. Odznacz wersję, aby ją pominąć.',
+      pickPrintersHint: 'Wybierz drukarki. Każda dostanie własną pozycję w kolejce z wersją pociętą dla jej modelu.',
+      versionsTitle: 'Wersje',
+      noVersionFor: 'Żadna wersja z tej grupy nie pasuje do: {{printers}}.',
     },
     variants: {
       editNote: 'Te alternatywy ustawiono podczas dodawania zadania do kolejki. Aby je zmienić, anuluj zadanie i dodaj je ponownie.',
@@ -5922,6 +5930,9 @@ export default {
       moveUp: 'Przenieś w górę',
       moveDown: 'Przenieś w dół',
       queued: 'Dodano do kolejki, alternatywy: {{count}}',
+      include: 'Uwzględnij {{filename}}',
+      printsOn: 'Drukuje: {{printers}}',
+      noPrinterChosen: 'Nie wybrano drukarki',
     },
     selectPrinter: 'Wybierz drukarkę',
     selectPlate: 'Wybierz płytę',

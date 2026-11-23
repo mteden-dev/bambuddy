@@ -4312,6 +4312,7 @@ export default {
       inLibraryRoot: 'im Hauptverzeichnis der Bibliothek',
       print: 'Alle Versionen als einen Auftrag drucken',
       printVersion: 'Nur diese Version drucken',
+      printOn: 'Drucken auf…',
       ungroup: 'Gruppierung aufheben',
       ungrouping: 'Gruppierung wird aufgehoben...',
       ungroupTitle: 'Gruppierung aufheben',
@@ -5855,6 +5856,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: 'Was aus den gewählten Dateien wird',
+      groupModeLabel: 'Wo die Versionen gedruckt werden',
       alternatives: 'Alternativen',
       separate: 'Einzelne Aufträge',
       alternativesHint: 'Ein Auftrag. Der erste passende Drucker, der frei wird, druckt seine Datei.',
@@ -5865,6 +5867,12 @@ export default {
       notSlicedFor: 'Nicht für {{model}} gesliced: {{files}}',
       perFileMappingHint: 'Jede Datei hat ihre eigene Filamentzuordnung. Dateien, die du nicht änderst, bekommen ihre Slots beim Druckstart zugeordnet.',
       failed: 'Nicht eingereiht: {{filename}} ({{message}}). Davor eingereiht: {{queued}}.',
+      firstFree: 'Erster freier Drucker',
+      pickPrinters: 'Ausgewählte Drucker',
+      firstFreeHint: 'Ein Auftrag. Der erste freie Drucker, zu dem eine Version passt, druckt ihn. Entferne den Haken bei einer Version, um sie auszulassen.',
+      pickPrintersHint: 'Wähle die Drucker. Jeder bekommt einen eigenen Warteschlangeneintrag mit der Version, die für sein Modell gesliced ist.',
+      versionsTitle: 'Versionen',
+      noVersionFor: 'Keine Version dieser Gruppe passt zu {{printers}}.',
     },
     variants: {
       editNote: 'Diese Alternativen wurden beim Einreihen festgelegt. Zum Ändern abbrechen und neu einreihen.',
@@ -5875,6 +5883,9 @@ export default {
       moveUp: 'Nach oben',
       moveDown: 'Nach unten',
       queued: 'Mit {{count}} Alternativen eingereiht',
+      include: '{{filename}} einbeziehen',
+      printsOn: 'Druckt auf: {{printers}}',
+      noPrinterChosen: 'Kein Drucker gewählt',
     },
     selectPrinter: 'Drucker auswählen',
     selectPlate: 'Platte auswählen',

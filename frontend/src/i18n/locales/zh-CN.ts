@@ -4299,6 +4299,7 @@ export default {
       inLibraryRoot: '位于库根目录',
       print: '将所有版本作为一个任务打印',
       printVersion: '仅打印此版本',
+      printOn: '打印到…',
       ungroup: '取消分组',
       ungrouping: '正在取消分组...',
       ungroupTitle: '取消版本分组',
@@ -5841,6 +5842,7 @@ export default {
   printModal: {
     multiFile: {
       groupLabel: '所选文件的处理方式',
+      groupModeLabel: '版本的打印位置',
       alternatives: '备选',
       separate: '独立任务',
       alternativesHint: '一个任务。第一台空闲且匹配的打印机会打印它对应的文件。',
@@ -5851,6 +5853,12 @@ export default {
       notSlicedFor: '未为 {{model}} 切片：{{files}}',
       perFileMappingHint: '每个文件都有自己的耗材映射。未更改的文件会在打印开始时自动匹配槽位。',
       failed: '未加入队列：{{filename}}（{{message}}）。此前已加入：{{queued}}。',
+      firstFree: '第一台空闲打印机',
+      pickPrinters: '选定的打印机',
+      firstFreeHint: '一个任务。由第一台空闲且有匹配版本的打印机打印。取消勾选某个版本即可将其排除。',
+      pickPrintersHint: '选择打印机。每台打印机都会获得一个队列项，使用为其型号切片的版本。',
+      versionsTitle: '版本',
+      noVersionFor: '此组中没有适合 {{printers}} 的版本。',
     },
     variants: {
       editNote: '这些备选在任务加入队列时确定。如需更改，请取消后重新加入队列。',
@@ -5861,6 +5869,9 @@ export default {
       moveUp: '上移',
       moveDown: '下移',
       queued: '已加入队列，含 {{count}} 个备选',
+      include: '包含 {{filename}}',
+      printsOn: '打印于：{{printers}}',
+      noPrinterChosen: '未选择打印机',
     },
     selectPrinter: '选择打印机',
     selectPlate: '选择板',

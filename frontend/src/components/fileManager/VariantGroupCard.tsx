@@ -87,6 +87,13 @@ export function VariantGroupCard({
       disabled: !groupActions.canPrint(row),
       title: !groupActions.canPrint(row) ? t('fileManager.noPermissionAddToQueue') : undefined,
     });
+    menuItems.push({
+      label: t('fileManager.variants.printOn'),
+      icon: <Printer className="w-4 h-4" />,
+      onClick: () => groupActions.printOn(row),
+      disabled: !groupActions.canPrint(row),
+      title: !groupActions.canPrint(row) ? t('fileManager.noPermissionAddToQueue') : undefined,
+    });
   }
   menuItems.push(
     {

@@ -12,6 +12,9 @@ import { ConfirmModal } from '../ConfirmModal';
 export interface VariantGroupActions {
   /** Print the group as one job with printer alternatives. */
   print: (row: GroupRow) => void;
+  /** Open the print dialog on choosing the printers, each printing the
+   *  version for its model (fork). */
+  printOn: (row: GroupRow) => void;
   canPrint: (row: GroupRow) => boolean;
   /** At least one version is sliced, so there is something to print. */
   hasPrintable: (row: GroupRow) => boolean;
@@ -33,7 +36,7 @@ export function useVariantGroupActions({
   onPrintGroup,
   onFilesDeleted,
 }: {
-  onPrintGroup: (row: GroupRow) => void;
+  onPrintGroup: (row: GroupRow, mode?: 'printers') => void;
   onFilesDeleted: (ids: number[]) => void;
 }): { actions: VariantGroupActions; dialogs: ReactNode } {
   const { t } = useTranslation();
@@ -108,6 +111,9 @@ export function useVariantGroupActions({
   const actions: VariantGroupActions = {
     print: (row) => {
       if (canPrint(row)) onPrintGroup(row);
+    },
+    printOn: (row) => {
+      if (canPrint(row)) onPrintGroup(row, 'printers');
     },
     canPrint,
     hasPrintable,

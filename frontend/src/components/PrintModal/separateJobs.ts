@@ -119,6 +119,10 @@ export async function queueSeparateJobs(args: {
   printerIds: (number | null)[];
   /** `queuedPairKey`s queued by earlier submits of this dialog. */
   alreadyQueued?: ReadonlySet<string>;
+  /** Which file and printer pairs to queue; every pair when left out. The
+   *  "printers" mode of a version group (fork) pairs each printer with the
+   *  one version sliced for its model only. */
+  includes?: (file: VariantCandidate, printerId: number | null) => boolean;
   /** ASAP items earlier submits inserted; this call's positions follow them. */
   asapInsertedBefore?: number;
   quantity: number;
@@ -135,8 +139,11 @@ export async function queueSeparateJobs(args: {
   const { files, plateByFile, printerIds, quantity, asap, buildItem, addToQueue, onProgress } = args;
   const alreadyQueued = args.alreadyQueued ?? new Set<string>();
   const isDone = (fileId: number, printerId: number | null) => alreadyQueued.has(queuedPairKey(fileId, printerId));
+  const includes = args.includes ?? (() => true);
+  const isWanted = (file: VariantCandidate, printerId: number | null) =>
+    includes(file, printerId) && !isDone(file.id, printerId);
   const total = files.reduce(
-    (sum, file) => sum + printerIds.filter((printerId) => !isDone(file.id, printerId)).length,
+    (sum, file) => sum + printerIds.filter((printerId) => isWanted(file, printerId)).length,
     0,
   );
   const queuedFileIds: number[] = [];
@@ -154,7 +161,7 @@ export async function queueSeparateJobs(args: {
     const plateId = plateByFile[file.id] ?? null;
     for (let printerIndex = 0; printerIndex < printerIds.length; printerIndex++) {
       // printerIndex still counts every printer, so stagger groups stay put.
-      if (isDone(file.id, printerIds[printerIndex])) continue;
+      if (!isWanted(file, printerIds[printerIndex])) continue;
       const data = buildItem(file, plateId, printerIds[printerIndex], printerIndex);
       if (quantity > 1) data.quantity = quantity;
       if (asap) {
