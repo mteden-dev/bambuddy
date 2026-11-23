@@ -281,7 +281,8 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
       window.removeEventListener('scroll', compute, true);
       window.removeEventListener('resize', compute);
     };
-  }, [isVisible]);
+    // The refs come from useSlotCard, so the linter cannot see they are stable.
+  }, [isVisible, triggerRef, cardRef]);
 
   // Get fill bar color based on percentage
   const getFillColor = (fill: number): string => {
@@ -713,7 +714,8 @@ export function EmptySlotHoverCard({ children, className = '', configureSlot, on
       window.removeEventListener('scroll', compute, true);
       window.removeEventListener('resize', compute);
     };
-  }, [isVisible]);
+    // The refs come from useSlotCard, so the linter cannot see they are stable.
+  }, [isVisible, triggerRef, cardRef]);
 
   return (
     <div
