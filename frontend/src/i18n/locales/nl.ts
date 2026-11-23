@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Printertags',
+    help: 'Taken voor een willekeurige printer van een model gaan alleen naar printers met alle tags van de taak. De tags van een taak zijn de tags van het bestand (Bestandsbeheer) die een printer heeft, tenzij gewijzigd in het printvenster.',
+    exclusive: 'Alleen taken met deze tags',
+    exclusiveHelp: 'Taken zonder tags, of alleen met andere tags, slaan deze printer over.',
+    exclusiveBadge: 'alleen getagde taken',
+    add: 'Tag toevoegen',
+    none: 'Geen tags',
+    remove: '{{name}} verwijderen',
+    search: 'Tags zoeken',
+    searchOrCreate: 'Tag zoeken of aanmaken',
+    create: '„{{name}}” aanmaken',
+    emptyCatalog: 'Nog geen tags — typ een naam om er een te maken.',
+    noMatches: 'Geen overeenkomende tags',
+    saveFailed: 'Printertags konden niet worden opgeslagen',
+    jobFromFile: 'uit het bestand',
+    jobEdited: 'ingesteld voor deze taak',
+    jobReset: 'Tags van het bestand gebruiken',
+    jobInfoModel: 'Alleen {{model}}-printers met: {{tags}}',
+    jobInfo: 'Alleen printers met: {{tags}}',
+    jobInfoNone: 'Geen tags: gaat naar elke printer die taken zonder tags aanneemt',
+    noPrinterFits: 'Geen actieve {{model}}-printer heeft deze tags — de taak wacht tot er een is.',
+    queueChip: 'Gaat alleen naar printers met deze tags (uit het bestand)',
+    queueChipEdited: 'Gaat alleen naar printers met deze tags (ingesteld voor deze taak)',
+    fileChipHint: 'printertag: wachtrijtaken van dit bestand gaan alleen naar printers met deze tag',
+  },
   // Navigation
   nav: {
     printers: 'Printers',

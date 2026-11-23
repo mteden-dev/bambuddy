@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Etiquetas de impresora',
+    help: 'Los trabajos para cualquier impresora de un modelo solo van a impresoras que tengan todas las etiquetas del trabajo. Las etiquetas de un trabajo son las de su archivo (Gestor de archivos) que tiene alguna impresora, salvo que se cambien en el diálogo de impresión.',
+    exclusive: 'Solo trabajos con estas etiquetas',
+    exclusiveHelp: 'Los trabajos sin etiquetas, o solo con otras etiquetas, omiten esta impresora.',
+    exclusiveBadge: 'solo trabajos etiquetados',
+    add: 'Añadir etiqueta',
+    none: 'Sin etiquetas',
+    remove: 'Quitar {{name}}',
+    search: 'Buscar etiquetas',
+    searchOrCreate: 'Buscar o crear una etiqueta',
+    create: 'Crear «{{name}}»',
+    emptyCatalog: 'Aún no hay etiquetas: escribe un nombre para crear una.',
+    noMatches: 'No hay etiquetas coincidentes',
+    saveFailed: 'No se pudieron guardar las etiquetas de la impresora',
+    jobFromFile: 'del archivo',
+    jobEdited: 'definidas para este trabajo',
+    jobReset: 'Usar las etiquetas del archivo',
+    jobInfoModel: 'Solo impresoras {{model}} con: {{tags}}',
+    jobInfo: 'Solo impresoras con: {{tags}}',
+    jobInfoNone: 'Sin etiquetas: va a cualquier impresora que acepte trabajos sin etiquetas',
+    noPrinterFits: 'Ninguna impresora {{model}} activa tiene estas etiquetas: el trabajo esperará hasta que alguna las tenga.',
+    queueChip: 'Solo va a impresoras con estas etiquetas (del archivo)',
+    queueChipEdited: 'Solo va a impresoras con estas etiquetas (definidas para este trabajo)',
+    fileChipHint: 'etiqueta de impresora: los trabajos de la cola de este archivo solo van a impresoras con ella',
+  },
   // Navigation
   nav: {
     printers: 'Impresoras',

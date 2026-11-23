@@ -52,6 +52,8 @@ jobs:
           python -m pytest -q -p no:cacheprovider \
             backend/tests/unit/test_hidden_filament_presets.py \
             backend/tests/unit/test_ams_color_palette.py \
+            backend/tests/unit/test_printer_tags_fork.py \
+            backend/tests/integration/test_printer_tags_api_fork.py \
             backend/tests/integration/test_hidden_filament_presets_api.py \
             backend/tests/integration/test_ams_color_palette_api.py \
             backend/tests/integration/test_settings_ui_preferences.py \
@@ -80,6 +82,7 @@ jobs:
             src/__tests__/utils/hiddenFilamentPresets.test.ts \
             src/__tests__/utils/amsColorPalette.test.ts \
             src/__tests__/components/AmsColorPalette.test.tsx \
+            src/__tests__/components/PrintModalPrinterTags.test.tsx \
             src/__tests__/components/ConfigureAmsSlotModal.test.tsx \
             src/__tests__/components/ConfigureAmsSlotModalWiring.test.tsx \
             src/__tests__/components/ConfigureAmsSlotModalHiddenPresets.test.tsx \

@@ -66,6 +66,7 @@ from backend.app.services.printer_manager import (
     supports_drying,
     supports_drying_while_printing,
 )
+from backend.app.services.printer_tags import TagRouting
 from backend.app.services.queue_item_printer import drop_printer_resolved
 from backend.app.services.slot_nozzle import reports_two_nozzles
 from backend.app.services.smart_plug_manager import is_monitor_only, publish_plug_state, smart_plug_manager
@@ -884,6 +885,21 @@ _DISPATCH_INPUTS = (
     "target_model",
     "target_location",
 )
+
+
+async def _load_tag_routing(db: AsyncSession, items: list[PrintQueueItem]) -> TagRouting:
+    """Printer tags for one pass over the queue (fork, services/printer_tags.py).
+
+    Tags that cannot be read leave the pass routing by model alone, as before
+    there were tags, rather than holding every "Any <model>" job.
+    """
+    if not items:
+        return TagRouting()
+    try:
+        return await TagRouting.load(db, items)
+    except Exception:
+        logger.exception("Printer tags could not be read; this pass routes jobs by model only")
+        return TagRouting()
 
 
 async def _edited_since_loaded(db: AsyncSession, item: PrintQueueItem) -> bool:
@@ -2206,6 +2222,13 @@ class PrintScheduler:
                     creator_scopes[user_id] = await resolve_user_id_printer_scope(db, user_id)
                 return creator_scopes[user_id]
 
+            # Fork: printer tags narrow an "Any <model>" job's printers further
+            # (services/printer_tags.py), read once per pass.
+            tag_routing = await _load_tag_routing(db, items)
+
+            async def _item_scope(item: PrintQueueItem) -> PrinterScope:
+                return (await _creator_scope(item.created_by_id)).intersect(tag_routing.scope(item))
+
             for item in items:
                 # Check scheduled time first (scheduled_time is stored in UTC from ISO string)
                 if item.scheduled_time:
@@ -2228,7 +2251,7 @@ class PrintScheduler:
                         item,
                         busy_printers | interlocked.keys() | drying_held,
                         require_plate_clear,
-                        await _creator_scope(item.created_by_id),
+                        await _item_scope(item),
                     )
                 ):
                     # Waiting on the user, not on a printer. Cleared here because
@@ -2519,7 +2542,7 @@ class PrintScheduler:
                     # user's priority order so the pick is reproducible when more
                     # than one printer is free in the same pass.
                     candidates = _candidates_for(item)
-                    item_scope = await _creator_scope(item.created_by_id)
+                    item_scope = await _item_scope(item)
                     printer_id = None
                     chosen: _ModelCandidate | None = None
                     per_model_reasons: list[tuple[str | None, str]] = []
@@ -2649,6 +2672,10 @@ class PrintScheduler:
                         # The matcher reports the printers passed over as busy;
                         # what holds the job is their failed last print.
                         per_model_reasons = [(item.target_model, MODEL_GATE_WAIT_REASON)]
+                    if printer_id is None and (
+                        tag_reason := await self._tag_wait_reason(db, item, candidates, tag_routing)
+                    ):
+                        per_model_reasons = [(item.target_model, tag_reason)]
                     waiting_reason = None if printer_id else _collapse_waiting_reasons(per_model_reasons)
 
                     # Fold the winning variant's file and settings onto the item
@@ -3414,6 +3441,34 @@ class PrintScheduler:
         if order == "least_recently_used" and printers:
             last_finished = await self._last_finished_by_printer(db, [p.id for p in printers])
         return _order_printers(printers, order, last_finished)
+
+    async def _tag_wait_reason(
+        self,
+        db: AsyncSession,
+        item: PrintQueueItem,
+        candidates: list[_ModelCandidate],
+        tag_routing: TagRouting,
+    ) -> str | None:
+        """The waiting reason of a model job that printer tags alone leave without a printer (fork).
+
+        None when tags are not what holds it: a model with no printer at all,
+        or printers that fit the tags but are busy, keep the matcher's reason.
+        """
+        scope = tag_routing.scope(item)
+        if scope.is_unrestricted:
+            return None
+        creator_scope = await self._creator_printer_scope(db, item.created_by_id)
+        models: list[str] = []
+        for candidate in candidates:
+            if not candidate.target_model:
+                continue
+            printers = await self._printers_for_model(db, candidate.target_model, item.target_location, creator_scope)
+            if not printers or any(scope.allows(printer.id) for printer in printers):
+                return None
+            models.append(normalize_printer_model(candidate.target_model) or candidate.target_model)
+        if not models:
+            return None
+        return tag_routing.wait_reason(item, " / ".join(dict.fromkeys(models)))
 
     async def _get_model_dispatch_order(self, db: AsyncSession) -> str:
         """The order setting (#2915); anything unknown reads as the default."""
@@ -6404,6 +6459,8 @@ class PrintScheduler:
         now_utc = datetime.now(timezone.utc)
         creator_scopes: dict[int | None, PrinterScope] = {}
         model_printers: dict[tuple[str, str | None, int | None], set[int]] = {}
+        # Fork: a job counts only for the printers its tags let it run on.
+        tag_routing = await _load_tag_routing(db, queue_items)
         for item in queue_items:
             if item.printer_id:
                 item_printers = {item.printer_id}
@@ -6413,6 +6470,8 @@ class PrintScheduler:
                 item_printers = await self._model_job_printer_ids(
                     db, item, creator_scopes[item.created_by_id], model_printers
                 )
+                tag_scope = tag_routing.scope(item)
+                item_printers = {pid for pid in item_printers if tag_scope.allows(pid)}
             else:
                 continue
             if item.scheduled_time and not item.manual_start:

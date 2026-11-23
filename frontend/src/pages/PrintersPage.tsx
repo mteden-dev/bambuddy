@@ -210,6 +210,8 @@ import { NumberInput } from '../components/NumberInput';
 import { getCurrencySymbol } from '../utils/currency';
 import { useUiSettings } from '../hooks/useUiSettings';
 import { isSlicedLibraryFile, mayBeSlicedFileName } from '../utils/libraryFiles';
+import { PrinterTagChips, PrinterTagPicker } from '../components/PrinterTagPicker';
+import { printerTagsQueryKey, usePrinterTags } from '../utils/printerTags';
 
 /** The spool Bambuddy has assigned to a slot the printer reports loaded but
  *  blank: typically one swapped in mid-print after a runout, which the printer
@@ -2192,6 +2194,9 @@ function PrinterCard({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteArchives, setDeleteArchives] = useState(true);
   const [showEditModal, setShowEditModal] = useState(false);
+  // Fork: printer tags under the model line (utils/printerTags.ts).
+  const printerTagsData = usePrinterTags();
+  const cardTags = printerTagsData.byPrinter.get(printer.id);
   const [showFileManager, setShowFileManager] = useState(false);
   const [showMQTTDebug, setShowMQTTDebug] = useState(false);
   const [showPowerOnConfirm, setShowPowerOnConfirm] = useState(false);
@@ -4067,6 +4072,23 @@ function PrinterCard({
                     </span>
                   )}
                 </p>
+                {viewMode !== 'compact' && cardTags && cardTags.tag_ids.length > 0 && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1" data-testid="printer-card-tags">
+                    <PrinterTagChips
+                      tagIds={cardTags.tag_ids}
+                      names={printerTagsData.names}
+                      title={t('printerTags.title')}
+                    />
+                    {cardTags.exclusive && (
+                      <span
+                        className="text-[10px] text-amber-600 dark:text-amber-400"
+                        title={t('printerTags.exclusiveHelp')}
+                      >
+                        {t('printerTags.exclusiveBadge')}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -8691,7 +8713,15 @@ function EditPrinterModal({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const { authEnabled, isAdmin } = useAuth();
+  const { authEnabled, isAdmin, hasPermission } = useAuth();
+  // Fork: printer tags route "Any <model>" queue jobs. null = not edited, so
+  // the saved tags show once they load.
+  const printerTags = usePrinterTags();
+  const savedTags = printerTags.byPrinter.get(printer.id);
+  const [tagIds, setTagIds] = useState<number[] | null>(null);
+  const [tagsExclusive, setTagsExclusive] = useState<boolean | null>(null);
+  const shownTagIds = tagIds ?? savedTags?.tag_ids ?? [];
+  const shownExclusive = tagsExclusive ?? savedTags?.exclusive ?? false;
   const [form, setForm] = useState({
     name: printer.name,
     ip_address: printer.ip_address,
@@ -8775,7 +8805,19 @@ function EditPrinterModal({
     if (form.access_code) {
       data.access_code = form.access_code;
     }
-    updateMutation.mutate(data);
+    if (tagIds === null && tagsExclusive === null) {
+      updateMutation.mutate(data);
+      return;
+    }
+    // Fork: printer tags have their own endpoint; saved first so a failure
+    // keeps the dialog open with the edit.
+    api.setPrinterTags(printer.id, shownTagIds, shownExclusive).then(
+      () => {
+        queryClient.invalidateQueries({ queryKey: printerTagsQueryKey });
+        updateMutation.mutate(data);
+      },
+      (error: Error) => showToast(error.message || t('printerTags.saveFailed'), 'error'),
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -8951,6 +8993,35 @@ function EditPrinterModal({
                 placeholder="-"
               />
               <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.dispatchPriorityHelp')}</p>
+            </div>
+            {/* Fork: printer tags (utils/printerTags.ts) */}
+            <div>
+              <label className="block text-sm text-bambu-gray mb-1">{t('printerTags.title')}</label>
+              <PrinterTagPicker
+                id="edit_printer_tags"
+                value={shownTagIds}
+                onChange={setTagIds}
+                options={printerTags.catalog}
+                allowCreate={!authEnabled || hasPermission('library:update_all')}
+              />
+              <p className="text-xs text-bambu-gray mt-1">{t('printerTags.help')}</p>
+              {shownTagIds.length > 0 && (
+                <>
+                  <div className="flex items-center gap-2 mt-2">
+                    <input
+                      type="checkbox"
+                      id="edit_tags_exclusive"
+                      checked={shownExclusive}
+                      onChange={(e) => setTagsExclusive(e.target.checked)}
+                      className="rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                    />
+                    <label htmlFor="edit_tags_exclusive" className="text-sm text-bambu-gray">
+                      {t('printerTags.exclusive')}
+                    </label>
+                  </div>
+                  <p className="text-xs text-bambu-gray/70 mt-1 ml-6">{t('printerTags.exclusiveHelp')}</p>
+                </>
+              )}
             </div>
             {/* Maintenance Mode toggle (#1476) — checkbox is the inverse of
                 is_active because the user-facing concept is "is this printer

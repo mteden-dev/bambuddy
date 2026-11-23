@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Drucker-Tags',
+    help: 'Aufträge für einen beliebigen Drucker eines Modells gehen nur an Drucker mit allen Tags des Auftrags. Die Tags eines Auftrags sind die Tags seiner Datei (Dateimanager), die ein Drucker hat, sofern sie im Druckdialog nicht geändert wurden.',
+    exclusive: 'Nur Aufträge mit diesen Tags',
+    exclusiveHelp: 'Aufträge ohne Tags oder nur mit anderen Tags überspringen diesen Drucker.',
+    exclusiveBadge: 'nur Aufträge mit Tag',
+    add: 'Tag hinzufügen',
+    none: 'Keine Tags',
+    remove: '{{name}} entfernen',
+    search: 'Tags suchen',
+    searchOrCreate: 'Tag suchen oder erstellen',
+    create: '„{{name}}“ erstellen',
+    emptyCatalog: 'Noch keine Tags — Namen eingeben, um einen zu erstellen.',
+    noMatches: 'Keine passenden Tags',
+    saveFailed: 'Drucker-Tags konnten nicht gespeichert werden',
+    jobFromFile: 'aus der Datei',
+    jobEdited: 'für diesen Auftrag gesetzt',
+    jobReset: 'Tags der Datei verwenden',
+    jobInfoModel: 'Nur {{model}}-Drucker mit: {{tags}}',
+    jobInfo: 'Nur Drucker mit: {{tags}}',
+    jobInfoNone: 'Keine Tags: geht an jeden Drucker, der Aufträge ohne Tags annimmt',
+    noPrinterFits: 'Kein aktiver {{model}}-Drucker hat diese Tags — der Auftrag wartet, bis einer sie hat.',
+    queueChip: 'Geht nur an Drucker mit diesen Tags (aus der Datei)',
+    queueChipEdited: 'Geht nur an Drucker mit diesen Tags (für diesen Auftrag gesetzt)',
+    fileChipHint: 'Drucker-Tag: Warteschlangenaufträge dieser Datei gehen nur an Drucker mit diesem Tag',
+  },
   // Navigation
   nav: {
     printers: 'Drucker',

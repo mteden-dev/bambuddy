@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: '印表機標籤',
+    help: '發往某型號任意印表機的工作只會分配給擁有該工作全部標籤的印表機。工作的標籤是其檔案（檔案管理員）中某台印表機擁有的標籤，除非在列印對話框中修改。',
+    exclusive: '僅接受帶這些標籤的工作',
+    exclusiveHelp: '沒有標籤或只有其他標籤的工作會略過這台印表機。',
+    exclusiveBadge: '僅限帶標籤工作',
+    add: '新增標籤',
+    none: '無標籤',
+    remove: '移除 {{name}}',
+    search: '搜尋標籤',
+    searchOrCreate: '搜尋或建立標籤',
+    create: '建立「{{name}}」',
+    emptyCatalog: '還沒有標籤——輸入名稱即可建立。',
+    noMatches: '沒有符合的標籤',
+    saveFailed: '無法儲存印表機標籤',
+    jobFromFile: '來自檔案',
+    jobEdited: '為此工作設定',
+    jobReset: '使用檔案的標籤',
+    jobInfoModel: '僅限帶以下標籤的 {{model}} 印表機：{{tags}}',
+    jobInfo: '僅限帶以下標籤的印表機：{{tags}}',
+    jobInfoNone: '無標籤：分配給任何接受無標籤工作的印表機',
+    noPrinterFits: '沒有作用中的 {{model}} 印表機擁有這些標籤——工作將等待。',
+    queueChip: '僅分配給帶這些標籤的印表機（來自檔案）',
+    queueChipEdited: '僅分配給帶這些標籤的印表機（為此工作設定）',
+    fileChipHint: '印表機標籤：此檔案的佇列工作只會分配給帶此標籤的印表機',
+  },
   // Navigation
   nav: {
     printers: '印表機',

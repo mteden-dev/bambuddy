@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Tag stampante',
+    help: 'I lavori per qualsiasi stampante di un modello vanno solo alle stampanti che hanno tutti i tag del lavoro. I tag di un lavoro sono i tag del suo file (Gestione file) presenti su qualche stampante, salvo modifiche nella finestra di stampa.',
+    exclusive: 'Solo lavori con questi tag',
+    exclusiveHelp: 'I lavori senza tag, o solo con altri tag, saltano questa stampante.',
+    exclusiveBadge: 'solo lavori con tag',
+    add: 'Aggiungi tag',
+    none: 'Nessun tag',
+    remove: 'Rimuovi {{name}}',
+    search: 'Cerca tag',
+    searchOrCreate: 'Cerca o crea un tag',
+    create: 'Crea «{{name}}»',
+    emptyCatalog: 'Ancora nessun tag: digita un nome per crearne uno.',
+    noMatches: 'Nessun tag corrispondente',
+    saveFailed: 'Impossibile salvare i tag della stampante',
+    jobFromFile: 'dal file',
+    jobEdited: 'impostati per questo lavoro',
+    jobReset: 'Usa i tag del file',
+    jobInfoModel: 'Solo stampanti {{model}} con: {{tags}}',
+    jobInfo: 'Solo stampanti con: {{tags}}',
+    jobInfoNone: 'Nessun tag: va a qualsiasi stampante che accetta lavori senza tag',
+    noPrinterFits: 'Nessuna stampante {{model}} attiva ha questi tag: il lavoro attenderà finché una non li avrà.',
+    queueChip: 'Va solo alle stampanti con questi tag (dal file)',
+    queueChipEdited: 'Va solo alle stampanti con questi tag (impostati per questo lavoro)',
+    fileChipHint: 'tag stampante: i lavori in coda di questo file vanno solo alle stampanti che lo hanno',
+  },
   // Navigation
   nav: {
     printers: 'Stampanti',

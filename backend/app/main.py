@@ -13466,6 +13466,11 @@ app.include_router(octoprint_compat.router)
 app.include_router(octoprint_compat.inbox_router, prefix=app_settings.api_prefix)
 app.add_middleware(octoprint_compat.PreferSessionOverInjectedApiKey)
 
+# Fork: printer tags route "Any <model>" queue jobs (services/printer_tags.py).
+from backend.app.api.routes import printer_tags  # noqa: E402
+
+app.include_router(printer_tags.router, prefix=app_settings.api_prefix)
+
 
 # Serve static files (React build)
 if app_settings.static_dir.exists() and any(app_settings.static_dir.iterdir()):

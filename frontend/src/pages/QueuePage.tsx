@@ -90,6 +90,7 @@ import { QueueTimelineView } from '../components/QueueTimelineView';
 import { compareQueueOrder } from '../utils/queueOrder';
 import { BatchOrdersView } from '../components/BatchOrdersView';
 import { ThumbnailHoverPreview } from '../components/ThumbnailHoverPreview';
+import { QueueItemTagChips } from '../components/QueueItemTagChips';
 import { buildLoadedFilaments, type LoadedFilament } from '../hooks/useFilamentMapping';
 import { hasGcodeSnippets, useUiSettings } from '../hooks/useUiSettings';
 
@@ -869,6 +870,8 @@ function SortableQueueItem({
                   : (item.printer_name || `${t('common.printer')} #${item.printer_id}`)}
               </span>
             </span>
+            {/* Fork: printer tags the job asks for */}
+            <QueueItemTagChips item={item} />
             {item.print_time_seconds && (
               <span className="flex items-center gap-1 sm:gap-1.5">
                 <Timer className="w-3 h-3 sm:w-3.5 sm:h-3.5" />

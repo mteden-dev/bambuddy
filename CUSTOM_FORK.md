@@ -33,6 +33,17 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     dla swojego modelu, dla P1P wersję P1S z ostrzeżeniem). W menu karty grupy jest
     **Drukuj na…**, a druk grupy z karty drukarki od razu bierze wersję dla tej drukarki.
     Tylko frontend, backend dostaje zwykłe zadania lub alternatywy,
+  - **tagi drukarek**: drukarka dostaje tagi z tego samego katalogu co pliki (Pliki → Tagi,
+    masowo przez „Taguj” na pasku zaznaczenia) w oknie edycji drukarki, opcjonalnie z
+    „Tylko zadania z tymi tagami”. Zadanie „Dowolna <model>” trafia tylko na drukarkę, która ma
+    wszystkie jego tagi; drukarka „tylko z tagami” bierze wyłącznie zadania z którymś z jej tagów.
+    Tagi zadania to tagi jego pliku, które ma jakaś drukarka (czytane przy każdym przebiegu
+    kolejki, więc otagowanie plików kieruje też czekające zadania), chyba że w oknie druku
+    zmieniono je dla tego zadania. Plik z takim tagiem otwiera okno druku na „Dowolna <model>”.
+    Tagi widać na karcie drukarki, w kolejce i na miniaturze pliku pod etykietą typu (tagi
+    drukarek wypełnione, z ikoną drukarki). Reguła: `services/printer_tags.py`, API
+    `/printer-tags`, scheduler zawęża nią drukarki twórcy (dopasowanie, wybudzanie gniazdkiem,
+    suszenie, przeniesienie przy braku filamentu),
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,
@@ -42,9 +53,12 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
 Branch `custom` bazuje na **wydaniach** (`main` / tagi `vX.Y.Z`), nie na `dev`.
 Dzięki temu baza danych dostaje tylko migracje z wydanych wersji i zawsze można
 wrócić na oficjalny obraz tej samej lub nowszej wersji. Poprawki dokładają do
-bazy wyłącznie wiersze w tabeli ustawień (`hidden_filament_presets`,
+bazy wiersze w tabeli ustawień (`hidden_filament_presets`,
 `hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
-`slicer_inbox_manual_start`), które oficjalna wersja po prostu pomija. Pliki
+`slicer_inbox_manual_start`, `printer_tags`), które oficjalna wersja po prostu pomija,
+i jedną własną tabelę `custom_queue_item_tags` (tagi ustawione zadaniu w oknie druku),
+zakładaną przez `create_all` bez migracji. Oficjalny obraz jej nie zna i nie czyta, więc
+powrót działa jak dotąd; wiersz zadania usuniętego w tym czasie jest pomijany. Pliki
 wysłane z OrcaSlicer to zwykłe pliki biblioteki (z `source_type = "orcaslicer"`),
 więc po powrocie na oficjalny obraz zostają w folderze „OrcaSlicer”.
 

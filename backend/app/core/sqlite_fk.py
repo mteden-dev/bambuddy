@@ -70,6 +70,7 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         ("pipeline_jobs", "queue_entry_id"),
         ("print_log_entries", "queue_item_id"),
         ("print_queue_variants", "queue_item_id"),
+        ("custom_queue_item_tags", "queue_item_id"),  # fork: printer tags
         ("wallet_transactions", "print_queue_id"),
         # print_batches
         ("print_batch_plates", "batch_id"),

@@ -3031,6 +3031,8 @@ export interface PrintBatch {
 
 export interface PrintQueueItemCreate {
   printer_id?: number | null;  // null = unassigned
+  // Fork: printer tags this job asks for; left out = its file's tags.
+  required_tag_ids?: number[] | null;
   target_model?: string | null;  // Target printer model (mutually exclusive with printer_id)
   target_location?: string | null;  // Target location filter (only used with target_model)
   filament_overrides?: Array<{ slot_id: number; type: string; color: string; color_name?: string; tray_info_idx?: string; force_color_match?: boolean }> | null;
@@ -3127,6 +3129,8 @@ export interface PrintBatchDispatchRequest {
 
 export interface PrintQueueItemUpdate {
   printer_id?: number | null;  // null = unassign
+  // Fork: printer tags; null hands the job back to its file's tags.
+  required_tag_ids?: number[] | null;
   // A deliberate filament substitution in the mapping (#2799); see PrintModal.
   skip_filament_check?: boolean;
   target_model?: string | null;  // Target printer model (mutually exclusive with printer_id)
@@ -8249,6 +8253,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ file_ids: fileIds, tag_ids: tagIds, action }),
     }),
+  // ============ Printer tags (fork) ============
+  // Library tags given to printers: an "Any <model>" job goes only to printers
+  // with every tag it asks for (backend services/printer_tags.py).
+  getPrinterTags: () =>
+    request<PrinterTagsEntry[]>('/printer-tags'),
+  setPrinterTags: (printerId: number, tagIds: number[], exclusive: boolean) =>
+    request<PrinterTagsEntry>(`/printer-tags/${printerId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ tag_ids: tagIds, exclusive }),
+    }),
+  getQueueItemTags: () =>
+    request<QueueItemTags[]>('/printer-tags/queue'),
+  /** Each file's tags that some printer carries (files with none are left out). */
+  getFileRoutingTags: (fileIds: number[]) =>
+    request<{ file_id: number; tag_ids: number[] }[]>(
+      `/printer-tags/files?${fileIds.map((id) => `file_id=${id}`).join('&')}`,
+    ),
   // ============ Variant groups (#671 / #2570) ============
   // "These files are the same job sliced for different printers." Consumed from
   // both ends: the queue picks a printer and needs the matching file, the File
@@ -9104,6 +9125,22 @@ export interface LibraryTagBulkAssignResult {
   files_updated: number;
   associations_added: number;
   associations_removed: number;
+}
+
+// Printer tags (fork). Only tagged printers are listed.
+export interface PrinterTagsEntry {
+  printer_id: number;
+  tag_ids: number[];
+  /** Takes only jobs that ask for one of its tags. */
+  exclusive: boolean;
+}
+
+// The tags a pending job asks for (jobs asking for none are left out).
+export interface QueueItemTags {
+  queue_item_id: number;
+  tag_ids: number[];
+  /** Set in the print dialog; false = read from the job's file. */
+  overridden: boolean;
 }
 
 export interface LibraryFileUpdate {

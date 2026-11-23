@@ -150,6 +150,9 @@ class PrintQueueItemCreate(BaseModel):
     # candidates ARE the files). The scheduler resolves one onto the row at
     # dispatch, after which the item is an ordinary single-file job.
     variants: list[QueueVariantCreate] | None = None
+    # Fork: printer tags this job asks for, picked in the print dialog. None
+    # leaves it asking for its file's (services/printer_tags.py).
+    required_tag_ids: list[int] | None = Field(default=None, max_length=50)
 
 
 class PrintQueueItemUpdate(IgnoresNullForRequiredColumns):
@@ -191,6 +194,9 @@ class PrintQueueItemUpdate(IgnoresNullForRequiredColumns):
     # {group_id: 1-based position}. The operator's pick, re-checked against the
     # live rack at dispatch; null means "assign them for me".
     nozzle_rack_choice: dict[int, int] | None = None
+    # Fork: printer tags this job asks for (services/printer_tags.py). A list
+    # replaces them, null hands the job back to its file's tags.
+    required_tag_ids: list[int] | None = Field(default=None, max_length=50)
 
 
 class QueueVariantSummary(BaseModel):

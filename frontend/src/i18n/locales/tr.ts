@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Yazıcı etiketleri',
+    help: 'Bir modelin herhangi bir yazıcısı için işler yalnızca işin tüm etiketlerine sahip yazıcılara gider. Bir işin etiketleri, yazdırma penceresinde değiştirilmedikçe dosyasının (Dosya Yöneticisi) bir yazıcıda bulunan etiketleridir.',
+    exclusive: 'Yalnızca bu etiketlere sahip işler',
+    exclusiveHelp: 'Etiketsiz veya yalnızca başka etiketlere sahip işler bu yazıcıyı atlar.',
+    exclusiveBadge: 'yalnızca etiketli işler',
+    add: 'Etiket ekle',
+    none: 'Etiket yok',
+    remove: '{{name}} kaldır',
+    search: 'Etiket ara',
+    searchOrCreate: 'Etiket ara veya oluştur',
+    create: '“{{name}}” oluştur',
+    emptyCatalog: 'Henüz etiket yok — oluşturmak için bir ad yazın.',
+    noMatches: 'Eşleşen etiket yok',
+    saveFailed: 'Yazıcı etiketleri kaydedilemedi',
+    jobFromFile: 'dosyadan',
+    jobEdited: 'bu iş için ayarlandı',
+    jobReset: 'Dosyanın etiketlerini kullan',
+    jobInfoModel: 'Yalnızca şu etiketlere sahip {{model}} yazıcılar: {{tags}}',
+    jobInfo: 'Yalnızca şu etiketlere sahip yazıcılar: {{tags}}',
+    jobInfoNone: 'Etiket yok: etiketsiz işleri kabul eden herhangi bir yazıcıya gider',
+    noPrinterFits: 'Hiçbir etkin {{model}} yazıcıda bu etiketler yok — iş, biri bunlara sahip olana kadar bekleyecek.',
+    queueChip: 'Yalnızca bu etiketlere sahip yazıcılara gider (dosyadan)',
+    queueChipEdited: 'Yalnızca bu etiketlere sahip yazıcılara gider (bu iş için ayarlandı)',
+    fileChipHint: 'yazıcı etiketi: bu dosyanın kuyruk işleri yalnızca bu etikete sahip yazıcılara gider',
+  },
   // Navigasyon
   nav: {
     printers: 'Yazıcılar',

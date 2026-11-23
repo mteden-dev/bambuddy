@@ -701,6 +701,7 @@ async def init_db():
         printer_sensor_history,
         project,
         project_bom,
+        queue_item_tags,
         scheduled_drying,
         settings,
         shopping_list,

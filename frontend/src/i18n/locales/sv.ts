@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Skrivartaggar',
+    help: 'Jobb för valfri skrivare av en modell går bara till skrivare som har alla jobbets taggar. Ett jobbs taggar är filens taggar (Filhanterare) som någon skrivare har, om de inte ändras i utskriftsdialogen.',
+    exclusive: 'Endast jobb med dessa taggar',
+    exclusiveHelp: 'Jobb utan taggar, eller bara med andra taggar, hoppar över den här skrivaren.',
+    exclusiveBadge: 'endast taggade jobb',
+    add: 'Lägg till tagg',
+    none: 'Inga taggar',
+    remove: 'Ta bort {{name}}',
+    search: 'Sök taggar',
+    searchOrCreate: 'Sök eller skapa en tagg',
+    create: 'Skapa ”{{name}}”',
+    emptyCatalog: 'Inga taggar än — skriv ett namn för att skapa en.',
+    noMatches: 'Inga matchande taggar',
+    saveFailed: 'Kunde inte spara skrivartaggar',
+    jobFromFile: 'från filen',
+    jobEdited: 'satta för det här jobbet',
+    jobReset: 'Använd filens taggar',
+    jobInfoModel: 'Endast {{model}}-skrivare med: {{tags}}',
+    jobInfo: 'Endast skrivare med: {{tags}}',
+    jobInfoNone: 'Inga taggar: går till valfri skrivare som tar otaggade jobb',
+    noPrinterFits: 'Ingen aktiv {{model}}-skrivare har dessa taggar — jobbet väntar tills någon har det.',
+    queueChip: 'Går bara till skrivare med dessa taggar (från filen)',
+    queueChipEdited: 'Går bara till skrivare med dessa taggar (satta för jobbet)',
+    fileChipHint: 'skrivartagg: köjobb för den här filen går bara till skrivare med den',
+  },
   // Navigation
   nav: {
     printers: 'Skrivare',

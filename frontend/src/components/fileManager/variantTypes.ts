@@ -25,6 +25,8 @@ export interface VariantGroupViewProps {
   authEnabled: boolean;
   onToggleSelect: (row: GroupRow) => void;
   onTagClick?: (tagId: number) => void;
+  /** Fork: tags some printer carries, marked on the grid card's thumbnail. */
+  routingTagIds?: Set<number>;
   memberActions: VariantMemberActions;
   groupActions: VariantGroupActions;
   /** The group whose versions are open in a popover (grid view): one at a time on the page. */

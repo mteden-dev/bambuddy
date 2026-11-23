@@ -545,6 +545,11 @@ export const handlers = [
   // and the client falls back to one request per printer.
   http.get('/api/v1/ha-sensors/by-printer/:id/readings', () => HttpResponse.json([])),
   http.get('/api/v1/queue/', () => HttpResponse.json([])),
+  // Fork: printer tags (utils/printerTags.ts); no printer is tagged by default.
+  http.get('/api/v1/printer-tags', () => HttpResponse.json([])),
+  http.get('/api/v1/printer-tags/queue', () => HttpResponse.json([])),
+  http.get('/api/v1/printer-tags/files', () => HttpResponse.json([])),
+  http.get('/api/v1/library/tags', () => HttpResponse.json([])),
   http.get('/api/v1/spoolbuddy/devices', () => HttpResponse.json([])),
   http.get('/api/v1/spoolman/inventory/filaments', () => HttpResponse.json([])),
   http.get('/api/v1/spoolman/spools/linked', () => HttpResponse.json([])),

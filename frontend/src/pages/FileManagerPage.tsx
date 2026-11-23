@@ -72,6 +72,8 @@ import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { LibraryTagFilterRail } from '../components/LibraryTagFilterRail';
+import { ThumbnailTagStack } from '../components/fileManager/ThumbnailTagStack';
+import { usePrinterTags } from '../utils/printerTags';
 import { PrintModal } from '../components/PrintModal';
 import type { SeparateJobsProgress } from '../components/PrintModal/separateJobs';
 import { ModelViewerModal } from '../components/ModelViewerModal';
@@ -1418,6 +1420,8 @@ interface FileCardProps {
   onDetails?: (file: LibraryFileListItem) => void;
   onGenerateThumbnail?: (file: LibraryFileListItem) => void;
   onTagClick?: (tagId: number) => void;
+  /** Fork: tags some printer carries, marked on the thumbnail. */
+  routingTagIds?: Set<number>;
   thumbnailVersion?: number;
   hasPermission: (permission: Permission) => boolean;
   canModify: (resource: 'queue' | 'archives' | 'library', action: 'update' | 'delete' | 'reprint', createdById: number | null | undefined) => boolean;
@@ -1426,7 +1430,7 @@ interface FileCardProps {
   t: TFunction;
 }
 
-function FileCard({ file, isSelected, isHighlighted, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview, onRename, onDetails, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
+function FileCard({ file, isSelected, isHighlighted, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview, onRename, onDetails, onGenerateThumbnail, onTagClick, routingTagIds, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
   // Viewport coordinates rather than a flag, because the menu is rendered by
   // `ContextMenu` at `position: fixed` and anchored to the button (#2846). The
   // card it belongs to is only ~270px tall for a bare STL, which is shorter
@@ -1550,8 +1554,9 @@ function FileCard({ file, isSelected, isHighlighted, onSelect, onDelete, onDownl
         ) : (
           <FileTypePlaceholderIcon fileType={file.file_type} className="w-12 h-12 text-bambu-gray/30" />
         )}
-        {/* File type badge */}
-        <div className={`absolute top-2 right-2 text-xs px-1.5 py-0.5 rounded font-medium ${
+        {/* File type badge, the file's tags under it (fork) */}
+        <div className="absolute top-2 right-2 flex flex-col items-end gap-1 max-w-[70%]">
+        <div className={`text-xs px-1.5 py-0.5 rounded font-medium ${
           file.file_type === '3mf' ? 'bg-bambu-green/90 text-white'
           // Sliced output — share the gcode blue so users see at a glance
           // that the file is already sliced and ready to print (#1543).
@@ -1563,6 +1568,8 @@ function FileCard({ file, isSelected, isHighlighted, onSelect, onDelete, onDownl
           : 'bg-bambu-gray/90 text-white'
         }`}>
           {file.file_type.toUpperCase()}
+        </div>
+        <ThumbnailTagStack tags={file.tags ?? []} routingTagIds={routingTagIds} onTagClick={onTagClick} />
         </div>
       </div>
 
@@ -1652,22 +1659,6 @@ function FileCard({ file, isSelected, isHighlighted, onSelect, onDelete, onDownl
           <div className="mt-1 text-xs text-bambu-gray flex items-center gap-1" title={t('fileManager.lastModified')}>
             <CalendarClock className="w-3 h-3" />
             {formatDate(file.fs_modified_at ?? file.created_at)}
-          </div>
-        )}
-        {(file.tags?.length ?? 0) > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1" {...stopRowActivation}>
-            {file.tags!.map((tg) => (
-              <button
-                key={tg.id}
-                type="button"
-                onClick={() => onTagClick?.(tg.id)}
-                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] bg-bambu-green/10 text-bambu-green hover:bg-bambu-green/20 transition-colors max-w-full"
-                title={tg.name}
-              >
-                <TagIcon className="w-2.5 h-2.5 flex-shrink-0" />
-                <span className="truncate">{tg.name}</span>
-              </button>
-            ))}
           </div>
         )}
       </div>
@@ -2271,6 +2262,8 @@ export function FileManagerPage() {
   // Tag catalog — needed to resolve names for the active-filter chip bar.
   // Cheap query, shared with LibraryTagsModal / BulkTagsPickerModal via the
   // same queryKey so they all invalidate together on tag CRUD.
+  // Fork: tags some printer carries are marked on the cards (utils/printerTags.ts).
+  const { used: printerTagIds } = usePrinterTags();
   const { data: tagCatalog = [] } = useQuery({
     queryKey: ['library-tags'],
     queryFn: api.getLibraryTags,
@@ -2867,6 +2860,7 @@ export function FileManagerPage() {
     authEnabled,
     onToggleSelect: handleGroupSelect,
     onTagClick: toggleTagFilter,
+    routingTagIds: printerTagIds,
     openGroupId: openVariantGroupId,
     onOpenGroupChange: setOpenVariantGroupId,
     memberActions: {
@@ -4396,6 +4390,7 @@ export function FileManagerPage() {
                     onDetails={setDetailsFile}
                     onGenerateThumbnail={(f) => singleThumbnailMutation.mutate(f.id)}
                     onTagClick={toggleTagFilter}
+                    routingTagIds={printerTagIds}
                     thumbnailVersion={thumbnailVersions[file.id]}
                     hasPermission={hasPermission}
                     canModify={canModify}

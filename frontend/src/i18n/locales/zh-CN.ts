@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: '打印机标签',
+    help: '发往某型号任意打印机的任务只会分配给拥有该任务全部标签的打印机。任务的标签是其文件（文件管理器）中某台打印机拥有的标签，除非在打印对话框中修改。',
+    exclusive: '仅接受带这些标签的任务',
+    exclusiveHelp: '无标签或只有其他标签的任务会跳过这台打印机。',
+    exclusiveBadge: '仅限带标签任务',
+    add: '添加标签',
+    none: '无标签',
+    remove: '移除 {{name}}',
+    search: '搜索标签',
+    searchOrCreate: '搜索或创建标签',
+    create: '创建“{{name}}”',
+    emptyCatalog: '还没有标签——输入名称即可创建。',
+    noMatches: '没有匹配的标签',
+    saveFailed: '无法保存打印机标签',
+    jobFromFile: '来自文件',
+    jobEdited: '为此任务设置',
+    jobReset: '使用文件的标签',
+    jobInfoModel: '仅限带以下标签的 {{model}} 打印机：{{tags}}',
+    jobInfo: '仅限带以下标签的打印机：{{tags}}',
+    jobInfoNone: '无标签：分配给任何接受无标签任务的打印机',
+    noPrinterFits: '没有活动的 {{model}} 打印机拥有这些标签——任务将等待。',
+    queueChip: '仅分配给带这些标签的打印机（来自文件）',
+    queueChipEdited: '仅分配给带这些标签的打印机（为此任务设置）',
+    fileChipHint: '打印机标签：此文件的队列任务只会分配给带此标签的打印机',
+  },
   // Navigation
   nav: {
     printers: '打印机',

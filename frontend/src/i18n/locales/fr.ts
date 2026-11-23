@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Étiquettes d\'imprimante',
+    help: 'Les tâches pour n\'importe quelle imprimante d\'un modèle ne vont qu\'aux imprimantes qui ont toutes les étiquettes de la tâche. Les étiquettes d\'une tâche sont celles de son fichier (Gestionnaire de fichiers) qu\'une imprimante possède, sauf modification dans la boîte de dialogue d\'impression.',
+    exclusive: 'Uniquement les tâches avec ces étiquettes',
+    exclusiveHelp: 'Les tâches sans étiquette, ou avec seulement d\'autres étiquettes, ignorent cette imprimante.',
+    exclusiveBadge: 'tâches étiquetées seulement',
+    add: 'Ajouter une étiquette',
+    none: 'Aucune étiquette',
+    remove: 'Retirer {{name}}',
+    search: 'Rechercher des étiquettes',
+    searchOrCreate: 'Rechercher ou créer une étiquette',
+    create: 'Créer « {{name}} »',
+    emptyCatalog: 'Aucune étiquette pour l\'instant — saisissez un nom pour en créer une.',
+    noMatches: 'Aucune étiquette correspondante',
+    saveFailed: 'Impossible d\'enregistrer les étiquettes de l\'imprimante',
+    jobFromFile: 'du fichier',
+    jobEdited: 'définies pour cette tâche',
+    jobReset: 'Utiliser les étiquettes du fichier',
+    jobInfoModel: 'Uniquement les imprimantes {{model}} avec : {{tags}}',
+    jobInfo: 'Uniquement les imprimantes avec : {{tags}}',
+    jobInfoNone: 'Sans étiquette : va à toute imprimante qui accepte les tâches sans étiquette',
+    noPrinterFits: 'Aucune imprimante {{model}} active n\'a ces étiquettes — la tâche attendra qu\'une les ait.',
+    queueChip: 'Ne va qu\'aux imprimantes avec ces étiquettes (du fichier)',
+    queueChipEdited: 'Ne va qu\'aux imprimantes avec ces étiquettes (définies pour cette tâche)',
+    fileChipHint: 'étiquette d\'imprimante : les tâches de la file pour ce fichier ne vont qu\'aux imprimantes qui l\'ont',
+  },
   // Navigation
   nav: {
     printers: 'Imprimantes',

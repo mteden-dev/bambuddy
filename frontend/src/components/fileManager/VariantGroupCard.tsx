@@ -9,6 +9,7 @@ import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { VariantMemberLine } from './VariantMemberLine';
 import { VariantVersionsPopover } from './VariantVersionsPopover';
 import { VariantSelectionBox } from './VariantSelectionBox';
+import { ThumbnailTagStack } from './ThumbnailTagStack';
 import { groupSelection } from '../../pages/fileManager/variantSelection';
 import { dragSourceProps, type VariantGroupViewProps, type VariantMemberActions } from './variantTypes';
 
@@ -23,6 +24,8 @@ export function VariantGroupCard({
   thumbnailVersions,
   showModified,
   onToggleSelect,
+  onTagClick,
+  routingTagIds,
   memberActions,
   groupActions,
   groupDrag,
@@ -146,9 +149,17 @@ export function VariantGroupCard({
           ) : (
             <Layers className="w-12 h-12 text-bambu-gray/30" />
           )}
-          <div className="absolute top-2 right-2 text-xs px-1.5 py-0.5 rounded font-medium bg-bambu-green/90 text-white flex items-center gap-1">
-            <Layers className="w-3 h-3" aria-hidden="true" />
-            {t('fileManager.variants.badge', { count: row.members.length })}
+          <div className="absolute top-2 right-2 flex flex-col items-end gap-1 max-w-[70%]">
+            <div className="text-xs px-1.5 py-0.5 rounded font-medium bg-bambu-green/90 text-white flex items-center gap-1">
+              <Layers className="w-3 h-3" aria-hidden="true" />
+              {t('fileManager.variants.badge', { count: row.members.length })}
+            </div>
+            {/* Fork: every version's tags, as on a file card */}
+            <ThumbnailTagStack
+              tags={[...new Map(row.members.flatMap((m) => m.tags ?? []).map((tg) => [tg.id, tg])).values()]}
+              routingTagIds={routingTagIds}
+              onTagClick={onTagClick}
+            />
           </div>
         </div>
 

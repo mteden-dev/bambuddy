@@ -71,6 +71,7 @@ from backend.app.services.print_batch import (
     refresh_batches_after,
 )
 from backend.app.services.print_cost_estimate import estimate_queue_source_cost
+from backend.app.services.printer_tags import check_tag_ids, set_override
 from backend.app.services.queue_announcements import announce_queue_jobs_added
 from backend.app.services.queue_item_printer import PRINTER_RESOLVED_DEFAULTS, drop_printer_resolved
 from backend.app.services.queue_position import lock_queue_positions, max_queue_position
@@ -1237,6 +1238,9 @@ async def add_to_queue(
     # Cannot specify both printer_id and target_model
     if data.printer_id and target_model_norm:
         raise HTTPException(400, "Cannot specify both printer_id and target_model")
+    # Fork: printer tags picked in the print dialog (services/printer_tags.py).
+    if data.required_tag_ids and (missing_tags := await check_tag_ids(db, data.required_tag_ids)):
+        raise HTTPException(400, f"Unknown tag: {', '.join(map(str, missing_tags))}")
     if target_model_norm:
         # The key itself, not its actor: the scheduler holds an any-printer job
         # to its creator's printers, and a key may be limited to fewer of them.
@@ -1566,6 +1570,13 @@ async def add_to_queue(
             # different printers.
             item.variants.extend(PrintQueueVariant(**values) for values in variant_values)
             item.print_time_seconds = min(estimates) if estimates else None
+
+    if data.required_tag_ids is not None:
+        # Fork: in the transaction that adds the jobs, so no queue pass sees
+        # them without their tags.
+        await db.flush()
+        for queued in items:
+            await set_override(db, queued, data.required_tag_ids)
 
     await db.commit()
 
@@ -2444,6 +2455,11 @@ async def update_queue_item(
         raise HTTPException(409, "Item is being dispatched — cancel it first to make changes")
 
     update_data = data.model_dump(exclude_unset=True)
+    # Fork: printer tags are no column of the row (services/printer_tags.py).
+    set_tags = "required_tag_ids" in update_data
+    required_tag_ids = update_data.pop("required_tag_ids", None)
+    if required_tag_ids and (missing_tags := await check_tag_ids(db, required_tag_ids)):
+        raise HTTPException(400, f"Unknown tag: {', '.join(map(str, missing_tags))}")
 
     # Clearing "wait for manual start" starts the job, which needs the same
     # right as the start button (#1620)
@@ -2600,6 +2616,8 @@ async def update_queue_item(
 
     for field, value in update_data.items():
         setattr(item, field, value)
+    if set_tags:
+        await set_override(db, item, required_tag_ids)
 
     await db.commit()
     await db.refresh(item, ["archive", "printer", "library_file", "created_by", "batch"])

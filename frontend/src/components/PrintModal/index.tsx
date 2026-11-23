@@ -32,6 +32,8 @@ import { PrintOptionsPanel } from './PrintOptions';
 import { ScheduleOptionsPanel } from './ScheduleOptions';
 import { VariantCandidates, type VariantCandidate } from './VariantCandidates';
 import { MultiFileModeToggle } from './MultiFileModeToggle';
+import { JobPrinterTags } from './JobPrinterTags';
+import { printerAcceptsTags, queueItemTagsQueryKey, usePrinterTags } from '../../utils/printerTags';
 import {
   commonModel,
   defaultMultiFileMode,
@@ -1115,6 +1117,83 @@ export function PrintModal({
     }
   }, [targetModel, selectedPlate, prevTargetModel, prevPlateForOverrides, mode]);
 
+  // Fork: printer tags (utils/printerTags.ts). A job asks for its file's tags
+  // that some printer carries unless changed here: null = not changed, 'file' =
+  // handed back to the file's tags, a list = this job's own.
+  const printerTagsData = usePrinterTags();
+  const [jobTags, setJobTags] = useState<number[] | 'file' | null>(null);
+  const routingFileKey = (
+    isMultiFile
+      ? candidates.map((c) => c.id)
+      : hasEditingVariants
+        ? editingVariants.map((v) => v.id)
+        : isLibraryFile && libraryFileId
+          ? [libraryFileId]
+          : []
+  ).join(',');
+  const routingFileIds = useMemo(
+    () => (routingFileKey ? routingFileKey.split(',').map(Number) : []),
+    [routingFileKey],
+  );
+  const { data: fileRoutingTags } = useQuery({
+    queryKey: ['printer-tags', 'files', routingFileIds],
+    queryFn: () => api.getFileRoutingTags(routingFileIds),
+    enabled: routingFileIds.length > 0 && printerTagsData.used.size > 0,
+  });
+  const fileTagIds = useMemo(
+    () => [...new Set((fileRoutingTags ?? []).flatMap((f) => f.tag_ids))],
+    [fileRoutingTags],
+  );
+  const { data: queueTags } = useQuery({
+    queryKey: queueItemTagsQueryKey,
+    queryFn: api.getQueueItemTags,
+    enabled: mode === 'edit-queue-item' && !!queueItem,
+  });
+  const savedJobTags = queueTags?.find((e) => e.queue_item_id === queueItem?.id);
+  const keepsSavedTags = jobTags === null && !!savedJobTags?.overridden;
+  const effectiveJobTags = Array.isArray(jobTags) ? jobTags : keepsSavedTags ? savedJobTags!.tag_ids : fileTagIds;
+  const jobTagsEdited = Array.isArray(jobTags) || keepsSavedTags;
+  // What a new job is sent with: only a list set here, else the file decides.
+  const jobTagsOverride: Pick<PrintQueueItemCreate, 'required_tag_ids'> = Array.isArray(jobTags)
+    ? { required_tag_ids: jobTags }
+    : {};
+  // What an edit sends: nothing when untouched, null to hand back to the file.
+  const jobTagsUpdate: Pick<PrintQueueItemUpdate, 'required_tag_ids'> =
+    jobTags === null ? {} : { required_tag_ids: Array.isArray(jobTags) ? jobTags : null };
+  const showJobTags =
+    (isCrossModel || hasEditingVariants || assignmentMode === 'model') &&
+    (printerTagsData.used.size > 0 || effectiveJobTags.length > 0);
+  const tagTargetModel = isCrossModel || hasEditingVariants ? null : targetModel;
+  const somePrinterFitsTags =
+    !tagTargetModel ||
+    (printers ?? []).some(
+      (p) =>
+        p.is_active &&
+        p.model === tagTargetModel &&
+        printerAcceptsTags(printerTagsData.byPrinter.get(p.id), effectiveJobTags),
+    );
+  // A new job for a file with printer tags opens on "Any <model>": printed on
+  // one chosen printer, the tags would decide nothing. Once, and not over a
+  // choice the dialog was opened with.
+  const tagModeAppliedRef = useRef(false);
+  useEffect(() => {
+    if (tagModeAppliedRef.current || fileTagIds.length === 0) return;
+    tagModeAppliedRef.current = true;
+    if (
+      mode !== 'create' ||
+      isCrossModel ||
+      isGroupPrinters ||
+      initialSelectedPrinterIds?.length ||
+      resumedSettings?.assignmentMode ||
+      assignmentMode !== 'printer' ||
+      selectedPrinters.length > 1
+    ) {
+      return;
+    }
+    setAssignmentMode('model');
+    setSelectedPrinters([]);
+  }, [fileTagIds, mode, isCrossModel, isGroupPrinters, initialSelectedPrinterIds, resumedSettings, assignmentMode, selectedPrinters.length]);
+
   // The sliced-for metadata loads async. If the user switched to model mode
   // before it arrived, the target is still empty (we never silently default
   // to another model, #2578) — fill it with the sliced-for model once known,
@@ -1637,6 +1716,7 @@ export function PrintModal({
             plate_id: candidatePlates[c.id] ?? null,
             filament_overrides: filamentOverridesArray,
           })),
+          ...jobTagsOverride,
           target_location: targetLocation,
           require_previous_success: scheduleOptions.requirePreviousSuccess,
           auto_off_after: scheduleOptions.autoOffAfter,
@@ -1733,6 +1813,7 @@ export function PrintModal({
               printer_id: assignmentMode === 'printer' ? printerId : null,
               target_model: assignmentMode === 'model' ? targetModel : null,
               target_location: assignmentMode === 'model' ? targetLocation : null,
+              ...(assignmentMode === 'model' ? jobTagsOverride : {}),
               require_previous_success: scheduleOptions.requirePreviousSuccess,
               auto_off_after: scheduleOptions.autoOffAfter,
               gcode_injection: scheduleOptions.gcodeInjection,
@@ -1920,6 +2001,7 @@ export function PrintModal({
       printer_id: assignmentMode === 'printer' ? printerId : null,
       target_model: assignmentMode === 'model' ? targetModel : null,
       target_location: assignmentMode === 'model' ? targetLocation : null,
+      ...(assignmentMode === 'model' ? jobTagsOverride : {}),
       filament_overrides: assignmentMode === 'model' ? overridesForPlate(plateId) : printerOverridesForPlate(printerId, plateId),
       // Use library_file_id for library files, archive_id for archives
       archive_id: isLibraryFile ? undefined : archiveId,
@@ -1970,6 +2052,7 @@ export function PrintModal({
               printer_id: null,
               target_model: targetModel,
               target_location: targetLocation,
+              ...jobTagsUpdate,
               filament_overrides: filamentOverridesArray || null,
               require_previous_success: scheduleOptions.requirePreviousSuccess,
               auto_off_after: scheduleOptions.autoOffAfter,
@@ -2502,6 +2585,22 @@ export function PrintModal({
                 targetLocation={targetLocation}
                 onTargetLocationChange={setTargetLocation}
                 slicedForModel={selectorModel}
+              />
+            )}
+
+            {/* Fork: which of the model's printers the job may run on. */}
+            {showJobTags && (
+              <JobPrinterTags
+                value={effectiveJobTags}
+                edited={jobTagsEdited}
+                onChange={setJobTags}
+                onReset={() => setJobTags('file')}
+                options={printerTagsData.catalog.filter(
+                  (tg) => printerTagsData.used.has(tg.id) || effectiveJobTags.includes(tg.id),
+                )}
+                names={printerTagsData.names}
+                model={tagTargetModel}
+                somePrinterFits={somePrinterFitsTags}
               />
             )}
 

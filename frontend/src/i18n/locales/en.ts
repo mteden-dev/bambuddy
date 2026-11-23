@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Printer tags',
+    help: 'Jobs for any printer of a model go only to printers that have all of the job\'s tags. A job\'s tags are its file\'s tags (File Manager) that some printer has, unless changed in the print dialog.',
+    exclusive: 'Only jobs with these tags',
+    exclusiveHelp: 'Jobs without tags, or with only other tags, skip this printer.',
+    exclusiveBadge: 'only tagged jobs',
+    add: 'Add tag',
+    none: 'No tags',
+    remove: 'Remove {{name}}',
+    search: 'Search tags',
+    searchOrCreate: 'Search or create a tag',
+    create: 'Create “{{name}}”',
+    emptyCatalog: 'No tags yet — type a name to create one.',
+    noMatches: 'No matching tags',
+    saveFailed: 'Could not save printer tags',
+    jobFromFile: 'from the file',
+    jobEdited: 'set for this job',
+    jobReset: 'Use the file\'s tags',
+    jobInfoModel: 'Only {{model}} printers with: {{tags}}',
+    jobInfo: 'Only printers with: {{tags}}',
+    jobInfoNone: 'No tags: goes to any printer that takes untagged jobs',
+    noPrinterFits: 'No active {{model}} printer has these tags — the job will wait until one does.',
+    queueChip: 'Goes only to printers with these tags (from the file)',
+    queueChipEdited: 'Goes only to printers with these tags (set for this job)',
+    fileChipHint: 'printer tag: queue jobs for this file go only to printers with it',
+  },
   // Navigation
   nav: {
     printers: 'Printers',

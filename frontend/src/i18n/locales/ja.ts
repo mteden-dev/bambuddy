@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'プリンタータグ',
+    help: 'モデルの任意のプリンター向けジョブは、ジョブのすべてのタグを持つプリンターにのみ送られます。ジョブのタグは、印刷ダイアログで変更しない限り、ファイル（ファイルマネージャー）のタグのうちいずれかのプリンターが持つものです。',
+    exclusive: 'これらのタグのジョブのみ',
+    exclusiveHelp: 'タグのないジョブ、または他のタグのみのジョブはこのプリンターを飛ばします。',
+    exclusiveBadge: 'タグ付きジョブのみ',
+    add: 'タグを追加',
+    none: 'タグなし',
+    remove: '{{name}} を削除',
+    search: 'タグを検索',
+    searchOrCreate: 'タグを検索または作成',
+    create: '「{{name}}」を作成',
+    emptyCatalog: 'タグはまだありません。名前を入力して作成します。',
+    noMatches: '一致するタグはありません',
+    saveFailed: 'プリンタータグを保存できませんでした',
+    jobFromFile: 'ファイルから',
+    jobEdited: 'このジョブ用に設定',
+    jobReset: 'ファイルのタグを使用',
+    jobInfoModel: '次のタグを持つ {{model}} プリンターのみ: {{tags}}',
+    jobInfo: '次のタグを持つプリンターのみ: {{tags}}',
+    jobInfoNone: 'タグなし: タグなしジョブを受け付ける任意のプリンターへ',
+    noPrinterFits: 'これらのタグを持つアクティブな {{model}} プリンターはありません。持つプリンターが現れるまでジョブは待機します。',
+    queueChip: 'これらのタグを持つプリンターにのみ送られます（ファイルから）',
+    queueChipEdited: 'これらのタグを持つプリンターにのみ送られます（このジョブ用に設定）',
+    fileChipHint: 'プリンタータグ: このファイルのキュージョブはこのタグを持つプリンターにのみ送られます',
+  },
   // Navigation
   nav: {
     printers: 'プリンター',

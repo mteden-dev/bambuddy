@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Tags da impressora',
+    help: 'Trabalhos para qualquer impressora de um modelo vão apenas para impressoras que tenham todas as tags do trabalho. As tags de um trabalho são as tags do arquivo (Gerenciador de arquivos) que alguma impressora tem, a menos que alteradas na janela de impressão.',
+    exclusive: 'Somente trabalhos com estas tags',
+    exclusiveHelp: 'Trabalhos sem tags, ou só com outras tags, pulam esta impressora.',
+    exclusiveBadge: 'somente trabalhos com tag',
+    add: 'Adicionar tag',
+    none: 'Sem tags',
+    remove: 'Remover {{name}}',
+    search: 'Buscar tags',
+    searchOrCreate: 'Buscar ou criar uma tag',
+    create: 'Criar “{{name}}”',
+    emptyCatalog: 'Ainda não há tags — digite um nome para criar uma.',
+    noMatches: 'Nenhuma tag correspondente',
+    saveFailed: 'Não foi possível salvar as tags da impressora',
+    jobFromFile: 'do arquivo',
+    jobEdited: 'definidas para este trabalho',
+    jobReset: 'Usar as tags do arquivo',
+    jobInfoModel: 'Somente impressoras {{model}} com: {{tags}}',
+    jobInfo: 'Somente impressoras com: {{tags}}',
+    jobInfoNone: 'Sem tags: vai para qualquer impressora que aceite trabalhos sem tags',
+    noPrinterFits: 'Nenhuma impressora {{model}} ativa tem estas tags — o trabalho aguardará até que alguma tenha.',
+    queueChip: 'Vai apenas para impressoras com estas tags (do arquivo)',
+    queueChipEdited: 'Vai apenas para impressoras com estas tags (definidas para este trabalho)',
+    fileChipHint: 'tag de impressora: trabalhos da fila deste arquivo vão apenas para impressoras com ela',
+  },
   // Navigation
   nav: {
     printers: 'Impressoras',

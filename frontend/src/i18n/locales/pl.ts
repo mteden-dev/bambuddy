@@ -1,4 +1,31 @@
 export default {
+  // Fork: printer tags route queue jobs (utils/printerTags.ts)
+  printerTags: {
+    title: 'Tagi drukarki',
+    help: 'Zadania na dowolną drukarkę danego modelu trafiają tylko na drukarki, które mają wszystkie tagi zadania. Tagi zadania to tagi pliku (Pliki), które ma jakaś drukarka, chyba że zmienisz je w oknie druku.',
+    exclusive: 'Tylko zadania z tymi tagami',
+    exclusiveHelp: 'Zadania bez tagów lub tylko z innymi tagami omijają tę drukarkę.',
+    exclusiveBadge: 'tylko zadania z tagiem',
+    add: 'Dodaj tag',
+    none: 'Brak tagów',
+    remove: 'Usuń {{name}}',
+    search: 'Szukaj tagów',
+    searchOrCreate: 'Szukaj lub utwórz tag',
+    create: 'Utwórz „{{name}}”',
+    emptyCatalog: 'Nie ma jeszcze tagów — wpisz nazwę, żeby utworzyć.',
+    noMatches: 'Brak pasujących tagów',
+    saveFailed: 'Nie udało się zapisać tagów drukarki',
+    jobFromFile: 'z pliku',
+    jobEdited: 'ustawione dla tego zadania',
+    jobReset: 'Użyj tagów pliku',
+    jobInfoModel: 'Tylko drukarki {{model}} z tagami: {{tags}}',
+    jobInfo: 'Tylko drukarki z tagami: {{tags}}',
+    jobInfoNone: 'Bez tagów: trafi na każdą drukarkę, która przyjmuje zadania bez tagów',
+    noPrinterFits: 'Żadna aktywna drukarka {{model}} nie ma tych tagów — zadanie poczeka, aż któraś będzie je mieć.',
+    queueChip: 'Tylko na drukarki z tymi tagami (z pliku)',
+    queueChipEdited: 'Tylko na drukarki z tymi tagami (ustawione dla zadania)',
+    fileChipHint: 'tag drukarki: zadania z kolejki dla tego pliku trafią tylko na drukarki z tym tagiem',
+  },
   // Navigation
   nav: {
     printers: 'Drukarki',
