@@ -6,8 +6,10 @@ are the library's tag catalog (/library/tags).
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -26,6 +28,7 @@ from backend.app.models.library import LibraryFile, LibraryFileTag
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
+from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.services.printer_tags import TagRouting, check_tag_ids, read_printer_tags, write_printer_tags
 
 router = APIRouter(prefix="/printer-tags", tags=["printer-tags"])
@@ -40,9 +43,20 @@ class PrinterTagsResponse(BaseModel):
     exclusive: bool
 
 
-class PrinterTagsUpdate(BaseModel):
+class PrinterTagsUpdate(IgnoresNullForRequiredColumns):
+    # Written as JSON into one settings row, so there are no columns to tell
+    # which fields can't be null: neither can, and a null counts as not sent.
+    __orm_table__ = "settings"
+
     tag_ids: list[int] = Field(default_factory=list, max_length=MAX_TAGS_PER_PRINTER)
     exclusive: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_null_for_required_columns(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        return {key: value for key, value in data.items() if not (value is None and key in cls.model_fields)}
 
 
 class FileTagsResponse(BaseModel):

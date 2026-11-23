@@ -51,6 +51,16 @@ class TestPrinterTags:
         assert (await async_client.put(f"/api/v1/printer-tags/{p1.id}", json={"tag_ids": [999]})).status_code == 400
         assert (await async_client.put("/api/v1/printer-tags/999", json={"tag_ids": []})).status_code == 404
 
+    async def test_null_counts_as_not_sent(self, async_client: AsyncClient, tagged):
+        p1, _, tray, _, _ = tagged
+        put = await async_client.put(f"/api/v1/printer-tags/{p1.id}", json={"tag_ids": [tray], "exclusive": None})
+        assert put.status_code == 200, put.text
+        assert put.json() == {"printer_id": p1.id, "tag_ids": [tray], "exclusive": False}
+        # Like leaving tag_ids out of this PUT: the printer is untagged.
+        cleared = await async_client.put(f"/api/v1/printer-tags/{p1.id}", json={"tag_ids": None, "exclusive": True})
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json() == {"printer_id": p1.id, "tag_ids": [], "exclusive": False}
+
 
 class TestQueueJobTags:
     async def test_a_job_asks_for_its_files_printer_tags(self, async_client: AsyncClient, tagged):
