@@ -1818,6 +1818,41 @@ export default {
         now: 'Nu',
       },
       printerColumnHeader: 'Printer',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Toegewezen aan deze printer',
+        projected: 'Willekeurige printer — verwacht hier',
+        printing: 'Print',
+        dragHint: 'Sleep een niet-gestarte taak naar een andere printer',
+      },
+      forecastFailed: 'Kon niet bepalen waar de taken zullen draaien.',
+      offline: 'Offline',
+      plateClear: 'Plaat leeghalen',
+      externalPrint: 'Print buiten de wachtrij',
+      offTimeline: {
+        title: 'Niet op de tijdlijn ({{count}})',
+        manualStart: 'Wacht op handmatige start',
+        waiting: 'Wacht',
+        noPrinter: 'Geen printer kan hem nu nemen',
+        unassigned: 'Geen printer of model gekozen',
+        starting: 'Start',
+      },
+      drop: {
+        toAny: 'Laat hier los om hem terug te geven aan elke {{model}}',
+        moved: 'Verplaatst naar {{printer}}',
+        movedToAny: 'Weer elke {{model}}',
+        failed: 'Taak kon niet worden verplaatst',
+      },
+      refusal: {
+        inactive: 'Printer uitgeschakeld',
+        model: 'Bestand is voor {{model}}',
+        modelUnknown: 'Ander printermodel',
+        location: 'Alleen in {{location}}',
+        alternatives: 'Kiest zelf zijn printer',
+        scope: 'Geen printer van de eigenaar',
+        tags: 'Printertags komen niet overeen',
+        other: 'Hier niet toegestaan',
+      },
     },
     // Permissions
     permissions: {

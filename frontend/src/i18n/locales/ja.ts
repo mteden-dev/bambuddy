@@ -1800,6 +1800,41 @@ export default {
         now: '現在',
       },
       printerColumnHeader: 'プリンター',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'このプリンターに割り当て',
+        projected: '任意のプリンター — ここで実行予定',
+        printing: '印刷中',
+        dragHint: '未開始のジョブを別のプリンターへドラッグ',
+      },
+      forecastFailed: 'キューのジョブの実行先を予測できませんでした。',
+      offline: 'オフライン',
+      plateClear: 'プレートの片付け待ち',
+      externalPrint: 'キュー外の印刷',
+      offTimeline: {
+        title: 'タイムライン外 ({{count}})',
+        manualStart: '手動開始待ち',
+        waiting: '待機中',
+        noPrinter: '今は受け取れるプリンターがありません',
+        unassigned: 'プリンターもモデルも未選択',
+        starting: '開始中',
+      },
+      drop: {
+        toAny: 'ここにドロップすると任意の {{model}} に戻します',
+        moved: '{{printer}} に移動しました',
+        movedToAny: '任意の {{model}} に戻しました',
+        failed: 'ジョブを移動できませんでした',
+      },
+      refusal: {
+        inactive: 'プリンター無効',
+        model: 'ファイルは {{model}} 用',
+        modelUnknown: '別のプリンターモデル',
+        location: '{{location}} のみ',
+        alternatives: 'プリンターを自分で選択',
+        scope: 'ジョブ所有者のプリンターではありません',
+        tags: 'プリンタータグが一致しません',
+        other: 'ここには移動できません',
+      },
     },
     // Permissions
     permissions: {

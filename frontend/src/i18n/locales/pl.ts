@@ -1820,6 +1820,41 @@ export default {
         now: 'Teraz',
       },
       printerColumnHeader: 'Drukarka',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Przypisane do tej drukarki',
+        projected: 'Dowolna drukarka — prognoza',
+        printing: 'Drukuje',
+        dragHint: 'Przeciągnij nierozpoczęte zadanie na inną drukarkę',
+      },
+      forecastFailed: 'Nie udało się ustalić, gdzie trafią zadania z kolejki.',
+      offline: 'Offline',
+      plateClear: 'Płyta do opróżnienia',
+      externalPrint: 'Wydruk spoza kolejki',
+      offTimeline: {
+        title: 'Poza osią czasu ({{count}})',
+        manualStart: 'Czeka na ręczny start',
+        waiting: 'Czeka',
+        noPrinter: 'Żadna drukarka nie może go teraz wziąć',
+        unassigned: 'Bez drukarki i modelu',
+        starting: 'Startuje',
+      },
+      drop: {
+        toAny: 'Upuść tutaj, aby oddać do dowolnej {{model}}',
+        moved: 'Przeniesiono na {{printer}}',
+        movedToAny: 'Z powrotem do dowolnej {{model}}',
+        failed: 'Nie udało się przenieść zadania',
+      },
+      refusal: {
+        inactive: 'Drukarka wyłączona',
+        model: 'Plik dla {{model}}',
+        modelUnknown: 'Inny model drukarki',
+        location: 'Tylko w lokalizacji {{location}}',
+        alternatives: 'Samo wybiera drukarkę',
+        scope: 'Poza drukarkami właściciela zadania',
+        tags: 'Tagi drukarki nie pasują',
+        other: 'Tu nie można',
+      },
     },
     // Permissions
     permissions: {

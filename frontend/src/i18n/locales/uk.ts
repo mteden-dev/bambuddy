@@ -1817,6 +1817,41 @@ export default {
         now: "Зараз",
       },
       printerColumnHeader: "Принтер",
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Призначено цьому принтеру',
+        projected: 'Будь-який принтер — очікується тут',
+        printing: 'Друк',
+        dragHint: 'Перетягніть непочате завдання на інший принтер',
+      },
+      forecastFailed: 'Не вдалося розрахувати, де виконуватимуться завдання.',
+      offline: 'Не в мережі',
+      plateClear: 'Потрібно звільнити стіл',
+      externalPrint: 'Друк поза чергою',
+      offTimeline: {
+        title: 'Поза шкалою часу ({{count}})',
+        manualStart: 'Чекає ручного запуску',
+        waiting: 'Очікує',
+        noPrinter: 'Зараз його не може взяти жоден принтер',
+        unassigned: 'Не вибрано ні принтер, ні модель',
+        starting: 'Запускається',
+      },
+      drop: {
+        toAny: 'Відпустіть тут, щоб повернути його будь-якому {{model}}',
+        moved: 'Переміщено на {{printer}}',
+        movedToAny: 'Знову будь-який {{model}}',
+        failed: 'Не вдалося перемістити завдання',
+      },
+      refusal: {
+        inactive: 'Принтер вимкнено',
+        model: 'Файл для {{model}}',
+        modelUnknown: 'Інша модель принтера',
+        location: 'Лише в {{location}}',
+        alternatives: 'Сам обирає принтер',
+        scope: 'Не принтер власника завдання',
+        tags: 'Теги принтера не підходять',
+        other: 'Сюди не можна',
+      },
     },
     // Permissions
     permissions: {

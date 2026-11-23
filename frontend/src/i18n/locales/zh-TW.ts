@@ -1801,6 +1801,41 @@ export default {
         now: '現在',
       },
       printerColumnHeader: '印表機',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: '已指派給此印表機',
+        projected: '任意印表機 — 預計在此',
+        printing: '列印中',
+        dragHint: '將未開始的工作拖到另一台印表機',
+      },
+      forecastFailed: '無法預測佇列工作的執行位置。',
+      offline: '離線',
+      plateClear: '待清理列印板',
+      externalPrint: '佇列外的列印',
+      offTimeline: {
+        title: '不在時間軸上 ({{count}})',
+        manualStart: '等待手動開始',
+        waiting: '等待中',
+        noPrinter: '目前沒有印表機可以接收',
+        unassigned: '未選擇印表機或型號',
+        starting: '正在開始',
+      },
+      drop: {
+        toAny: '拖到這裡交還給任意 {{model}}',
+        moved: '已移至 {{printer}}',
+        movedToAny: '已交還給任意 {{model}}',
+        failed: '無法移動工作',
+      },
+      refusal: {
+        inactive: '印表機已停用',
+        model: '檔案適用於 {{model}}',
+        modelUnknown: '其他印表機型號',
+        location: '僅限 {{location}}',
+        alternatives: '自行選擇印表機',
+        scope: '不是工作擁有者的印表機',
+        tags: '印表機標籤不符',
+        other: '不允許放在這裡',
+      },
     },
     // Permissions
     permissions: {

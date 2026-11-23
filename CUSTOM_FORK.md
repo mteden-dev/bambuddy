@@ -44,6 +44,16 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     drukarek wypełnione, z ikoną drukarki). Reguła: `services/printer_tags.py`, API
     `/printer-tags`, scheduler zawęża nią drukarki twórcy (dopasowanie, wybudzanie gniazdkiem,
     suszenie, przeniesienie przy braku filamentu),
+  - oś czasu kolejki pokazuje całą kolejkę: zadania „Dowolna <model>” stoją na drukarce, którą
+    według prognozy dostaną (przerywana ramka; przypięte do drukarki mają pełną ramkę i pinezkę).
+    Prognozę liczy backend (`GET /queue/forecast`, `services/queue_forecast.py`): drukarka, która
+    zwolni się pierwsza, bierze pierwsze pasujące zadanie w kolejności schedulera (SJF, kolejność
+    wyboru drukarek, lokalizacja, tagi drukarek, drukarki twórcy, offline bez wtyczki Auto On).
+    Zadania wstrzymane (ręczny start, brak filamentu itp.) są pod osią z powodem. Nierozpoczęte
+    zadanie można przeciągnąć na inną drukarkę (przypina je tam jak okno edycji) albo na pasek
+    „oddaj do dowolnej <model>”; drukarki, na które nie wolno (inny model G-code, inna lokalizacja,
+    tagi, wyłączona), są wyszarzone z powodem i nie przyjmują upuszczenia. Na telefonie oś
+    przewija się w poziomie. Bez zmian w bazie,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,

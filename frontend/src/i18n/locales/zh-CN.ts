@@ -1801,6 +1801,41 @@ export default {
         now: '现在',
       },
       printerColumnHeader: '打印机',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: '已分配到此打印机',
+        projected: '任意打印机 — 预计在此',
+        printing: '打印中',
+        dragHint: '将未开始的任务拖到另一台打印机',
+      },
+      forecastFailed: '无法预测队列任务的运行位置。',
+      offline: '离线',
+      plateClear: '待清理打印板',
+      externalPrint: '队列外的打印',
+      offTimeline: {
+        title: '不在时间线上 ({{count}})',
+        manualStart: '等待手动开始',
+        waiting: '等待中',
+        noPrinter: '目前没有打印机可以接收',
+        unassigned: '未选择打印机或型号',
+        starting: '正在开始',
+      },
+      drop: {
+        toAny: '拖到这里交还给任意 {{model}}',
+        moved: '已移至 {{printer}}',
+        movedToAny: '已交还给任意 {{model}}',
+        failed: '无法移动任务',
+      },
+      refusal: {
+        inactive: '打印机已停用',
+        model: '文件适用于 {{model}}',
+        modelUnknown: '其他打印机型号',
+        location: '仅限 {{location}}',
+        alternatives: '自行选择打印机',
+        scope: '不是任务所有者的打印机',
+        tags: '打印机标签不匹配',
+        other: '不允许放在这里',
+      },
     },
     // Permissions
     permissions: {

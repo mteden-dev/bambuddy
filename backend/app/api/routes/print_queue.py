@@ -59,6 +59,7 @@ from backend.app.schemas.print_queue import (
     QueueVariantCreate,
     QueueVariantSummary,
 )
+from backend.app.schemas.queue_forecast import QueueForecastResponse
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.filament_requirements import overrides_for_plate
 from backend.app.services.finance_budget import release_budget_reservation, validate_print_budget
@@ -73,6 +74,7 @@ from backend.app.services.print_batch import (
 from backend.app.services.print_cost_estimate import estimate_queue_source_cost
 from backend.app.services.printer_tags import check_tag_ids, set_override
 from backend.app.services.queue_announcements import announce_queue_jobs_added
+from backend.app.services.queue_forecast import build_queue_forecast
 from backend.app.services.queue_item_printer import PRINTER_RESOLVED_DEFAULTS, drop_printer_resolved
 from backend.app.services.queue_position import lock_queue_positions, max_queue_position
 from backend.app.utils.printer_models import (
@@ -810,6 +812,76 @@ async def list_queue(
     result = await db.execute(query)
     items = result.scalars().all()
     return [_enrich_response(item) for item in items]
+
+
+@router.get("/forecast", response_model=QueueForecastResponse)
+async def queue_forecast(
+    db: AsyncSession = Depends(get_db, scope="function"),
+    auth_result: tuple[User | ApiKeyActor | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.QUEUE_READ_ALL,
+            Permission.QUEUE_READ_OWN,
+        )
+    ),
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Where and when each pending job is expected to run, for the timeline (fork).
+
+    "Any <model>" jobs are placed on the printer the scheduler is expected to
+    give them; ``refusals`` says, per job, which printers it may not be moved
+    onto and why. See services/queue_forecast. The forecast covers the whole
+    queue, since everyone's jobs compete for the printers; the response keeps
+    to the printers and jobs the caller may see.
+    """
+    user, can_read_all = auth_result
+    forecast = await build_queue_forecast(db)
+
+    def visible(item_id: int) -> bool:
+        item = forecast.items.get(item_id)
+        if item is None or not printer_scope.allows(item.printer_id):
+            return False
+        return user is None or can_read_all or item.created_by_id == user.id
+
+    return QueueForecastResponse(
+        generated_at=forecast.generated_at,
+        placements=[
+            {
+                "item_id": p.item_id,
+                "printer_id": p.printer_id,
+                "start": p.start,
+                "end": p.end,
+                "projected": p.projected,
+            }
+            for p in forecast.placements
+            if visible(p.item_id) and printer_scope.allows(p.printer_id)
+        ],
+        off_timeline=[
+            {"item_id": o.item_id, "reason": o.reason, "detail": o.detail}
+            for o in forecast.off_timeline
+            if visible(o.item_id)
+        ],
+        printers=[
+            {
+                "printer_id": p.printer_id,
+                "free_at": p.free_at,
+                "available": p.available,
+                "connected": p.connected,
+                "external_print": p.external_print,
+                "awaiting_plate_clear": p.awaiting_plate_clear,
+            }
+            for p in forecast.printers
+            if printer_scope.allows(p.printer_id)
+        ],
+        refusals={
+            str(item_id): {
+                str(printer_id): {"code": r.code, "detail": r.detail}
+                for printer_id, r in per_printer.items()
+                if printer_scope.allows(printer_id)
+            }
+            for item_id, per_printer in forecast.refusals.items()
+            if visible(item_id)
+        },
+    )
 
 
 HISTORY_STATUSES = ("completed", "failed", "skipped", "cancelled")

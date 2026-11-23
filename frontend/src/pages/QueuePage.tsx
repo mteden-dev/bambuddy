@@ -86,7 +86,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { QueueStatsBar } from '../components/QueueStatsBar';
 import { CompactHistoryRow } from '../components/CompactHistoryRow';
 import { ColorSubstitutionNotes } from '../components/ColorSubstitutionNotes';
-import { QueueTimelineView } from '../components/QueueTimelineView';
+import { QueueTimelineView, type QueueMoveTarget } from '../components/QueueTimelineView';
 import { compareQueueOrder } from '../utils/queueOrder';
 import { BatchOrdersView } from '../components/BatchOrdersView';
 import { ThumbnailHoverPreview } from '../components/ThumbnailHoverPreview';
@@ -2061,6 +2061,31 @@ export function QueuePage() {
     onError: () => showToast(t('queue.toast.updateFailed'), 'error'),
   });
 
+  // A job dragged on the timeline: onto a printer (pinned there, as the edit
+  // dialog pins it), or back to any printer of a model.
+  const timelineMoveMutation = useMutation({
+    mutationFn: ({ item, target }: { item: PrintQueueItem; target: QueueMoveTarget }) =>
+      api.updateQueueItem(
+        item.id,
+        'printer_id' in target
+          ? { printer_id: target.printer_id, target_model: null, target_location: null }
+          : { printer_id: null, target_model: target.target_model },
+      ),
+    onSuccess: (_data, { target }) => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      if ('printer_id' in target) {
+        const name = printers?.find((p) => p.id === target.printer_id)?.name ?? `#${target.printer_id}`;
+        showToast(t('queue.timeline.drop.moved', { printer: name }));
+      } else {
+        showToast(t('queue.timeline.drop.movedToAny', { model: target.target_model }));
+      }
+    },
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      showToast(`${t('queue.timeline.drop.failed')}: ${error.message}`, 'error');
+    },
+  });
+
   const bulkCancelMutation = useMutation({
     mutationFn: async (ids: number[]) => {
       for (const id of ids) {
@@ -2968,6 +2993,8 @@ export function QueuePage() {
               setConfirmAction({ type: 'stop', item });
             }
           }}
+          onMoveItem={(item, target) => timelineMoveMutation.mutate({ item, target })}
+          canMoveItem={(item) => canModify('queue', 'update', item.created_by_id)}
           t={t}
         />
       ) : activeTab === 'history' ? (

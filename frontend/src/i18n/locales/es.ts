@@ -1801,6 +1801,41 @@ export default {
         now: 'Ahora',
       },
       printerColumnHeader: 'Impresora',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Asignado a esta impresora',
+        projected: 'Cualquier impresora — prevista aquí',
+        printing: 'Imprimiendo',
+        dragHint: 'Arrastra un trabajo no iniciado a otra impresora',
+      },
+      forecastFailed: 'No se pudo calcular dónde se ejecutarán los trabajos.',
+      offline: 'Sin conexión',
+      plateClear: 'Placa por despejar',
+      externalPrint: 'Impresión fuera de la cola',
+      offTimeline: {
+        title: 'Fuera de la línea de tiempo ({{count}})',
+        manualStart: 'Espera un inicio manual',
+        waiting: 'En espera',
+        noPrinter: 'Ninguna impresora puede tomarlo ahora',
+        unassigned: 'Sin impresora ni modelo',
+        starting: 'Iniciando',
+      },
+      drop: {
+        toAny: 'Suelta aquí para devolverlo a cualquier {{model}}',
+        moved: 'Movido a {{printer}}',
+        movedToAny: 'De nuevo a cualquier {{model}}',
+        failed: 'No se pudo mover el trabajo',
+      },
+      refusal: {
+        inactive: 'Impresora desactivada',
+        model: 'El archivo es para {{model}}',
+        modelUnknown: 'Otro modelo de impresora',
+        location: 'Solo en {{location}}',
+        alternatives: 'Elige su impresora por sí mismo',
+        scope: 'No es una impresora del propietario',
+        tags: 'Las etiquetas de impresora no coinciden',
+        other: 'No permitido aquí',
+      },
     },
     // Permissions
     permissions: {

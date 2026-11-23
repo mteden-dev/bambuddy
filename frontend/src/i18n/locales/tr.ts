@@ -1801,6 +1801,41 @@ export default {
         now: 'Şimdi',
       },
       printerColumnHeader: 'Yazıcı',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Bu yazıcıya atandı',
+        projected: 'Herhangi bir yazıcı — burada bekleniyor',
+        printing: 'Yazdırılıyor',
+        dragHint: 'Başlamamış bir işi başka bir yazıcıya sürükleyin',
+      },
+      forecastFailed: 'İşlerin nerede çalışacağı hesaplanamadı.',
+      offline: 'Çevrimdışı',
+      plateClear: 'Tabla temizlenecek',
+      externalPrint: 'Kuyruk dışı baskı',
+      offTimeline: {
+        title: 'Zaman çizelgesi dışında ({{count}})',
+        manualStart: 'Manuel başlatma bekliyor',
+        waiting: 'Bekliyor',
+        noPrinter: 'Şu an hiçbir yazıcı alamıyor',
+        unassigned: 'Yazıcı veya model seçilmedi',
+        starting: 'Başlıyor',
+      },
+      drop: {
+        toAny: 'Herhangi bir {{model}} yazıcıya geri vermek için buraya bırakın',
+        moved: '{{printer}} yazıcısına taşındı',
+        movedToAny: 'Yeniden herhangi bir {{model}}',
+        failed: 'İş taşınamadı',
+      },
+      refusal: {
+        inactive: 'Yazıcı devre dışı',
+        model: 'Dosya {{model}} için',
+        modelUnknown: 'Başka yazıcı modeli',
+        location: 'Yalnızca {{location}}',
+        alternatives: 'Yazıcısını kendisi seçer',
+        scope: 'İş sahibinin yazıcılarından değil',
+        tags: 'Yazıcı etiketleri uymuyor',
+        other: 'Buraya izin yok',
+      },
     },
     // İzinler
     permissions: {

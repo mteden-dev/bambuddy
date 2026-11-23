@@ -3127,6 +3127,45 @@ export interface PrintBatchDispatchRequest {
   limit?: number;
 }
 
+/** GET /queue/forecast (fork): the scheduler's expected choices, replayed ahead
+ *  of time. "Any <model>" jobs get the printer they are expected to run on. */
+export interface QueueForecastPlacement {
+  item_id: number;
+  printer_id: number;
+  start: string;
+  end: string;
+  /** Placed by the forecast for an "Any <model>" job, not pinned by the user. */
+  projected: boolean;
+}
+
+export interface QueueForecastRefusal {
+  /** inactive | model | location | alternatives | scope | tags; others may follow. */
+  code: string;
+  detail: string | null;
+}
+
+export interface QueueForecast {
+  generated_at: string;
+  placements: QueueForecastPlacement[];
+  /** Pending jobs left off the lanes, and why. */
+  off_timeline: Array<{
+    item_id: number;
+    reason: 'manual_start' | 'waiting' | 'no_printer' | 'unassigned' | 'starting' | string;
+    detail: string | null;
+  }>;
+  printers: Array<{
+    printer_id: number;
+    free_at: string;
+    available: boolean;
+    connected: boolean;
+    /** Printing something that is not a queue job. */
+    external_print: boolean;
+    awaiting_plate_clear: boolean;
+  }>;
+  /** item id -> printer id -> why the job may not be moved onto that printer. */
+  refusals: Record<string, Record<string, QueueForecastRefusal>>;
+}
+
 export interface PrintQueueItemUpdate {
   printer_id?: number | null;  // null = unassign
   // Fork: printer tags; null hands the job back to its file's tags.
@@ -6906,6 +6945,8 @@ export const api = {
   // One printer's queue as GET /queue/?printer_id= returns it: its own jobs
   // plus the "Any <model>" jobs for its model. Batched across printer cards.
   getPrinterQueue: (printerId: number, status: string) => printerQueueBatch(status)(printerId),
+  // Where and when each pending job is expected to run, for the timeline (fork).
+  getQueueForecast: () => request<QueueForecast>('/queue/forecast'),
   addToQueue: (data: PrintQueueItemCreate) =>
     request<PrintQueueItem>('/queue/', {
       method: 'POST',

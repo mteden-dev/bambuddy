@@ -1801,6 +1801,41 @@ export default {
         now: 'Jetzt',
       },
       printerColumnHeader: 'Drucker',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Diesem Drucker zugewiesen',
+        projected: 'Beliebiger Drucker — voraussichtlich hier',
+        printing: 'Druckt',
+        dragHint: 'Einen noch nicht gestarteten Auftrag auf einen anderen Drucker ziehen',
+      },
+      forecastFailed: 'Es ließ sich nicht ermitteln, wo die Aufträge laufen werden.',
+      offline: 'Offline',
+      plateClear: 'Druckplatte räumen',
+      externalPrint: 'Druck außerhalb der Warteschlange',
+      offTimeline: {
+        title: 'Nicht auf der Zeitleiste ({{count}})',
+        manualStart: 'Wartet auf manuellen Start',
+        waiting: 'Wartet',
+        noPrinter: 'Kein Drucker kann ihn jetzt übernehmen',
+        unassigned: 'Kein Drucker oder Modell gewählt',
+        starting: 'Startet',
+      },
+      drop: {
+        toAny: 'Hier ablegen, um ihn wieder einem beliebigen {{model}} zu überlassen',
+        moved: 'Verschoben auf {{printer}}',
+        movedToAny: 'Wieder beliebiger {{model}}',
+        failed: 'Auftrag konnte nicht verschoben werden',
+      },
+      refusal: {
+        inactive: 'Drucker deaktiviert',
+        model: 'Datei ist für {{model}}',
+        modelUnknown: 'Anderes Druckermodell',
+        location: 'Nur in {{location}}',
+        alternatives: 'Wählt seinen Drucker selbst',
+        scope: 'Kein Drucker des Auftragsbesitzers',
+        tags: 'Drucker-Tags passen nicht',
+        other: 'Hier nicht erlaubt',
+      },
     },
     // Permissions
     permissions: {

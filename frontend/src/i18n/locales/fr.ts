@@ -1801,6 +1801,41 @@ export default {
         now: 'Maintenant',
       },
       printerColumnHeader: 'Imprimante',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Attribué à cette imprimante',
+        projected: 'N\'importe quelle imprimante — prévu ici',
+        printing: 'Impression',
+        dragHint: 'Glissez une tâche non démarrée vers une autre imprimante',
+      },
+      forecastFailed: 'Impossible de prévoir où les tâches seront lancées.',
+      offline: 'Hors ligne',
+      plateClear: 'Plateau à vider',
+      externalPrint: 'Impression hors file d\'attente',
+      offTimeline: {
+        title: 'Hors de la chronologie ({{count}})',
+        manualStart: 'Attend un démarrage manuel',
+        waiting: 'En attente',
+        noPrinter: 'Aucune imprimante ne peut la prendre maintenant',
+        unassigned: 'Aucune imprimante ni modèle',
+        starting: 'Démarrage',
+      },
+      drop: {
+        toAny: 'Déposez ici pour la rendre à n\'importe quelle {{model}}',
+        moved: 'Déplacé vers {{printer}}',
+        movedToAny: 'De nouveau n\'importe quelle {{model}}',
+        failed: 'Impossible de déplacer la tâche',
+      },
+      refusal: {
+        inactive: 'Imprimante désactivée',
+        model: 'Le fichier est pour {{model}}',
+        modelUnknown: 'Autre modèle d\'imprimante',
+        location: 'Uniquement à {{location}}',
+        alternatives: 'Choisit son imprimante elle-même',
+        scope: 'Pas une imprimante du propriétaire',
+        tags: 'Les tags d\'imprimante ne correspondent pas',
+        other: 'Non autorisé ici',
+      },
     },
     // Permissions
     permissions: {

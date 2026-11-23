@@ -1820,6 +1820,41 @@ export default {
         now: 'Now',
       },
       printerColumnHeader: 'Printer',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Assigned to this printer',
+        projected: 'Any printer — expected here',
+        printing: 'Printing',
+        dragHint: 'Drag a job that has not started onto another printer',
+      },
+      forecastFailed: 'Could not work out where the queued jobs will run.',
+      offline: 'Offline',
+      plateClear: 'Plate to clear',
+      externalPrint: 'Print started outside the queue',
+      offTimeline: {
+        title: 'Not on the timeline ({{count}})',
+        manualStart: 'Waits for a manual start',
+        waiting: 'Waiting',
+        noPrinter: 'No printer can take it now',
+        unassigned: 'No printer or model chosen',
+        starting: 'Starting',
+      },
+      drop: {
+        toAny: 'Drop here to hand it back to any {{model}}',
+        moved: 'Moved to {{printer}}',
+        movedToAny: 'Back to any {{model}}',
+        failed: 'Could not move the job',
+      },
+      refusal: {
+        inactive: 'Printer disabled',
+        model: 'File is for {{model}}',
+        modelUnknown: 'Other printer model',
+        location: 'Only in {{location}}',
+        alternatives: 'Picks its printer itself',
+        scope: 'Not one of the job owner\'s printers',
+        tags: 'Printer tags don\'t match',
+        other: 'Not allowed here',
+      },
     },
     // Permissions
     permissions: {

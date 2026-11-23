@@ -495,6 +495,10 @@ export const handlers = [
   http.get('/api/v1/archives/', () => HttpResponse.json([])),
   http.get('/api/v1/archives/last-per-printer', () => HttpResponse.json([])),
   http.get('/api/v1/queue/history', () => HttpResponse.json({ items: [], total: 0, locations: [] })),
+  // Fork: the timeline's forecast of where pending jobs run.
+  http.get('/api/v1/queue/forecast', () =>
+    HttpResponse.json({ generated_at: new Date().toISOString(), placements: [], off_timeline: [], printers: [], refusals: {} }),
+  ),
   http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json([])),
   http.get('/api/v1/auth/oidc/providers/all', () => HttpResponse.json([])),
   // OIDC icon proxy (#1333). Default returns a tiny PNG; individual tests

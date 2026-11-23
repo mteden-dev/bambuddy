@@ -1818,6 +1818,41 @@ export default {
         now: 'Nu',
       },
       printerColumnHeader: 'Skrivare',
+      // Fork: forecast placement, legend and drag and drop
+      legend: {
+        pinned: 'Tilldelad den här skrivaren',
+        projected: 'Valfri skrivare — förväntas här',
+        printing: 'Skriver ut',
+        dragHint: 'Dra ett jobb som inte startat till en annan skrivare',
+      },
+      forecastFailed: 'Kunde inte räkna ut var jobben kommer att köras.',
+      offline: 'Offline',
+      plateClear: 'Plattan ska tömmas',
+      externalPrint: 'Utskrift utanför kön',
+      offTimeline: {
+        title: 'Inte på tidslinjen ({{count}})',
+        manualStart: 'Väntar på manuell start',
+        waiting: 'Väntar',
+        noPrinter: 'Ingen skrivare kan ta det nu',
+        unassigned: 'Ingen skrivare eller modell vald',
+        starting: 'Startar',
+      },
+      drop: {
+        toAny: 'Släpp här för att lämna tillbaka det till valfri {{model}}',
+        moved: 'Flyttad till {{printer}}',
+        movedToAny: 'Tillbaka till valfri {{model}}',
+        failed: 'Kunde inte flytta jobbet',
+      },
+      refusal: {
+        inactive: 'Skrivaren inaktiverad',
+        model: 'Filen är för {{model}}',
+        modelUnknown: 'Annan skrivarmodell',
+        location: 'Endast i {{location}}',
+        alternatives: 'Väljer skrivare själv',
+        scope: 'Inte en av jobbägarens skrivare',
+        tags: 'Skrivartaggarna matchar inte',
+        other: 'Inte tillåtet här',
+      },
     },
     // Permissions
     permissions: {

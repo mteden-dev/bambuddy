@@ -1,173 +1,232 @@
 /**
- * The timeline draws each lane's pending jobs chained end to end, so the order
- * it chains them in is a claim about what the scheduler will dispatch next.
+ * The timeline draws every pending job where GET /queue/forecast expects the
+ * scheduler to run it, "Any <model>" jobs included, and lets a job that has
+ * not started be dragged onto another printer the forecast allows (fork).
  *
- * It used to chain by queue position alone, which meant turning
- * Shortest-Job-First on changed the scheduler and the pending list but left
- * the timeline drawing the pre-SJF queue forever (#3043).
+ * Dispatch order (Shortest-Job-First, #3043) and the placement itself are the
+ * server's: see backend/tests/unit/test_queue_forecast.py.
  */
 
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QueueTimelineView } from '../../components/QueueTimelineView';
-import type { PrintQueueItem, Printer } from '../../api/client';
+import { api } from '../../api/client';
+import type { PrintQueueItem, Printer, QueueForecast } from '../../api/client';
 
-const HOUR = 3600;
+vi.mock('../../api/client', () => ({
+  api: { getQueueForecast: vi.fn() },
+}));
 
-const printers = [{ id: 1, name: 'Workshop X1C', model: 'X1C' }] as unknown as Printer[];
+const HOUR_MS = 3600 * 1000;
 
-// Something has to be running for a lane to forecast at all: an idle printer's
-// ASAP queue has no committed anchor to chain from, so the view drops it.
-const running = {
-  id: 100,
-  printer_id: 1,
-  status: 'printing',
-  position: 0,
-  archive_name: 'Running now',
-  print_time_seconds: HOUR,
-  started_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-} as unknown as PrintQueueItem;
+const printers = [
+  { id: 1, name: 'P1S-01', model: 'P1S', is_active: true },
+  { id: 2, name: 'P1S-02', model: 'P1S', is_active: true },
+  { id: 3, name: 'H2D-01', model: 'H2D', is_active: true },
+] as unknown as Printer[];
 
-const pending = (
-  id: number,
-  name: string,
-  position: number,
-  printTimeSeconds: number,
-  over: Partial<PrintQueueItem> = {},
-) =>
+const job = (id: number, name: string, over: Partial<PrintQueueItem> = {}) =>
   ({
     id,
-    printer_id: 1,
+    printer_id: null,
+    target_model: 'P1S',
     status: 'pending',
-    position,
+    position: id,
     archive_name: name,
-    print_time_seconds: printTimeSeconds,
+    print_time_seconds: 3600,
     scheduled_time: null,
     manual_start: false,
     waiting_reason: null,
+    created_by_id: 1,
     ...over,
   }) as unknown as PrintQueueItem;
 
-const queueItems = [
-  running,
-  pending(1, 'Long job', 1, 2 * HOUR),
-  pending(2, 'Short job', 2, HOUR / 2),
-  pending(3, 'Medium job', 3, HOUR),
-];
+const pinned = job(1, 'Pinned box', { printer_id: 1, target_model: null });
+const anyJob = job(2, 'Any tray');
+const staged = job(3, 'Staged lid', { manual_start: true });
+const queueItems = [pinned, anyJob, staged];
 
-function renderTimeline(sjfEnabled: boolean) {
-  render(
-    <QueueTimelineView
-      queueItems={queueItems}
-      printers={printers}
-      printerStatuses={{ 1: { progress: 50, remaining_time: 30, state: 'RUNNING' } }}
-      sjfEnabled={sjfEnabled}
-      onItemClick={() => {}}
-      t={(key: string) => key}
-    />,
+function iso(offsetHours: number): string {
+  return new Date(Date.now() + offsetHours * HOUR_MS).toISOString();
+}
+
+function forecast(over: Partial<QueueForecast> = {}): QueueForecast {
+  return {
+    generated_at: iso(0),
+    placements: [
+      { item_id: 1, printer_id: 1, start: iso(0), end: iso(1), projected: false },
+      { item_id: 2, printer_id: 2, start: iso(0), end: iso(1), projected: true },
+    ],
+    off_timeline: [{ item_id: 3, reason: 'manual_start', detail: null }],
+    printers: [
+      { printer_id: 1, free_at: iso(0), available: true, connected: true, external_print: false, awaiting_plate_clear: false },
+      { printer_id: 2, free_at: iso(0), available: true, connected: true, external_print: false, awaiting_plate_clear: false },
+      { printer_id: 3, free_at: iso(2), available: true, connected: true, external_print: true, awaiting_plate_clear: false },
+    ],
+    refusals: {
+      '1': { '3': { code: 'model', detail: 'P1S' } },
+      '2': { '3': { code: 'model', detail: 'P1S' } },
+      '3': { '3': { code: 'model', detail: 'P1S' } },
+    },
+    ...over,
+  };
+}
+
+const t = (key: string, options?: Record<string, unknown>) =>
+  options ? `${key} ${JSON.stringify(options)}` : key;
+
+function renderTimeline(props: Partial<Parameters<typeof QueueTimelineView>[0]> = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <QueueTimelineView
+        queueItems={queueItems}
+        printers={printers}
+        printerStatuses={{}}
+        sjfEnabled={false}
+        onItemClick={() => {}}
+        t={t}
+        {...props}
+      />
+    </QueryClientProvider>,
   );
 }
 
-/** Bar names, left to right. Bars are absolutely positioned, so the rendered
- *  offset is what the user reads -- not DOM order. The tooltip leads with the
- *  display name, which is cleaner to match on than the bar's own text (name
- *  and duration sit in adjacent divs with no separator between them). */
-function barsLeftToRight(): string[] {
-  return screen
-    .getAllByRole('button')
-    .filter(el => el.style.left.endsWith('%'))
-    .sort((a, b) => parseFloat(a.style.left) - parseFloat(b.style.left))
-    .map(el => (el.getAttribute('title') ?? '').split(' \u00b7 ')[0]);
+function lane(printerId: number): HTMLElement {
+  return document.querySelector(`[data-lane="${printerId}"]`) as HTMLElement;
 }
 
-describe('QueueTimelineView job ordering', () => {
-  it('chains by queue position when SJF is off', () => {
-    renderTimeline(false);
-    expect(barsLeftToRight()).toEqual(['Running now', 'Long job', 'Short job', 'Medium job']);
+function bar(name: string): HTMLElement {
+  return screen.getByTitle((title) => title.startsWith(name));
+}
+
+describe('QueueTimelineView', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getQueueForecast).mockResolvedValue(forecast());
   });
 
-  it('chains shortest-first when SJF is on', () => {
-    renderTimeline(true);
-    expect(barsLeftToRight()).toEqual(['Running now', 'Short job', 'Medium job', 'Long job']);
+  it('draws an "Any" job on the printer the forecast gives it, dashed, and a pinned job solid', async () => {
+    renderTimeline();
+
+    const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+    expect(anyBar).toHaveAttribute('data-kind', 'projected');
+    expect(anyBar.className).toContain('border-dashed');
+    expect(anyBar).toHaveTextContent('queue.filter.any P1S');
+
+    const pinnedBar = within(lane(1)).getByTitle((title) => title.startsWith('Pinned box'));
+    expect(pinnedBar).toHaveAttribute('data-kind', 'pinned');
+    expect(pinnedBar.className).not.toContain('border-dashed');
   });
 
-  it('keeps a jumped item ahead of a shorter one', () => {
-    // The starvation guard is part of the scheduler's order too, so the
-    // timeline has to draw it or it lies about the long job that is finally
-    // about to run.
-    render(
-      <QueueTimelineView
-        queueItems={[
-          running,
-          pending(1, 'Short job', 1, HOUR / 2),
-          pending(2, 'Long job', 2, 2 * HOUR, { been_jumped: true }),
-        ]}
-        printers={printers}
-        printerStatuses={{ 1: { progress: 50, remaining_time: 30, state: 'RUNNING' } }}
-        sjfEnabled
-        onItemClick={() => {}}
-        t={(key: string) => key}
-      />,
-    );
-    // Position order would put the short job first, so this only passes if
-    // been_jumped is actually consulted.
-    expect(barsLeftToRight()).toEqual(['Running now', 'Long job', 'Short job']);
-  });
-});
+  it('lists jobs the forecast leaves off the lanes with the reason', async () => {
+    renderTimeline();
 
-describe('QueueTimelineView and the scheduler waiting reasons (#3074)', () => {
-  /** The scheduler now puts a reason on a pinned item too, and the commonest
-   *  one by far -- "Busy: <printer>" -- describes the very chain this view
-   *  forecasts. Dropping every item that has a reason would empty the timeline
-   *  for anyone whose queue is pinned to specific printers. */
-  function renderWith(items: PrintQueueItem[]) {
-    render(
-      <QueueTimelineView
-        queueItems={items}
-        printers={printers}
-        printerStatuses={{ 1: { progress: 50, remaining_time: 30, state: 'RUNNING' } }}
-        sjfEnabled={false}
-        onItemClick={() => {}}
-        t={(key: string) => key}
-      />,
-    );
-  }
-
-  it('still forecasts an item that is only waiting its turn', () => {
-    renderWith([
-      running,
-      pending(1, 'Long job', 1, 2 * HOUR, { waiting_reason: 'Busy: X1C-01' }),
-      pending(2, 'Medium job', 2, HOUR, { waiting_reason: 'Busy: X1C-01' }),
-    ]);
-    expect(barsLeftToRight()).toEqual(['Running now', 'Long job', 'Medium job']);
+    const chip = await screen.findByTitle((title) => title.startsWith('Staged lid'));
+    expect(chip).toHaveTextContent('queue.timeline.offTimeline.manualStart');
+    expect(screen.getByText(/queue\.timeline\.offTimeline\.title/)).toHaveTextContent('"count":1');
   });
 
-  it('still forecasts one held behind a drying cycle', () => {
-    renderWith([running, pending(1, 'Long job', 1, 2 * HOUR, { waiting_reason: 'Busy: X1C-01 (drying)' })]);
-    expect(barsLeftToRight()).toEqual(['Running now', 'Long job']);
+  it('shows a print the printer runs outside the queue', async () => {
+    renderTimeline();
+
+    expect(await within(lane(3)).findByText('queue.timeline.externalPrint')).toBeInTheDocument();
   });
 
-  it('drops one that is waiting for the user', () => {
-    // These do not start on their own, so a bar would be a promise the queue
-    // cannot keep.
-    for (const reason of [
-      'Waiting for plate confirmation: X1C-01',
-      'Offline, no Auto On smart plug: X1C-01',
-      'Waiting on Enclosure Door',
-      'Waiting for filament: X1C-01 (needs PETG)',
-    ]) {
-      const { unmount } = render(
-        <QueueTimelineView
-          queueItems={[running, pending(1, 'Long job', 1, 2 * HOUR, { waiting_reason: reason })]}
-          printers={printers}
-          printerStatuses={{ 1: { progress: 50, remaining_time: 30, state: 'RUNNING' } }}
-          sjfEnabled={false}
-          onItemClick={() => {}}
-          t={(key: string) => key}
-        />,
-      );
-      expect(barsLeftToRight()).toEqual(['Running now']);
-      unmount();
+  describe('dragging', () => {
+    // jsdom lays nothing out, so dnd-kit would see every element at 0,0.
+    // Give each lane a 56px row, and each bar the top of its lane's row. The
+    // drag overlay starts where the dragged bar was, as a browser lays it out.
+    let rectSpy: ReturnType<typeof vi.spyOn>;
+    let dragFromLane = 1;
+    beforeEach(() => {
+      rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const laneEl = this.closest('[data-lane]') as HTMLElement | null;
+        const index = (laneEl ? Number(laneEl.dataset.lane) : dragFromLane) - 1;
+        const isLane = this.hasAttribute('data-lane');
+        const top = index * 56 + (isLane ? 0 : 8);
+        const height = isLane ? 56 : 40;
+        const width = isLane ? 800 : 100;
+        return { x: 0, y: top, top, left: 0, right: width, bottom: top + height, width, height, toJSON: () => ({}) } as DOMRect;
+      });
+    });
+    afterEach(() => rectSpy.mockRestore());
+
+    function drag(el: HTMLElement, toLane: number, fromLane: number) {
+      dragFromLane = fromLane;
+      fireEvent.mouseDown(el, { button: 0, clientX: 10, clientY: (fromLane - 1) * 56 + 20 });
+      act(() => {
+        fireEvent.mouseMove(document, { clientX: 20, clientY: (fromLane - 1) * 56 + 20 });
+      });
+      act(() => {
+        fireEvent.mouseMove(document, { clientX: 20, clientY: (toLane - 1) * 56 + 20 });
+      });
     }
+
+    it('marks printers the job may not go on, and drops it on one it may', async () => {
+      const onMoveItem = vi.fn();
+      renderTimeline({ onMoveItem });
+      const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+
+      drag(anyBar, 1, 2);
+      expect(screen.getByTestId('lane-refusal-3')).toHaveTextContent('queue.timeline.refusal.model {"model":"P1S"}');
+      expect(screen.queryByTestId('lane-refusal-1')).toBeNull();
+      act(() => {
+        fireEvent.mouseUp(document);
+      });
+
+      expect(onMoveItem).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }), { printer_id: 1 });
+      expect(screen.queryByTestId('lane-refusal-3')).toBeNull();
+    });
+
+    it('refuses a drop on a printer the forecast refuses', async () => {
+      const onMoveItem = vi.fn();
+      renderTimeline({ onMoveItem });
+      const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+
+      drag(anyBar, 3, 2);
+      act(() => {
+        fireEvent.mouseUp(document);
+      });
+
+      expect(onMoveItem).not.toHaveBeenCalled();
+    });
+
+    it('offers to hand a pinned job back to any printer of its model', async () => {
+      renderTimeline({ onMoveItem: vi.fn() });
+      const pinnedBar = await within(lane(1)).findByTitle((title) => title.startsWith('Pinned box'));
+
+      drag(pinnedBar, 2, 1);
+
+      expect(screen.getByText('queue.timeline.drop.toAny {"model":"P1S"}')).toBeInTheDocument();
+      act(() => {
+        fireEvent.mouseUp(document);
+      });
+    });
+
+    it('does not drag jobs the user may not move', async () => {
+      const onMoveItem = vi.fn();
+      renderTimeline({ onMoveItem, canMoveItem: () => false });
+      const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+
+      drag(anyBar, 1, 2);
+      act(() => {
+        fireEvent.mouseUp(document);
+      });
+
+      expect(screen.queryByTestId('lane-refusal-3')).toBeNull();
+      expect(onMoveItem).not.toHaveBeenCalled();
+    });
+  });
+
+  it('a click still opens the job', async () => {
+    const onItemClick = vi.fn();
+    renderTimeline({ onItemClick, onMoveItem: vi.fn() });
+    await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+
+    fireEvent.click(bar('Any tray'));
+
+    expect(onItemClick).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }));
   });
 });
