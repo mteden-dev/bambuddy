@@ -189,13 +189,22 @@ async def printer_queue_filter(
 
     That list holds the printer's jobs and every "Any <model>" job for its
     model. One whose tags that printer refuses never runs there, so it is left
-    out, as the scheduler and the queue timeline leave it out.
+    out, as the scheduler and the queue timeline leave it out; so is one the
+    timeline's plan holds for another printer, and it shows on that one's.
     """
+    from backend.app.services.queue_reservations import QueueReservations
+
     unassigned = [item for item in items if item.printer_id is None]
     routing = await TagRouting.load(db, unassigned) if unassigned else TagRouting()
+    reservations = await QueueReservations.load(db, unassigned) if unassigned else QueueReservations()
 
     def allows(item: PrintQueueItem, printer_id: int) -> bool:
-        return item.printer_id is not None or routing.accepts(item, printer_id)
+        if item.printer_id is not None:
+            return True
+        reserved_for = reservations.active_printer(item, routing.scope(item))
+        if reserved_for is not None:
+            return reserved_for == printer_id
+        return routing.accepts(item, printer_id)
 
     return allows
 

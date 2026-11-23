@@ -3129,6 +3129,16 @@ export interface PrintBatchDispatchRequest {
 
 /** GET /queue/forecast (fork): the scheduler's expected choices, replayed ahead
  *  of time. "Any <model>" jobs get the printer they are expected to run on. */
+/** The printer alternative (#671) a placed job prints on its printer. */
+export interface QueueForecastVariant {
+  library_file_id: number;
+  target_model: string;
+  name: string | null;
+  plate_id: number | null;
+  has_thumbnail: boolean;
+  print_time_seconds: number | null;
+}
+
 export interface QueueForecastPlacement {
   item_id: number;
   printer_id: number;
@@ -3136,10 +3146,14 @@ export interface QueueForecastPlacement {
   end: string;
   /** Placed by the forecast for an "Any <model>" job, not pinned by the user. */
   projected: boolean;
+  /** For a job with alternatives: the one this printer's model takes. */
+  variant?: QueueForecastVariant | null;
+  /** An "Any" job the timeline's plan holds for this printer. */
+  reserved?: boolean;
 }
 
 export interface QueueForecastRefusal {
-  /** inactive | model | location | alternatives | scope | tags; others may follow. */
+  /** inactive | model | location | alternatives | scope | tags | offline; others may follow. */
   code: string;
   detail: string | null;
 }
@@ -3162,8 +3176,26 @@ export interface QueueForecast {
     external_print: boolean;
     awaiting_plate_clear: boolean;
   }>;
-  /** item id -> printer id -> why the job may not be moved onto that printer. */
+  /** item id -> printer id -> why the job may not be pinned to that printer. */
   refusals: Record<string, Record<string, QueueForecastRefusal>>;
+  /** item id -> printer id -> why the plan may not hold the "Any" job for that printer. */
+  reserve_refusals?: Record<string, Record<string, QueueForecastRefusal>>;
+  /** item id -> the printer the plan reserved the job for; inactive while that printer cannot take it. */
+  reservations?: Record<string, { printer_id: number; active: boolean }>;
+  /** item id -> the job's alternatives (#671), each with its file and print time. */
+  variants?: Record<string, QueueForecastVariant[]>;
+}
+
+/** The timeline's plan (fork): each printer's queued jobs in order, and the jobs to hold there. */
+export interface QueuePlan {
+  lanes: Array<{ printer_id: number; item_ids: number[] }>;
+  reserve: number[];
+}
+
+export interface QueuePlanResult {
+  reserved: number[];
+  /** Laid out on a lane but forecast elsewhere once applied. */
+  moved_elsewhere: number[];
 }
 
 export interface PrintQueueItemUpdate {
@@ -6947,6 +6979,10 @@ export const api = {
   getPrinterQueue: (printerId: number, status: string) => printerQueueBatch(status)(printerId),
   // Where and when each pending job is expected to run, for the timeline (fork).
   getQueueForecast: () => request<QueueForecast>('/queue/forecast'),
+  applyQueuePlan: (plan: QueuePlan) =>
+    request<QueuePlanResult>('/queue/plan', { method: 'POST', body: JSON.stringify(plan) }),
+  releaseQueueReservation: (id: number) =>
+    request<{ released: boolean }>(`/queue/${id}/reservation`, { method: 'DELETE' }),
   addToQueue: (data: PrintQueueItemCreate) =>
     request<PrintQueueItem>('/queue/', {
       method: 'POST',

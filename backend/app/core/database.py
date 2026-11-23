@@ -702,6 +702,7 @@ async def init_db():
         project,
         project_bom,
         queue_item_tags,
+        queue_reservations,
         scheduled_drying,
         settings,
         shopping_list,

@@ -68,6 +68,7 @@ from backend.app.services.printer_manager import (
 )
 from backend.app.services.printer_tags import TagRouting
 from backend.app.services.queue_item_printer import drop_printer_resolved
+from backend.app.services.queue_reservations import QueueReservations
 from backend.app.services.slot_nozzle import reports_two_nozzles
 from backend.app.services.smart_plug_manager import is_monitor_only, publish_plug_state, smart_plug_manager
 from backend.app.services.spool_assignment_notifications import (
@@ -900,6 +901,19 @@ async def _load_tag_routing(db: AsyncSession, items: list[PrintQueueItem]) -> Ta
     except Exception:
         logger.exception("Printer tags could not be read; this pass routes jobs by model only")
         return TagRouting()
+
+
+async def _load_reservations(db: AsyncSession, items: list[PrintQueueItem], wakeable: set[int]) -> QueueReservations:
+    """Jobs the queue timeline's plan holds for one printer, for one pass (fork,
+    services/queue_reservations.py). If they cannot be read, the pass routes
+    those jobs to any printer of their model, as before there were any."""
+    if not items:
+        return QueueReservations()
+    try:
+        return await QueueReservations.load(db, items, wakeable=wakeable)
+    except Exception:
+        logger.exception("Queue reservations could not be read; this pass ignores them")
+        return QueueReservations()
 
 
 async def _edited_since_loaded(db: AsyncSession, item: PrintQueueItem) -> bool:
@@ -2225,9 +2239,12 @@ class PrintScheduler:
             # Fork: printer tags narrow an "Any <model>" job's printers further
             # (services/printer_tags.py), read once per pass.
             tag_routing = await _load_tag_routing(db, items)
+            # Fork: a job reserved on the queue timeline waits for that printer.
+            reservations = await _load_reservations(db, items, wakeable_printer_ids)
 
             async def _item_scope(item: PrintQueueItem) -> PrinterScope:
-                return (await _creator_scope(item.created_by_id)).intersect(tag_routing.scope(item))
+                scope = (await _creator_scope(item.created_by_id)).intersect(tag_routing.scope(item))
+                return reservations.narrow(item, scope)
 
             for item in items:
                 # Check scheduled time first (scheduled_time is stored in UTC from ISO string)

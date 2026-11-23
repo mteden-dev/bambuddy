@@ -23,6 +23,8 @@ vi.mock('../../api/client', () => ({
     getQueueItemTags: vi.fn().mockResolvedValue([]),
     getPrinterTags: vi.fn().mockResolvedValue([]),
     getLibraryTags: vi.fn().mockResolvedValue([]),
+    getLibraryFileThumbnailUrl: (id: number) => `/thumb/${id}`,
+    getLibraryFilePlateThumbnail: (id: number, plate: number) => `/thumb/${id}/plate/${plate}`,
   },
 }));
 
@@ -140,6 +142,108 @@ describe('QueueTimelineView', () => {
     expect(screen.getByText(/queue\.timeline\.offTimeline\.title/)).toHaveTextContent('"count":1');
   });
 
+  it('shows a job with alternatives as the version its printer takes', async () => {
+    const box = job(5, '', {
+      archive_name: null,
+      target_model: 'P1S',
+      print_time_seconds: 3600,
+      variants: [
+        { library_file_id: 50, filename: 'box_p1s.3mf', target_model: 'P1S', position: 0 },
+        { library_file_id: 51, filename: 'box_h2d.3mf', target_model: 'H2D', position: 1 },
+      ],
+    });
+    vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+      placements: [{
+        item_id: 5, printer_id: 3, start: iso(2), end: iso(4), projected: true,
+        variant: {
+          library_file_id: 51, target_model: 'H2D', name: 'Box (H2D)', plate_id: null,
+          has_thumbnail: true, print_time_seconds: 7200,
+        },
+      }],
+      off_timeline: [],
+    }));
+    renderTimeline({ queueItems: [box] });
+
+    const tile = await within(lane(3)).findByTitle((title) => title.startsWith('Box (H2D)'));
+    // Its printer's model, not the first alternative's; that file's time and thumbnail.
+    expect(tile).toHaveTextContent('queue.filter.any H2D');
+    expect(tile).toHaveTextContent('2h');
+    expect(tile.querySelector('img')).toHaveAttribute('src', '/thumb/51');
+    expect(tile.getAttribute('title')).toContain('queue.filter.any P1S / H2D');
+
+    fireEvent.click(tile);
+    const details = screen.getByTestId('queue-job-details');
+    expect(within(details).getByRole('heading')).toHaveTextContent('Box (H2D)');
+    expect(within(details).getByText('queue.timeline.details.expectedVersion {"printer":"H2D-01","model":"H2D"}'))
+      .toBeInTheDocument();
+  });
+
+  it('names a job with alternatives off the lanes after its first file', async () => {
+    const box = job(5, '', {
+      archive_name: null,
+      variants: [
+        { library_file_id: 51, filename: 'box_h2d.3mf', target_model: 'H2D', position: 1 },
+        { library_file_id: 50, filename: 'box_p1s.3mf', target_model: 'P1S', position: 0 },
+      ],
+    });
+    vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+      placements: [],
+      off_timeline: [{ item_id: 5, reason: 'manual_start', detail: null }],
+    }));
+    renderTimeline({ queueItems: [box] });
+
+    expect(await screen.findByTitle((title) => title.startsWith('box_p1s.3mf'))).toBeInTheDocument();
+  });
+
+  describe('zoom', () => {
+    const widthOf = (el: HTMLElement) => parseFloat(el.style.width.replace(/^max\([^,]+,\s*/, ''));
+
+    it('zooms with the buttons, and the bars grow with it', async () => {
+      renderTimeline();
+      const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('24 h');
+      const wide = widthOf(anyBar);
+
+      fireEvent.click(screen.getByRole('button', { name: 'queue.timeline.window.zoomIn' }));
+
+      expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('12 h');
+      expect(widthOf(bar('Any tray'))).toBeCloseTo(wide * 2, 1);
+      expect(localStorage.setItem).toHaveBeenLastCalledWith('queueTimelineZoomHours', '12');
+
+      fireEvent.click(screen.getByRole('button', { name: 'queue.timeline.window.zoomOut' }));
+      fireEvent.click(screen.getByRole('button', { name: 'queue.timeline.window.zoomOut' }));
+      expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('48 h');
+    });
+
+    it('zooms on a trackpad pinch (ctrl + wheel), and a plain wheel only scrolls', async () => {
+      renderTimeline();
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      const chart = lane(2).closest('.overflow-x-auto') as HTMLElement;
+
+      fireEvent.wheel(chart, { deltaY: -100 });
+      expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('24 h');
+
+      fireEvent.wheel(chart, { deltaY: -100, ctrlKey: true });
+      expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('12 h');
+      fireEvent.wheel(chart, { deltaY: 100, ctrlKey: true });
+      fireEvent.wheel(chart, { deltaY: 100, ctrlKey: true });
+      expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('48 h');
+    });
+
+    it('remembers the zoom', async () => {
+      // The test setup stubs localStorage.
+      vi.mocked(localStorage.getItem).mockImplementation((key) => (key === 'queueTimelineZoomHours' ? '8' : null));
+      try {
+        renderTimeline();
+        await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+
+        expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('8 h');
+      } finally {
+        vi.mocked(localStorage.getItem).mockReset();
+      }
+    });
+  });
+
   it('shows a print the printer runs outside the queue', async () => {
     renderTimeline();
 
@@ -166,7 +270,11 @@ describe('QueueTimelineView', () => {
         return { x: left, y: top, top, left, right: left + width, bottom: top + height, width, height, toJSON: () => ({}) } as DOMRect;
       });
     });
-    afterEach(() => rectSpy.mockRestore());
+    afterEach(async () => {
+      rectSpy.mockRestore();
+      // Let dnd-kit's guard against a click right after a drop run out before the next test.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
 
     function drag(el: HTMLElement, toLane: number, fromLane: number, toX = 20) {
       dragFromLane = fromLane;
@@ -186,86 +294,154 @@ describe('QueueTimelineView', () => {
       });
     }
 
-    it('drops a job before the one on the right of the gap, and never pins it', async () => {
-      const onReorder = vi.fn(() => true);
+    // dnd-kit swallows clicks for a moment after a drop (so the drop is no click).
+    async function afterDrop() {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+    }
+
+    const applied = { reserved: [], moved_elsewhere: [] };
+    const leftOf = (el: HTMLElement) => parseFloat(el.style.left);
+
+    it('lays a job into the gap in a plan, and saves nothing until it is applied', async () => {
+      const onApplyPlan = vi.fn().mockResolvedValue(applied);
       const onPinItem = vi.fn();
-      renderTimeline({ onReorder, onPinItem });
+      renderTimeline({ onApplyPlan, onPinItem });
       const later = await within(lane(2)).findByTitle((title) => title.startsWith('Later cup'));
 
       drag(later, 2, 2, 0);
       expect(screen.getByTestId('drop-marker-2')).toBeInTheDocument();
       drop();
 
-      expect(onReorder).toHaveBeenCalledWith(4, 2, false);
+      expect(onApplyPlan).not.toHaveBeenCalled();
       expect(onPinItem).not.toHaveBeenCalled();
-      expect(screen.queryByTestId('drop-marker-2')).toBeNull();
+      expect(screen.getByTestId('timeline-plan-bar')).toHaveTextContent('queue.timeline.plan.unsaved {"count":1}');
+      // First on its lane now, held for that printer once applied; the job it passed moves along.
+      const moved = bar('Later cup');
+      expect(moved).toHaveAttribute('data-moved', 'true');
+      expect(moved).toHaveAttribute('data-kind', 'reserved');
+      expect(leftOf(moved)).toBeLessThan(leftOf(bar('Any tray')));
+      expect(bar('Pinned box')).toHaveAttribute('data-kind', 'pinned');
+
+      await afterDrop();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.apply/ }));
+      });
+
+      expect(onApplyPlan).toHaveBeenCalledWith({
+        lanes: [
+          { printer_id: 1, item_ids: [1] },
+          { printer_id: 2, item_ids: [4, 2] },
+          { printer_id: 3, item_ids: [] },
+          { printer_id: 4, item_ids: [] },
+        ],
+        reserve: [4],
+      });
+      expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
     });
 
-    it('drops after the last job of a lane', async () => {
-      const onReorder = vi.fn(() => true);
-      renderTimeline({ onReorder });
+    it('moves an "Any" job onto another printer, and nothing else moves', async () => {
+      const onApplyPlan = vi.fn().mockResolvedValue(applied);
+      renderTimeline({ onApplyPlan });
       const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      const laterBefore = leftOf(bar('Later cup'));
 
-      drag(anyBar, 1, 2, 600);
+      drag(anyBar, 4, 2);
       drop();
 
-      expect(onReorder).toHaveBeenCalledWith(2, 1, true);
+      expect(within(lane(4)).getByTitle((title) => title.startsWith('Any tray'))).toBeInTheDocument();
+      expect(within(lane(2)).queryByTitle((title) => title.startsWith('Any tray'))).toBeNull();
+      // Lane 2's next job moves up into the freed time; lane 1 stays as it was.
+      expect(leftOf(bar('Later cup'))).toBeLessThan(laterBefore);
+      await afterDrop();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.apply/ }));
+      });
+      expect(onApplyPlan).toHaveBeenCalledWith(expect.objectContaining({
+        lanes: expect.arrayContaining([{ printer_id: 4, item_ids: [2] }, { printer_id: 2, item_ids: [4] }]),
+        reserve: [2],
+      }));
     });
 
-    it('marks printers the job may not run on and refuses the drop there', async () => {
-      const onReorder = vi.fn(() => true);
-      renderTimeline({ onReorder });
+    it('undoes a move and drops the plan', async () => {
+      renderTimeline({ onApplyPlan: vi.fn().mockResolvedValue(applied) });
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+
+      drag(bar('Any tray'), 4, 2);
+      drop();
+      drag(bar('Later cup'), 4, 2, 600);
+      drop();
+      expect(screen.getByTestId('timeline-plan-bar')).toHaveTextContent('{"count":2}');
+
+      await afterDrop();
+      fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.undo/ }));
+      expect(screen.getByTestId('timeline-plan-bar')).toHaveTextContent('{"count":1}');
+      expect(within(lane(2)).getByTitle((title) => title.startsWith('Later cup'))).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.discard/ }));
+      expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
+      expect(within(lane(2)).getByTitle((title) => title.startsWith('Any tray'))).toBeInTheDocument();
+    });
+
+    it('keeps the plan when it could not be applied', async () => {
+      const onApplyPlan = vi.fn().mockRejectedValue(new Error('nope'));
+      renderTimeline({ onApplyPlan });
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      drag(bar('Any tray'), 4, 2);
+      drop();
+
+      await afterDrop();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.apply/ }));
+      });
+
+      expect(screen.getByTestId('timeline-plan-bar')).toBeInTheDocument();
+    });
+
+    it('marks printers an "Any" job may not wait for and refuses the drop there', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+        reserve_refusals: { '2': { '3': { code: 'model', detail: 'P1S' }, '4': { code: 'offline', detail: null } } },
+      }));
+      const onApplyPlan = vi.fn().mockResolvedValue(applied);
+      renderTimeline({ onApplyPlan });
       const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
 
       drag(anyBar, 3, 2);
       expect(screen.getByTestId('lane-refusal-3')).toHaveTextContent('queue.timeline.refusal.model {"model":"P1S"}');
+      expect(screen.getByTestId('lane-refusal-4')).toHaveTextContent('queue.timeline.refusal.offline');
       expect(screen.queryByTestId('lane-refusal-1')).toBeNull();
       drop();
 
-      expect(onReorder).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
       expect(screen.queryByTestId('lane-refusal-3')).toBeNull();
     });
 
     it('keeps a pinned job on its own lane', async () => {
-      const onReorder = vi.fn(() => true);
-      renderTimeline({ onReorder });
+      renderTimeline({ onApplyPlan: vi.fn() });
       const pinnedBar = await within(lane(1)).findByTitle((title) => title.startsWith('Pinned box'));
 
       drag(pinnedBar, 2, 1);
       expect(screen.getByTestId('lane-refusal-2')).toHaveTextContent('queue.timeline.drop.pinnedElsewhere {"printer":"P1S-01"}');
       drop();
 
-      expect(onReorder).not.toHaveBeenCalled();
-    });
-
-    it('opens the details with the printer offered when a job is dropped on an empty lane', async () => {
-      const onReorder = vi.fn(() => true);
-      renderTimeline({ onReorder, onPinItem: vi.fn() });
-      const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
-
-      drag(anyBar, 4, 2);
-      drop();
-
-      expect(onReorder).not.toHaveBeenCalled();
-      const details = screen.getByTestId('queue-job-details');
-      expect(within(details).getByRole('combobox')).toHaveValue('4');
+      expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
     });
 
     it('does not drag jobs the user may not change, or while the order is not manual', async () => {
-      const onReorder = vi.fn(() => true);
-      const { unmount } = renderTimeline({ onReorder, canModifyItem: () => false });
+      const { unmount } = renderTimeline({ onApplyPlan: vi.fn(), canModifyItem: () => false });
       const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
       drag(anyBar, 1, 2);
       drop();
       expect(screen.queryByTestId('lane-refusal-3')).toBeNull();
       unmount();
 
-      renderTimeline({ onReorder, canReorder: false });
+      renderTimeline({ onApplyPlan: vi.fn(), canReorder: false });
       const again = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
       drag(again, 1, 2);
       drop();
       expect(screen.queryByTestId('lane-refusal-3')).toBeNull();
-      expect(onReorder).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
       expect(screen.getByText('queue.timeline.legend.sjfHint')).toBeInTheDocument();
     });
   });
@@ -273,7 +449,7 @@ describe('QueueTimelineView', () => {
   describe('details', () => {
     it('a click opens the job, and pinning is chosen there', async () => {
       const onPinItem = vi.fn();
-      renderTimeline({ onReorder: vi.fn(() => true), onPinItem });
+      renderTimeline({ onApplyPlan: vi.fn(), onPinItem });
       await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
 
       fireEvent.click(bar('Any tray'));
@@ -323,6 +499,29 @@ describe('QueueTimelineView', () => {
       fireEvent.click(bar('Any tray'));
       expect(screen.getByRole('button', { name: /queue\.timeline\.details\.pinButton/ })).toBeDisabled();
       expect(screen.getByRole('button', { name: /queue\.timeline\.details\.cancel/ })).toBeDisabled();
+    });
+
+    it('shows a job the plan reserved, and releases it from its details', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+        placements: [
+          { item_id: 1, printer_id: 1, start: iso(0), end: iso(1), projected: false },
+          { item_id: 2, printer_id: 2, start: iso(0), end: iso(1), projected: true, reserved: true },
+          { item_id: 4, printer_id: 2, start: iso(3), end: iso(4), projected: true },
+        ],
+        reservations: { '2': { printer_id: 2, active: true } },
+      }));
+      const onReleaseReservation = vi.fn();
+      renderTimeline({ onReleaseReservation, onPinItem: vi.fn() });
+      const tile = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      expect(tile).toHaveAttribute('data-kind', 'reserved');
+
+      fireEvent.click(tile);
+      const reservation = screen.getByTestId('queue-job-reservation');
+      expect(reservation).toHaveTextContent('queue.timeline.details.reserved {"printer":"P1S-02"}');
+      expect(reservation).toHaveTextContent('queue.timeline.details.reservedHelp');
+      fireEvent.click(within(reservation).getByRole('button', { name: /queue\.timeline\.details\.release/ }));
+
+      expect(onReleaseReservation).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }));
     });
 
     it('closes with Escape', async () => {

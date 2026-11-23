@@ -51,14 +51,30 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     wyboru drukarek, lokalizacja, tagi drukarek, drukarki twórcy, offline bez wtyczki Auto On).
     Zadania wstrzymane (ręczny start, brak filamentu itp.) są pod osią z powodem; przypięte,
     które czekają tylko na potwierdzenie czystego stołu, zostają na pasie swojej drukarki.
-    Przeciąganie nierozpoczętego zadania zmienia tylko kolejność (znacznik pokazuje szczelinę,
-    zadanie idzie przed kafelek po prawej) i nigdy nie przypina; przypięte zostaje na swoim pasie,
-    a drukarki, na które nie wolno (inny model G-code, lokalizacja, tagi, wyłączona), są
+    **Tryb planu**: przeciąganie nierozpoczętego zadania niczego nie zapisuje, tylko układa plan
+    (znacznik pokazuje szczelinę; zadanie wchodzi przed kafelek po prawej, na swoim pasie albo
+    innej drukarki, kolejne na tym pasie się przesuwają, reszta stoi). Pasek planu: liczba zmian,
+    „wszystko gotowe” przed/po, Cofnij / Odrzuć / Zastosuj. **Zastosuj** (`POST /queue/plan`,
+    `services/queue_plan.py`) rezerwuje każde przesunięte zadanie „Dowolna” na drukarce, na
+    której stoi (i każde, które inaczej wzięłaby inna drukarka, bo jej pas skończy się
+    wcześniej), oraz układa kolejkę według startów z planu, więc prognoza i scheduler biorą
+    zadania tak, jak je ułożono. **Rezerwacja** (`services/queue_reservations.py`, tabela
+    `custom_queue_reservations`) to miękkie przypięcie: scheduler daje zadaniu tylko tę drukarkę
+    (czeka na nią jak przypięte, np. aż ktoś zdejmie płytę), zadanie dalej jest „Dowolna”;
+    rezerwacja kończy się startem zadania, przypięciem, zmianą modelu/lokalizacji albo
+    „Zwolnij” w szczegółach, i nie obowiązuje, gdy drukarka nie może drukować (wyłączona,
+    offline bez gniazdka Auto On, inny model, poza lokalizacją, drukarki twórcy, tagi). Kafelki
+    zarezerwowane są bursztynowe z kłódką, a karta drukarki pokazuje zarezerwowane zadanie tylko
+    na swojej drukarce. Przypięte zostaje na swoim pasie, a drukarki, na które nie wolno, są
     wyszarzone z powodem. Klik w kafelek otwiera szczegóły zadania (duża miniatura, gdzie i kiedy,
-    czas, waga, filament, tagi) z przypinaniem do wybranej drukarki, odpinaniem, edycją i
-    usuwaniem lub zatrzymaniem; upuszczenie na pusty pas otwiera szczegóły z tą drukarką do
-    przypięcia. Przy „najkrótsze najpierw” kolejności się nie przeciąga. Na telefonie oś
-    przewija się w poziomie. Bez zmian w bazie,
+    czas, waga, filament, tagi, rezerwacja) z przypinaniem do wybranej drukarki, odpinaniem,
+    zwalnianiem rezerwacji, edycją i usuwaniem lub zatrzymaniem. Przy „najkrótsze najpierw”
+    planu się nie układa. Zadanie z wersjami
+    („Dowolna P1S / H2S”) pokazuje na kafelku i w szczegółach wersję, którą weźmie jego drukarka
+    (nazwa, miniatura, czas druku tego pliku, „Dowolna H2S”). Oś ma zoom od 4 h do 3 dni:
+    lupy +/−, Ctrl + kółko lub szczypanie na touchpadzie i dwoma palcami na telefonie (czas pod
+    kursorem zostaje na miejscu); poziom zapamiętuje przeglądarka. Na telefonie oś przewija się
+    w poziomie. Bez zmian w bazie,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,
@@ -71,9 +87,10 @@ wrócić na oficjalny obraz tej samej lub nowszej wersji. Poprawki dokładają d
 bazy wiersze w tabeli ustawień (`hidden_filament_presets`,
 `hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
 `slicer_inbox_manual_start`, `printer_tags`), które oficjalna wersja po prostu pomija,
-i jedną własną tabelę `custom_queue_item_tags` (tagi ustawione zadaniu w oknie druku),
-zakładaną przez `create_all` bez migracji. Oficjalny obraz jej nie zna i nie czyta, więc
-powrót działa jak dotąd; wiersz zadania usuniętego w tym czasie jest pomijany. Pliki
+i dwie własne tabele: `custom_queue_item_tags` (tagi ustawione zadaniu w oknie druku) i
+`custom_queue_reservations` (rezerwacje z planu osi czasu), zakładane przez `create_all` bez
+migracji. Oficjalny obraz ich nie zna i nie czyta, więc powrót działa jak dotąd (zarezerwowane
+zadania wracają do „Dowolna”); wiersz zadania usuniętego w tym czasie jest pomijany. Pliki
 wysłane z OrcaSlicer to zwykłe pliki biblioteki (z `source_type = "orcaslicer"`),
 więc po powrocie na oficjalny obraz zostają w folderze „OrcaSlicer”.
 

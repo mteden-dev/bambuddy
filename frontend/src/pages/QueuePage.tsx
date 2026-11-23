@@ -72,7 +72,7 @@ import { type TimeFormat, formatETA, formatDuration, formatRelativeTime, parseUT
 import { getBedTypeInfo } from '../utils/bedType';
 import { getColorName } from '../utils/colors';
 import { productLineOf, useFilamentNameByIdx } from '../components/PrintModal/useFilamentLabels';
-import type { PrintQueueItem, PrintQueueBulkUpdate, Permission, CalibrationMode, PrinterStatus, SlotSpoolIdentity } from '../api/client';
+import type { PrintQueueItem, PrintQueueBulkUpdate, Permission, CalibrationMode, PrinterStatus, QueuePlan, SlotSpoolIdentity } from '../api/client';
 import { formatSlotLabel, getEmptySlotKind, isAmsHtUnit } from '../utils/amsHelpers';
 import { locateTray, trayLayoutOf } from '../utils/trayIds';
 import type { PlateMetadata } from '../types/plates';
@@ -2061,23 +2061,32 @@ export function QueuePage() {
     onError: () => showToast(t('queue.toast.updateFailed'), 'error'),
   });
 
-  // A job dragged on the timeline (fork): just before (or after) another in the
-  // one queue order every printer shares, whatever the list's sort or filter.
-  // False when it was dropped where it already was.
-  const timelineReorder = (itemId: number, anchorId: number, placeAfter: boolean): boolean => {
-    const ordered = (queue ?? [])
-      .filter((i) => i.status === 'pending')
-      .sort((a, b) => compareQueueOrder(a, b, false));
-    const moving = ordered.find((i) => i.id === itemId);
-    const remaining = ordered.filter((i) => i.id !== itemId);
-    let insertAt = remaining.findIndex((i) => i.id === anchorId);
-    if (!moving || insertAt === -1) return false;
-    if (placeAfter) insertAt += 1;
-    const reordered = [...remaining.slice(0, insertAt), moving, ...remaining.slice(insertAt)];
-    if (reordered.every((item, index) => item.id === ordered[index].id)) return false;
-    reorderMutation.mutate(reordered.map((item, index) => ({ id: item.id, position: index + 1 })));
-    return true;
-  };
+  // The plan laid out on the timeline (fork): moved "Any" jobs are held for
+  // the printer they were put on, and the queue is ordered as laid out.
+  const timelinePlanMutation = useMutation({
+    mutationFn: (plan: QueuePlan) => api.applyQueuePlan(plan),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      showToast(
+        result.moved_elsewhere.length > 0
+          ? `${t('queue.timeline.plan.applied', { count: result.reserved.length })} ${t('queue.timeline.plan.elsewhere', { count: result.moved_elsewhere.length })}`
+          : t('queue.timeline.plan.applied', { count: result.reserved.length }),
+        result.moved_elsewhere.length > 0 ? 'warning' : 'success',
+      );
+    },
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      showToast(`${t('queue.timeline.plan.failed')}: ${error.message}`, 'error');
+    },
+  });
+  const timelineReleaseMutation = useMutation({
+    mutationFn: (item: PrintQueueItem) => api.releaseQueueReservation(item.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      showToast(t('queue.timeline.details.releasedToast'));
+    },
+    onError: (error: Error) => showToast(`${t('queue.timeline.drop.failed')}: ${error.message}`, 'error'),
+  });
 
   // A job pinned from the timeline's details: to a printer, or back to any
   // printer of a model.
@@ -3002,10 +3011,13 @@ export function QueuePage() {
           printers={printers || []}
           printerStatuses={printerStatusMap}
           sjfEnabled={settings?.queue_shortest_first ?? false}
-          // Fork: dragging only orders; a click opens the job's details, where
-          // it is pinned, edited, removed or stopped.
-          onReorder={timelineReorder}
-          canReorder={hasPermission('queue:reorder') && !settings?.queue_shortest_first}
+          // Fork: dragging lays out a plan, applied in one go; a click opens the
+          // job's details, where it is pinned, released, edited, removed or stopped.
+          onApplyPlan={(plan) => timelinePlanMutation.mutateAsync(plan)}
+          canReorder={
+            hasPermission('queue:reorder') && hasPermission('queue:update_all') && !settings?.queue_shortest_first
+          }
+          onReleaseReservation={(item) => timelineReleaseMutation.mutate(item)}
           onPinItem={(item, target) => timelineMoveMutation.mutate({ item, target })}
           canModifyItem={(item) => canModify('queue', 'update', item.created_by_id)}
           onEditItem={setEditItem}

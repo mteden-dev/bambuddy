@@ -71,6 +71,7 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         ("print_log_entries", "queue_item_id"),
         ("print_queue_variants", "queue_item_id"),
         ("custom_queue_item_tags", "queue_item_id"),  # fork: printer tags
+        ("custom_queue_reservations", "queue_item_id"),  # fork: timeline reservations
         ("wallet_transactions", "print_queue_id"),
         # print_batches
         ("print_batch_plates", "batch_id"),
@@ -94,6 +95,9 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         ("slicer_pipelines", "target_printer_id"),
         # A deleted printer's spools would stay "assigned" to it (SA-1).
         ("spool_assignment", "printer_id"),
+        # Fork: a job reserved on the timeline would wait for the next printer
+        # given the id.
+        ("custom_queue_reservations", "printer_id"),
         # A printer given a deleted one's id would never be told about the
         # faults that printer was notified about (#3486).
         ("hms_notified_faults", "printer_id"),

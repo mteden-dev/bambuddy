@@ -65,7 +65,9 @@ jobs:
             backend/tests/integration/test_library_variants_api.py \
             backend/tests/integration/test_queue_variants_api.py \
             backend/tests/unit/test_queue_forecast.py \
-            backend/tests/integration/test_queue_forecast_api.py
+            backend/tests/integration/test_queue_forecast_api.py \
+            backend/tests/unit/test_queue_reservations_fork.py \
+            backend/tests/integration/test_queue_plan_api.py
 
       - uses: actions/setup-node@v6
         with:

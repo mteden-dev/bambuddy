@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, type ReactNode } from 'react';
+import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   DndContext,
@@ -17,30 +17,79 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import { ChevronLeft, ChevronRight, Clock, Layers, Pin, Printer as PrinterIcon, Shuffle } from 'lucide-react';
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Layers,
+  Lock,
+  PencilRuler,
+  Pin,
+  Printer as PrinterIcon,
+  Shuffle,
+  Undo2,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { formatDuration, parseUTCDate } from '../utils/date';
 import { api } from '../api/client';
-import type { PrintQueueItem, Printer, QueueForecast, QueueForecastRefusal } from '../api/client';
-import { queueItemThumbnailUrl } from '../utils/queueItemThumbnail';
+import type {
+  PrintQueueItem,
+  Printer,
+  QueueForecast,
+  QueueForecastRefusal,
+  QueueForecastVariant,
+  QueuePlan,
+  QueuePlanResult,
+} from '../api/client';
+import { queueJobModels, queueJobName, queueJobPrintTime, queueJobThumbnailUrl } from '../utils/queueJobDisplay';
 import { Button } from './Button';
 import { QueueJobDetails, type QueuePinTarget } from './QueueJobDetails';
 
-/** Gantt-style 24h-rolling timeline. One horizontal swimlane per printer. A
+/** Gantt-style rolling timeline. One horizontal swimlane per printer. A
  *  print that is running is drawn from the printer's live status; every
  *  pending job is drawn where the server's forecast (GET /queue/forecast)
  *  expects the scheduler to run it, including jobs for "Any <model>", which
  *  land on the printer they are expected to get (drawn dashed, as a forecast,
- *  while jobs pinned to a printer are solid). A job that has not started is
- *  dragged to change the queue order: dropped between two jobs, it goes before
- *  the one on the right. Dragging never pins it; a click opens the job's
- *  details, where it is pinned to a printer or handed back to any of its model
- *  (fork). Printers it may not run on (another model, outside its location,
- *  printer tags…), and other printers than its own for a pinned job, refuse
- *  the drop and say why. */
+ *  while jobs pinned to a printer are solid) (fork).
+ *
+ *  Dragging a job that has not started lays out a plan, saved nowhere until
+ *  it is applied: the job goes into the gap it is dropped in, on its own lane
+ *  or another printer's, the jobs after it on that lane move along, and
+ *  nothing else moves. Applying the plan (POST /queue/plan) holds each moved
+ *  "Any" job for the printer it was put on and orders the queue as laid out.
+ *  A pinned job stays on its lane; printers an "Any" job may not wait for
+ *  (another model, outside its location, printer tags, offline…) refuse the
+ *  drop and say why. A click opens the job's details, where it is pinned to a
+ *  printer, handed back to any of its model or released from its printer. */
 
 const HOUR_MS = 60 * 60 * 1000;
-const RANGE_HOURS = 24;
-const RANGE_MS = RANGE_HOURS * HOUR_MS;
+// Zoom (fork): how many hours the window shows, from close up to three days.
+const ZOOM_HOURS = [4, 8, 12, 24, 48, 72];
+const DEFAULT_ZOOM = ZOOM_HOURS.indexOf(24);
+const ZOOM_STORAGE_KEY = 'queueTimelineZoomHours';
+// Hours between axis ticks at each zoom: about six to twelve labels.
+function tickStepHours(rangeHours: number): number {
+  if (rangeHours <= 4) return 0.5;
+  if (rangeHours <= 12) return 1;
+  if (rangeHours <= 24) return 2;
+  if (rangeHours <= 48) return 4;
+  return 6;
+}
+function storedZoom(): number {
+  try {
+    const index = ZOOM_HOURS.indexOf(Number(localStorage.getItem(ZOOM_STORAGE_KEY)));
+    return index === -1 ? DEFAULT_ZOOM : index;
+  } catch {
+    return DEFAULT_ZOOM;
+  }
+}
+// Trackpad pinch arrives as ctrl+wheel in small steps: this much makes one zoom step.
+const WHEEL_ZOOM_STEP = 40;
+// A two-finger pinch zooms a step each time the fingers spread or close this much.
+const PINCH_ZOOM_RATIO = 1.3;
 // Minimum bar width — short prints (a few minutes) would otherwise render as
 // 1-2px slivers and be unclickable. 32px keeps them at thumb size.
 const MIN_BAR_PX = 32;
@@ -69,6 +118,18 @@ interface ScheduleEvent {
   type: 'printing' | 'queued';
   /** Placed by the forecast for an "Any <model>" job, not pinned by the user. */
   projected?: boolean;
+  /** For a job with alternatives: the one its printer takes. */
+  variant?: QueueForecastVariant | null;
+  /** An "Any" job held for this printer: by the plan applied, or the one laid out. */
+  reserved?: boolean;
+  /** Moved in the plan being laid out, not applied yet. */
+  moved?: boolean;
+}
+
+/** The plan being laid out: each printer's queued jobs in order, and the jobs moved. */
+interface Draft {
+  lanes: Record<number, number[]>;
+  moved: number[];
 }
 
 /** Where a job is moved to: a printer, or back to any printer of a model. */
@@ -81,12 +142,13 @@ interface QueueTimelineViewProps {
   /** `queue_shortest_first`. Dispatch order depends on it, and with it where
    *  every job is forecast to run (#3043), so toggling it refetches. */
   sjfEnabled: boolean;
-  /** Put a job just before (or, at the end of a lane, just after) another in
-   *  the queue order. Without it, or without `canReorder`, nothing is dragged.
-   *  Returns false when the job was dropped where it already was. */
-  onReorder?: (itemId: number, anchorId: number, placeAfter: boolean) => boolean;
-  /** Manual order applies: queue:reorder and shortest-first off. */
+  /** Apply the plan laid out on the lanes. Without it, or without
+   *  `canReorder`, nothing is dragged. Rejects when it was not applied. */
+  onApplyPlan?: (plan: QueuePlan) => Promise<QueuePlanResult>;
+  /** Manual order applies: the right to reorder the queue and shortest-first off. */
   canReorder?: boolean;
+  /** Hand a job the plan reserved back to any printer of its model. */
+  onReleaseReservation?: (item: PrintQueueItem) => void;
   /** Pin a job to a printer, or hand it back to any printer of a model. */
   onPinItem?: (item: PrintQueueItem, target: QueueMoveTarget) => void;
   /** Whether the user may change this job (its owner or queue:update_all). */
@@ -105,8 +167,16 @@ function formatTooltipTime(date: Date): string {
   return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
-function displayNameOf(item: PrintQueueItem): string {
-  return item.archive_name || item.library_file_name || `#${item.id}`;
+/** A printer model for comparing: "P1S", "p1s" and "P1-S" are one. */
+function modelKey(model: string | null | undefined): string {
+  return (model ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** "Any P1S" for the bar: the model of the alternative its printer takes, if any. */
+function anyModelLabel(ev: ScheduleEvent, t: QueueTimelineViewProps['t']): string | null {
+  if (!ev.projected) return null;
+  const model = ev.variant?.target_model ?? ev.item.target_model;
+  return model ? `${t('queue.filter.any')} ${model}` : null;
 }
 
 function refusalText(refusal: QueueForecastRefusal, t: QueueTimelineViewProps['t']): string {
@@ -122,6 +192,8 @@ function refusalText(refusal: QueueForecastRefusal, t: QueueTimelineViewProps['t
         : t('queue.timeline.refusal.modelUnknown');
     case 'location':
       return t('queue.timeline.refusal.location', { location: refusal.detail ?? '' });
+    case 'offline':
+      return t('queue.timeline.refusal.offline');
     default:
       return t('queue.timeline.refusal.other');
   }
@@ -151,14 +223,16 @@ function TimelineBar({
     data: { item: ev.item },
     disabled: !draggable,
   });
-  const displayName = displayNameOf(ev.item);
+  const displayName = queueJobName(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
+  const printTime = queueJobPrintTime(ev.item, ev.variant);
+  const models = queueJobModels(ev.item);
   const tooltipParts = [
     displayName,
     `${formatTooltipTime(ev.estimatedStart)} → ${formatTooltipTime(ev.estimatedEnd)}`,
-    ev.item.print_time_seconds ? formatDuration(ev.item.print_time_seconds) : null,
+    printTime ? formatDuration(printTime) : null,
     isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null,
-    ev.projected && ev.item.target_model ? `${t('queue.filter.any')} ${ev.item.target_model}` : null,
+    ev.projected && models.length > 0 ? `${t('queue.filter.any')} ${models.join(' / ')}` : null,
     ev.item.batch_name ? `batch: ${ev.item.batch_name}` : null,
   ].filter(Boolean).join(' · ');
   return (
@@ -169,10 +243,11 @@ function TimelineBar({
       onClick={onClick}
       title={tooltipParts}
       data-bar-item={ev.item.id}
-      data-kind={isPrinting ? 'printing' : ev.projected ? 'projected' : 'pinned'}
+      data-kind={isPrinting ? 'printing' : ev.reserved ? 'reserved' : ev.projected ? 'projected' : 'pinned'}
+      data-moved={ev.moved ? 'true' : undefined}
       className={`absolute rounded-md transition-[filter,opacity] hover:brightness-110 hover:z-10 overflow-hidden flex items-center gap-1.5 px-1.5 text-left ${barClasses(ev)} ${
-        draggable ? 'cursor-grab active:cursor-grabbing' : ''
-      } ${isDragging || dimmed ? 'opacity-40' : ''}`}
+        ev.moved ? 'ring-2 ring-amber-300/80 ring-offset-1 ring-offset-bambu-dark-secondary' : ''
+      } ${draggable ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging || dimmed ? 'opacity-40' : ''}`}
       style={{
         left: `${leftPct}%`,
         width: `max(${MIN_BAR_PX}px, ${widthPct}%)`,
@@ -187,6 +262,8 @@ function TimelineBar({
 
 function barClasses(ev: ScheduleEvent): string {
   if (ev.type === 'printing') return 'bg-blue-500/30 border border-blue-400/60';
+  // Held for its printer: solid like a pinned job, amber like the plan.
+  if (ev.reserved) return 'bg-amber-500/15 border border-amber-400/60';
   const batched = ev.item.batch_id != null;
   if (ev.projected) {
     return batched
@@ -197,11 +274,12 @@ function barClasses(ev: ScheduleEvent): string {
 }
 
 function BarContent({ ev, t }: { ev: ScheduleEvent; t: QueueTimelineViewProps['t'] }) {
-  const thumbnailUrl = queueItemThumbnailUrl(ev.item);
+  const thumbnailUrl = queueJobThumbnailUrl(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
+  const printTime = queueJobPrintTime(ev.item, ev.variant);
   const second = [
-    ev.projected && ev.item.target_model ? `${t('queue.filter.any')} ${ev.item.target_model}` : null,
-    ev.item.print_time_seconds ? formatDuration(ev.item.print_time_seconds) : null,
+    anyModelLabel(ev, t),
+    printTime ? formatDuration(printTime) : null,
     isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null,
   ].filter(Boolean).join(' · ');
   return (
@@ -211,10 +289,12 @@ function BarContent({ ev, t }: { ev: ScheduleEvent; t: QueueTimelineViewProps['t
       )}
       <div className="min-w-0 flex-1">
         <div className="text-xs text-white font-medium truncate leading-tight flex items-center gap-1">
-          {!isPrinting && (ev.projected
-            ? <Shuffle className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />
-            : <Pin className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />)}
-          <span className="truncate">{displayNameOf(ev.item)}</span>
+          {!isPrinting && (ev.reserved
+            ? <Lock className="w-3 h-3 shrink-0 text-amber-300" aria-hidden />
+            : ev.projected
+              ? <Shuffle className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />
+              : <Pin className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />)}
+          <span className="truncate">{queueJobName(ev.item, ev.variant)}</span>
         </div>
         <div className="text-[10px] text-bambu-gray truncate leading-tight">{second}</div>
       </div>
@@ -294,14 +374,14 @@ function OffTimelineChip({
     data: { item },
     disabled: !draggable,
   });
-  const thumbnailUrl = queueItemThumbnailUrl(item);
+  const thumbnailUrl = queueJobThumbnailUrl(item);
   return (
     <button
       ref={setNodeRef}
       {...attributes}
       {...listeners}
       onClick={onClick}
-      title={`${displayNameOf(item)} · ${reason}`}
+      title={`${queueJobName(item)} · ${reason}`}
       className={`flex items-center gap-2 max-w-[260px] rounded-md border border-bambu-dark-tertiary bg-bambu-dark/60 px-2 py-1 text-left hover:brightness-110 ${
         draggable ? 'cursor-grab active:cursor-grabbing' : ''
       } ${isDragging ? 'opacity-40' : ''}`}
@@ -310,7 +390,7 @@ function OffTimelineChip({
         <img src={thumbnailUrl} alt="" className="w-6 h-6 rounded object-cover shrink-0" draggable={false} />
       )}
       <div className="min-w-0">
-        <div className="text-xs text-white truncate">{displayNameOf(item)}</div>
+        <div className="text-xs text-white truncate">{queueJobName(item)}</div>
         <div className="text-[10px] text-bambu-gray truncate">{reason}</div>
       </div>
     </button>
@@ -322,8 +402,9 @@ export function QueueTimelineView({
   printers,
   printerStatuses,
   sjfEnabled,
-  onReorder,
+  onApplyPlan,
   canReorder = true,
+  onReleaseReservation,
   onPinItem,
   canModifyItem,
   onEditItem,
@@ -338,18 +419,105 @@ export function QueueTimelineView({
     return () => clearInterval(interval);
   }, []);
 
-  // User can shift the window forward/back in 12h steps. Default = current
-  // time, so the timeline reads "next 24h from now."
+  // User can shift the window forward/back by half its width. Default =
+  // current time, so the timeline reads "next 24h from now."
   const [windowOffsetMs, setWindowOffsetMs] = useState(0);
+  const [zoomIndex, setZoomIndex] = useState(storedZoom);
+  const rangeHours = ZOOM_HOURS[zoomIndex];
+  const rangeMs = rangeHours * HOUR_MS;
+  const stepHours = tickStepHours(rangeHours);
+  useEffect(() => {
+    try {
+      localStorage.setItem(ZOOM_STORAGE_KEY, String(rangeHours));
+    } catch {
+      // Private mode: the zoom is just not remembered.
+    }
+  }, [rangeHours]);
 
-  // Round the window start down to the previous full hour so the axis ticks
-  // land on whole hours.
+  // Round the window start down to the previous full hour (half hour when
+  // zoomed in closest) so the axis ticks land on whole hours.
   const rangeStartMs = useMemo(() => {
     const target = now.getTime() + windowOffsetMs;
-    return Math.floor(target / HOUR_MS) * HOUR_MS;
-  }, [now, windowOffsetMs]);
-  const rangeEndMs = rangeStartMs + RANGE_MS;
+    const align = Math.min(stepHours, 1) * HOUR_MS;
+    return Math.floor(target / align) * align;
+  }, [now, windowOffsetMs, stepHours]);
+  const rangeEndMs = rangeStartMs + rangeMs;
   const nowMs = now.getTime();
+
+  // Zoom one step in (-1) or out (+1). With a point to hold (the pointer, the
+  // middle of a pinch) the time under it stays put; else the window's start does.
+  const axisRef = useRef<HTMLDivElement>(null);
+  const zoomBy = (direction: -1 | 1, clientX?: number) => {
+    const next = Math.min(ZOOM_HOURS.length - 1, Math.max(0, zoomIndex + direction));
+    if (next === zoomIndex) return;
+    const rect = axisRef.current?.getBoundingClientRect();
+    if (clientX != null && rect && rect.width > 0) {
+      const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      const heldMs = rangeStartMs + fraction * rangeMs;
+      const nextStart = heldMs - fraction * ZOOM_HOURS[next] * HOUR_MS;
+      const offset = nextStart - nowMs;
+      // Close to now counts as now, so "Now" does not appear for a rounding.
+      setWindowOffsetMs(Math.abs(offset) < HOUR_MS / 2 ? 0 : offset);
+    }
+    setZoomIndex(next);
+  };
+  // The listeners below are attached once; they call the latest zoomBy.
+  const zoomByRef = useRef(zoomBy);
+  zoomByRef.current = zoomBy;
+
+  // Pinch to zoom: ctrl/cmd + wheel (a trackpad pinch) and two fingers on a
+  // touch screen. Native listeners, since React's are passive and could not
+  // stop the browser zooming the whole page instead.
+  const chartRef = useRef<HTMLDivElement>(null);
+  const hasLanes = printers.length > 0;
+  useEffect(() => {
+    const el = chartRef.current;
+    if (!el) return;
+    let wheel = 0;
+    let pinch: number | null = null;
+    const spread = (touches: TouchList) =>
+      Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      wheel += e.deltaY;
+      if (Math.abs(wheel) < WHEEL_ZOOM_STEP) return;
+      // Spreading the fingers (or scrolling up) zooms in.
+      zoomByRef.current(wheel < 0 ? -1 : 1, e.clientX);
+      wheel = 0;
+    };
+    const onTouchStart = (e: TouchEvent) => {
+      pinch = e.touches.length === 2 ? spread(e.touches) : null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (pinch == null || e.touches.length !== 2) return;
+      e.preventDefault();
+      const current = spread(e.touches);
+      const middle = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      if (current / pinch >= PINCH_ZOOM_RATIO) {
+        zoomByRef.current(-1, middle);
+        pinch = current;
+      } else if (pinch / current >= PINCH_ZOOM_RATIO) {
+        zoomByRef.current(1, middle);
+        pinch = current;
+      }
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinch = null;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd);
+    el.addEventListener('touchcancel', onTouchEnd);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchEnd);
+    };
+  }, [hasLanes]);
 
   // What the forecast depends on, so it is fetched again as soon as the queue
   // changes (a job added, moved, started) rather than at the next poll. Under
@@ -375,11 +543,69 @@ export function QueueTimelineView({
     [forecast],
   );
 
-  // A move just dropped: drawn faded until the forecast comes back with it.
-  const [movingIds, setMovingIds] = useState<Set<number>>(() => new Set());
+  // ── The plan being laid out ──────────────────────────────────────────────
+  // Nothing is saved until it is applied; until then the lanes show the plan.
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [history, setHistory] = useState<Draft[]>([]);
+  const [applying, setApplying] = useState(false);
+  // An applied plan stays drawn until the forecast that follows it comes back.
+  const [settlingSince, setSettlingSince] = useState<string | null>(null);
   useEffect(() => {
-    setMovingIds(new Set());
-  }, [forecast]);
+    if (settlingSince != null && forecast && forecast.generated_at !== settlingSince) {
+      setDraft(null);
+      setHistory([]);
+      setSettlingSince(null);
+    }
+  }, [forecast, settlingSince]);
+  const planOpen = draft != null && draft.moved.length > 0 && settlingSince == null;
+  // Leaving the page would lose it.
+  useEffect(() => {
+    if (!planOpen) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [planOpen]);
+
+  const offTimelineIds = useMemo(
+    () => new Set((forecast?.off_timeline ?? []).map((entry) => entry.item_id)),
+    [forecast],
+  );
+  // Each printer's queued jobs as forecast, in order.
+  const forecastLanes = useMemo(() => {
+    const lanes: Record<number, number[]> = {};
+    const placements = [...(forecast?.placements ?? [])].sort(
+      (a, b) => (parseUTCDate(a.start)?.getTime() ?? 0) - (parseUTCDate(b.start)?.getTime() ?? 0),
+    );
+    for (const p of placements) {
+      if (itemsById.get(p.item_id)?.status !== 'pending') continue;
+      (lanes[p.printer_id] ??= []).push(p.item_id);
+    }
+    return lanes;
+  }, [forecast, itemsById]);
+  // The plan's lanes, kept up with the queue: a job that started or left drops
+  // out, one that arrived since goes at the end of the lane it is forecast on.
+  const planLanes = useMemo(() => {
+    if (!draft) return null;
+    const lanes: Record<number, number[]> = {};
+    const inPlan = new Set<number>();
+    for (const [printerId, ids] of Object.entries(draft.lanes)) {
+      lanes[Number(printerId)] = ids.filter(
+        (id) => itemsById.get(id)?.status === 'pending' && !offTimelineIds.has(id),
+      );
+      ids.forEach((id) => inPlan.add(id));
+    }
+    for (const [printerId, ids] of Object.entries(forecastLanes)) {
+      for (const id of ids) if (!inPlan.has(id)) (lanes[Number(printerId)] ??= []).push(id);
+    }
+    return lanes;
+  }, [draft, forecastLanes, itemsById, offTimelineIds]);
+
+  // The alternative (#671) a printer prints of a job, for its name and time on that lane.
+  const variantOn = (item: PrintQueueItem, printer: Printer): QueueForecastVariant | null => {
+    const variants = forecast?.variants?.[String(item.id)];
+    const key = modelKey(printer.model);
+    return variants?.find((v) => modelKey(v.target_model) === key) ?? null;
+  };
 
   const events = useMemo<ScheduleEvent[]>(() => {
     const result: ScheduleEvent[] = [];
@@ -405,28 +631,78 @@ export function QueueTimelineView({
         type: 'printing',
       });
     }
+    return result;
+  }, [queueItems, printerStatuses, nowMs]);
+
+  // Queued jobs on each lane: where the forecast has them, or where the plan does.
+  const queuedByPrinter = useMemo(() => {
+    const map = new Map<number, ScheduleEvent[]>();
+    if (planLanes && draft) {
+      // Back to back from when the printer is free, as the forecast replays them.
+      for (const printer of printers) {
+        const free = parseUTCDate(lanePrinterState.get(printer.id)?.free_at)?.getTime() ?? nowMs;
+        let t = Math.max(free, nowMs);
+        for (const id of planLanes[printer.id] ?? []) {
+          const item = itemsById.get(id);
+          if (!item) continue;
+          const variant = variantOn(item, printer);
+          const scheduled = parseUTCDate(item.scheduled_time)?.getTime();
+          if (scheduled != null && scheduled > t) t = scheduled;
+          const duration = (variant?.print_time_seconds ?? item.print_time_seconds ?? 3600) * 1000;
+          const moved = draft.moved.includes(id);
+          const reservation = forecast?.reservations?.[String(id)];
+          if (!map.has(printer.id)) map.set(printer.id, []);
+          map.get(printer.id)!.push({
+            item,
+            estimatedStart: new Date(t),
+            estimatedEnd: new Date(t + duration),
+            type: 'queued',
+            projected: item.printer_id == null,
+            variant,
+            moved,
+            reserved: item.printer_id == null
+              && (moved || (reservation?.active === true && reservation.printer_id === printer.id)),
+          });
+          t += duration;
+        }
+      }
+      return map;
+    }
     for (const placement of forecast?.placements ?? []) {
       const item = itemsById.get(placement.item_id);
       if (!item || item.status !== 'pending') continue;
       const start = parseUTCDate(placement.start);
       const end = parseUTCDate(placement.end);
       if (!start || !end) continue;
-      result.push({ item, estimatedStart: start, estimatedEnd: end, type: 'queued', projected: placement.projected });
+      if (!map.has(placement.printer_id)) map.set(placement.printer_id, []);
+      map.get(placement.printer_id)!.push({
+        item,
+        estimatedStart: start,
+        estimatedEnd: end,
+        type: 'queued',
+        projected: placement.projected,
+        variant: placement.variant ?? null,
+        reserved: placement.reserved ?? false,
+      });
     }
-    return result;
-  }, [queueItems, printerStatuses, nowMs, forecast, itemsById]);
+    return map;
+    // variantOn reads forecast, which is listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planLanes, draft, printers, lanePrinterState, nowMs, itemsById, forecast]);
 
   const eventsByPrinter = useMemo(() => {
     const map = new Map<number, ScheduleEvent[]>();
-    const placementPrinter = new Map((forecast?.placements ?? []).map((p) => [p.item_id, p.printer_id]));
     for (const ev of events) {
-      const printerId = ev.type === 'printing' ? ev.item.printer_id : placementPrinter.get(ev.item.id);
-      if (printerId == null) continue;
-      if (!map.has(printerId)) map.set(printerId, []);
-      map.get(printerId)!.push(ev);
+      if (ev.item.printer_id == null) continue;
+      if (!map.has(ev.item.printer_id)) map.set(ev.item.printer_id, []);
+      map.get(ev.item.printer_id)!.push(ev);
+    }
+    for (const [printerId, queued] of queuedByPrinter) {
+      map.set(printerId, [...(map.get(printerId) ?? []), ...queued]);
     }
     return map;
-  }, [events, forecast]);
+  }, [events, queuedByPrinter]);
+  const allEvents = useMemo(() => Array.from(eventsByPrinter.values()).flat(), [eventsByPrinter]);
 
   const offTimeline = useMemo(
     () => (forecast?.off_timeline ?? [])
@@ -438,35 +714,41 @@ export function QueueTimelineView({
 
   const hourTicks = useMemo(() => {
     const ticks: { ms: number; pct: number; label: string }[] = [];
-    for (let h = 0; h <= RANGE_HOURS; h += 2) {
+    for (let h = 0; h <= rangeHours; h += stepHours) {
       const ms = rangeStartMs + h * HOUR_MS;
-      ticks.push({
-        ms,
-        pct: (h / RANGE_HOURS) * 100,
-        label: formatHour(new Date(ms)),
-      });
+      const date = new Date(ms);
+      // Half hours need the minutes; over a day, the first tick of a day names it.
+      const label = stepHours < 1
+        ? formatTooltipTime(date)
+        : rangeHours > 24 && date.getHours() < stepHours
+          ? `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${formatHour(date)}`
+          : formatHour(date);
+      ticks.push({ ms, pct: (h / rangeHours) * 100, label });
     }
     return ticks;
-  }, [rangeStartMs]);
+  }, [rangeStartMs, rangeHours, stepHours]);
 
-  const nowPct = ((nowMs - rangeStartMs) / RANGE_MS) * 100;
+  const nowPct = ((nowMs - rangeStartMs) / rangeMs) * 100;
   const nowInView = nowPct >= 0 && nowPct <= 100;
 
-  // Aggregated "all done by" across the entire (un-windowed) event set.
+  // Aggregated "all done by" across the entire (un-windowed) event set: the
+  // plan's while one is laid out, and the forecast's to compare with.
   const allDoneBy = useMemo(() => {
     let latest = 0;
-    for (const ev of events) latest = Math.max(latest, ev.estimatedEnd.getTime());
+    for (const ev of allEvents) latest = Math.max(latest, ev.estimatedEnd.getTime());
     return latest > 0 ? new Date(latest) : null;
-  }, [events]);
+  }, [allEvents]);
+  const forecastDoneBy = useMemo(() => {
+    let latest = 0;
+    for (const ev of events) latest = Math.max(latest, ev.estimatedEnd.getTime());
+    for (const p of forecast?.placements ?? []) latest = Math.max(latest, parseUTCDate(p.end)?.getTime() ?? 0);
+    return latest > 0 ? new Date(latest) : null;
+  }, [events, forecast]);
 
-  // ── Drag and drop: the queue order ─────────────────────────────────────────
+  // ── Drag and drop: laying out the plan ────────────────────────────────────
   const mayModify = (item: PrintQueueItem): boolean => (canModifyItem ? canModifyItem(item) : true);
   const isDraggable = (item: PrintQueueItem): boolean =>
-    onReorder != null
-    && canReorder
-    && item.status === 'pending'
-    && !(item.variants && item.variants.length > 0)
-    && mayModify(item);
+    onApplyPlan != null && canReorder && item.status === 'pending' && settlingSince == null && mayModify(item);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
@@ -475,8 +757,8 @@ export function QueueTimelineView({
   );
   const [dragItem, setDragItem] = useState<PrintQueueItem | null>(null);
   const dragEvent = useMemo(
-    () => (dragItem ? events.find((ev) => ev.item.id === dragItem.id) ?? null : null),
-    [dragItem, events],
+    () => (dragItem ? allEvents.find((ev) => ev.item.id === dragItem.id) ?? null : null),
+    [dragItem, allEvents],
   );
   // The gap the dragged job would drop into.
   const [dropTarget, setDropTarget] = useState<{
@@ -489,8 +771,8 @@ export function QueueTimelineView({
   const laneDragState = (printerId: number) => {
     if (!dragItem) return null;
     if (dragItem.printer_id != null) {
-      // Dragging changes the order, not the printer: a pinned job stays on its
-      // own lane. Moving it is a choice made in its details.
+      // A pinned job keeps its printer: on its lane it only changes place.
+      // Moving it is a choice made in its details.
       return dragItem.printer_id === printerId
         ? { allowed: true, reason: null }
         : {
@@ -500,7 +782,9 @@ export function QueueTimelineView({
             }),
           };
     }
-    const refusal = forecast?.refusals[String(dragItem.id)]?.[String(printerId)];
+    // An "Any" job put on a lane waits for that printer: the scheduler's rule.
+    const refusals = forecast?.reserve_refusals ?? forecast?.refusals;
+    const refusal = refusals?.[String(dragItem.id)]?.[String(printerId)];
     if (refusal) {
       return { allowed: false, reason: refusalText(refusal, t), title: refusal.detail ?? undefined };
     }
@@ -562,30 +846,66 @@ export function QueueTimelineView({
   // The job whose details are open, and a printer to offer for pinning.
   const [details, setDetails] = useState<{ itemId: number; suggestedPrinterId?: number } | null>(null);
 
+  // A drop puts the job into the gap, on its lane or another, in the plan.
   const handleDragEnd = (event: DragEndEvent) => {
     const item = dragItem;
     const target = gapFor(event);
     setDragItem(null);
     setDropTarget(null);
-    if (!item || !target || !onReorder) return;
-    if (target.anchorId != null) {
-      if (onReorder(item.id, target.anchorId, target.placeAfter)) {
-        setMovingIds((ids) => new Set(ids).add(item.id));
-      }
-    } else if (item.printer_id == null) {
-      // An empty lane has no order to join: the way to put a job there is to
-      // pin it, so its details open with that printer offered.
-      setDetails({ itemId: item.id, suggestedPrinterId: target.printerId });
+    if (!item || !target || !onApplyPlan) return;
+    const base: Draft = draft && planLanes ? { lanes: planLanes, moved: draft.moved } : { lanes: forecastLanes, moved: [] };
+    const lanes: Record<number, number[]> = {};
+    for (const [printerId, ids] of Object.entries(base.lanes)) {
+      lanes[Number(printerId)] = ids.filter((id) => id !== item.id);
+    }
+    const lane = [...(lanes[target.printerId] ?? [])];
+    let index = target.anchorId == null ? -1 : lane.indexOf(target.anchorId);
+    index = index === -1 ? lane.length : index + (target.placeAfter ? 1 : 0);
+    lane.splice(index, 0, item.id);
+    lanes[target.printerId] = lane;
+    const unchanged = Object.keys({ ...lanes, ...base.lanes }).every(
+      (printerId) => (lanes[Number(printerId)] ?? []).join() === (base.lanes[Number(printerId)] ?? []).join(),
+    );
+    if (unchanged) return;
+    setHistory((past) => [...past, base]);
+    setDraft({ lanes, moved: base.moved.includes(item.id) ? base.moved : [...base.moved, item.id] });
+  };
+
+  const undoPlan = () => {
+    const previous = history[history.length - 1];
+    setHistory((past) => past.slice(0, -1));
+    setDraft(previous && previous.moved.length > 0 ? previous : null);
+  };
+  const discardPlan = () => {
+    setDraft(null);
+    setHistory([]);
+  };
+  const applyPlan = async () => {
+    if (!draft || !planLanes || !onApplyPlan) return;
+    const onLanes = new Set(Object.values(planLanes).flat());
+    // The moved "Any" jobs wait for the printer they were put on.
+    const reserve = draft.moved.filter((id) => onLanes.has(id) && itemsById.get(id)?.printer_id == null);
+    setApplying(true);
+    try {
+      await onApplyPlan({
+        lanes: printers.map((p) => ({ printer_id: p.id, item_ids: planLanes[p.id] ?? [] })),
+        reserve,
+      });
+      setSettlingSince(forecast?.generated_at ?? '');
+    } catch {
+      // The page says why; the plan stays, to fix or discard.
+    } finally {
+      setApplying(false);
     }
   };
 
   // ── The open job's details ────────────────────────────────────────────────
   const detailsItem = details ? itemsById.get(details.itemId) ?? null : null;
-  const detailsEvent = detailsItem ? events.find((ev) => ev.item.id === detailsItem.id) ?? null : null;
+  const detailsEvent = detailsItem ? allEvents.find((ev) => ev.item.id === detailsItem.id) ?? null : null;
   const detailsLane = detailsItem
     ? detailsItem.status === 'printing'
       ? detailsItem.printer_id
-      : forecast?.placements.find((p) => p.item_id === detailsItem.id)?.printer_id ?? null
+      : Array.from(queuedByPrinter.entries()).find(([, evs]) => evs.some((ev) => ev.item.id === detailsItem.id))?.[0] ?? null
     : null;
   const detailsExpected = detailsEvent && detailsLane != null
     ? { printerId: detailsLane, start: detailsEvent.estimatedStart, end: detailsEvent.estimatedEnd }
@@ -604,6 +924,9 @@ export function QueueTimelineView({
           && !forecast?.refusals[String(detailsItem.id)]?.[String(p.id)],
       )
     : [];
+  const detailsReservation = detailsItem && detailsItem.printer_id == null
+    ? forecast?.reservations?.[String(detailsItem.id)] ?? null
+    : null;
   // A job that went away (started elsewhere, removed) closes its details.
   useEffect(() => {
     if (details && !detailsItem) setDetails(null);
@@ -613,13 +936,13 @@ export function QueueTimelineView({
     <div>
       {/* Window controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setWindowOffsetMs((v) => v - 12 * HOUR_MS)}
+            onClick={() => setWindowOffsetMs((v) => v - rangeMs / 2)}
             className="p-1.5"
-            title={t('queue.timeline.window.back12h')}
+            title={t('queue.timeline.window.back', { hours: rangeHours / 2 })}
           >
             <ChevronLeft className="w-4 h-4" />
           </Button>
@@ -632,14 +955,16 @@ export function QueueTimelineView({
               minute: '2-digit',
             })}
             {' → '}
-            {new Date(rangeEndMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+            {new Date(rangeEndMs).toDateString() === new Date(rangeStartMs).toDateString()
+              ? new Date(rangeEndMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+              : new Date(rangeEndMs).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
           </span>
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setWindowOffsetMs((v) => v + 12 * HOUR_MS)}
+            onClick={() => setWindowOffsetMs((v) => v + rangeMs / 2)}
             className="p-1.5"
-            title={t('queue.timeline.window.forward12h')}
+            title={t('queue.timeline.window.forward', { hours: rangeHours / 2 })}
           >
             <ChevronRight className="w-4 h-4" />
           </Button>
@@ -653,6 +978,33 @@ export function QueueTimelineView({
               {t('queue.timeline.window.now')}
             </Button>
           )}
+          <div className="flex items-center gap-0.5 sm:ml-1 sm:pl-2 sm:border-l border-bambu-dark-tertiary" title={t('queue.timeline.window.zoomHint')}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => zoomBy(1)}
+              disabled={zoomIndex === ZOOM_HOURS.length - 1}
+              className="p-1.5"
+              title={t('queue.timeline.window.zoomOut')}
+              aria-label={t('queue.timeline.window.zoomOut')}
+            >
+              <ZoomOut className="w-4 h-4" />
+            </Button>
+            <span className="text-xs text-bambu-gray w-9 text-center tabular-nums" data-testid="timeline-zoom">
+              {rangeHours} h
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => zoomBy(-1)}
+              disabled={zoomIndex === 0}
+              className="p-1.5"
+              title={t('queue.timeline.window.zoomIn')}
+              aria-label={t('queue.timeline.window.zoomIn')}
+            >
+              <ZoomIn className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
         {allDoneBy && (
           <span className="text-xs text-bambu-gray flex items-center gap-1.5">
@@ -681,15 +1033,58 @@ export function QueueTimelineView({
           {t('queue.timeline.legend.projected')}
         </span>
         <span className="flex items-center gap-1.5">
+          <span className="inline-flex w-5 h-3.5 rounded-sm bg-amber-500/15 border border-amber-400/60" />
+          <Lock className="w-3 h-3" aria-hidden />
+          {t('queue.timeline.legend.reserved')}
+        </span>
+        <span className="flex items-center gap-1.5">
           <span className="inline-flex w-5 h-3.5 rounded-sm bg-blue-500/30 border border-blue-400/60" />
           {t('queue.timeline.legend.printing')}
         </span>
-        {onReorder && (
+        {onApplyPlan && (
           <span className="sm:ml-auto italic">
             {canReorder ? t('queue.timeline.legend.dragHint') : t('queue.timeline.legend.sjfHint')}
           </span>
         )}
       </div>
+
+      {/* The plan laid out by dragging, until it is applied or dropped. */}
+      {planOpen && (
+        <div
+          className="sticky top-0 z-40 mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-amber-400/40 bg-bambu-dark-secondary px-3 py-2 shadow-lg"
+          data-testid="timeline-plan-bar"
+        >
+          <PencilRuler className="w-4 h-4 text-amber-300 shrink-0" aria-hidden />
+          <div className="min-w-0">
+            <div className="text-sm text-white font-medium">
+              {t('queue.timeline.plan.unsaved', { count: draft!.moved.length })}
+            </div>
+            {allDoneBy && forecastDoneBy && (
+              <div className="text-xs text-bambu-gray">
+                {t('queue.timeline.plan.doneBy', {
+                  time: allDoneBy.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
+                  was: forecastDoneBy.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
+                })}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 sm:ml-auto">
+            <Button variant="ghost" size="sm" onClick={undoPlan} disabled={history.length === 0 || applying}>
+              <Undo2 className="w-4 h-4 mr-1" />
+              {t('queue.timeline.plan.undo')}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={discardPlan} disabled={applying}>
+              <X className="w-4 h-4 mr-1" />
+              {t('queue.timeline.plan.discard')}
+            </Button>
+            <Button variant="primary" size="sm" onClick={applyPlan} disabled={applying}>
+              <Check className="w-4 h-4 mr-1" />
+              {t('queue.timeline.plan.apply')}
+            </Button>
+          </div>
+          <div className="basis-full text-[11px] text-bambu-gray">{t('queue.timeline.plan.hint')}</div>
+        </div>
+      )}
 
       {forecastFailed && !forecast && (
         <div className="mb-4 p-3 rounded-lg border border-bambu-dark-tertiary bg-bambu-dark/40 text-xs text-bambu-gray">
@@ -718,14 +1113,14 @@ export function QueueTimelineView({
           <div className="bg-bambu-dark-secondary rounded-xl border border-bambu-dark-tertiary overflow-hidden">
           {/* On a phone 24 hours would leave a print a few pixels: the track
               keeps a readable width and scrolls, the printer column stays. */}
-          <div className="overflow-x-auto">
+          <div ref={chartRef} className="overflow-x-auto touch-pan-x touch-pan-y">
           <div className="min-w-[720px]">
             {/* Hour axis */}
             <div className="flex border-b border-bambu-dark-tertiary">
               <div className="w-32 sm:w-40 shrink-0 px-3 py-2 text-xs font-medium text-bambu-gray border-r border-bambu-dark-tertiary sticky left-0 z-30 bg-bambu-dark-secondary">
                 {t('queue.timeline.printerColumnHeader')}
               </div>
-              <div className="relative flex-1 h-9">
+              <div ref={axisRef} className="relative flex-1 h-9">
                 {hourTicks.map((tick) => (
                   <div
                     key={tick.ms}
@@ -791,8 +1186,8 @@ export function QueueTimelineView({
                           <div
                             className="absolute rounded-md bg-bambu-gray/15 border border-bambu-gray/40 px-1.5 flex items-center text-[10px] text-bambu-gray overflow-hidden"
                             style={{
-                              left: `${((startMs - rangeStartMs) / RANGE_MS) * 100}%`,
-                              width: `max(${MIN_BAR_PX}px, ${((endMs - startMs) / RANGE_MS) * 100}%)`,
+                              left: `${((startMs - rangeStartMs) / rangeMs) * 100}%`,
+                              width: `max(${MIN_BAR_PX}px, ${((endMs - startMs) / rangeMs) * 100}%)`,
                               top: 8,
                               height: LANE_BAR_HEIGHT_PX,
                             }}
@@ -813,10 +1208,10 @@ export function QueueTimelineView({
                           <TimelineBar
                             key={ev.item.id}
                             ev={ev}
-                            leftPct={((startMs - rangeStartMs) / RANGE_MS) * 100}
-                            widthPct={((endMs - startMs) / RANGE_MS) * 100}
+                            leftPct={((startMs - rangeStartMs) / rangeMs) * 100}
+                            widthPct={((endMs - startMs) / rangeMs) * 100}
                             draggable={ev.type === 'queued' && isDraggable(ev.item)}
-                            dimmed={movingIds.has(ev.item.id)}
+                            dimmed={settlingSince != null && ev.moved === true}
                             onClick={() => setDetails({ itemId: ev.item.id })}
                             t={t}
                           />
@@ -863,7 +1258,8 @@ export function QueueTimelineView({
                       key={item.id}
                       item={item}
                       reason={reason}
-                      draggable={isDraggable(item)}
+                      // A job held off the lanes is not part of the plan.
+                      draggable={false}
                       onClick={() => setDetails({ itemId: item.id })}
                     />
                   );
@@ -895,13 +1291,22 @@ export function QueueTimelineView({
           item={detailsItem}
           printers={printers}
           expected={detailsExpected}
+          variant={detailsEvent?.variant ?? null}
           progress={detailsItem.status === 'printing' ? detailsEvent?.progress ?? null : null}
           heldReason={detailsHeld}
           pinChoices={detailsPinChoices}
           suggestedPrinterId={details?.suggestedPrinterId ?? null}
           canModify={mayModify(detailsItem)}
+          reservation={detailsReservation
+            ? {
+                printer: printersById.get(detailsReservation.printer_id)?.name ?? `#${detailsReservation.printer_id}`,
+                active: detailsReservation.active,
+              }
+            : null}
+          onReleaseReservation={onReleaseReservation && detailsReservation
+            ? () => { setDetails(null); onReleaseReservation(detailsItem); }
+            : undefined}
           onPin={onPinItem ? (target) => {
-            setMovingIds((ids) => new Set(ids).add(detailsItem.id));
             onPinItem(detailsItem, target);
             setDetails(null);
           } : undefined}

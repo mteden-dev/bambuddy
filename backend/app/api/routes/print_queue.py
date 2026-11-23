@@ -59,7 +59,7 @@ from backend.app.schemas.print_queue import (
     QueueVariantCreate,
     QueueVariantSummary,
 )
-from backend.app.schemas.queue_forecast import QueueForecastResponse
+from backend.app.schemas.queue_forecast import QueueForecastResponse, QueuePlanRequest, QueuePlanResponse
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.filament_requirements import overrides_for_plate
 from backend.app.services.finance_budget import release_budget_reservation, validate_print_budget
@@ -74,9 +74,11 @@ from backend.app.services.print_batch import (
 from backend.app.services.print_cost_estimate import estimate_queue_source_cost
 from backend.app.services.printer_tags import check_tag_ids, printer_queue_filter, set_override
 from backend.app.services.queue_announcements import announce_queue_jobs_added
-from backend.app.services.queue_forecast import build_queue_forecast
+from backend.app.services.queue_forecast import ForecastVariant, build_queue_forecast
 from backend.app.services.queue_item_printer import PRINTER_RESOLVED_DEFAULTS, drop_printer_resolved
+from backend.app.services.queue_plan import PlanError, apply_plan
 from backend.app.services.queue_position import lock_queue_positions, max_queue_position
+from backend.app.services.queue_reservations import release as release_reservation
 from backend.app.utils.printer_models import (
     is_gcode_compatible,
 )
@@ -855,6 +857,8 @@ async def queue_forecast(
                 "start": p.start,
                 "end": p.end,
                 "projected": p.projected,
+                "variant": _forecast_variant(p.variant) if p.variant is not None else None,
+                "reserved": p.reserved,
             }
             for p in forecast.placements
             if visible(p.item_id) and printer_scope.allows(p.printer_id)
@@ -885,7 +889,63 @@ async def queue_forecast(
             for item_id, per_printer in forecast.refusals.items()
             if visible(item_id)
         },
+        reserve_refusals={
+            str(item_id): {
+                str(printer_id): {"code": r.code, "detail": r.detail}
+                for printer_id, r in per_printer.items()
+                if printer_scope.allows(printer_id)
+            }
+            for item_id, per_printer in forecast.reserve_refusals.items()
+            if visible(item_id)
+        },
+        reservations={
+            str(item_id): {"printer_id": printer_id, "active": active}
+            for item_id, (printer_id, active) in forecast.reservations.items()
+            if visible(item_id) and printer_scope.allows(printer_id)
+        },
+        variants={
+            str(item_id): [_forecast_variant(v) for v in variants]
+            for item_id, variants in forecast.variants.items()
+            if visible(item_id)
+        },
     )
+
+
+def _forecast_variant(variant: ForecastVariant) -> dict:
+    return {
+        "library_file_id": variant.library_file_id,
+        "target_model": variant.model,
+        "name": variant.name,
+        "plate_id": variant.plate_id,
+        "has_thumbnail": variant.has_thumbnail,
+        "print_time_seconds": variant.duration_s,
+    }
+
+
+@router.post("/plan", response_model=QueuePlanResponse)
+async def apply_queue_plan(
+    data: QueuePlanRequest,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_UPDATE_ALL),
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Apply the timeline's plan (fork): hold the moved "Any" jobs for the
+    printers they were put on and order the queue as the lanes are laid out.
+
+    Needs the right to reorder the whole queue, as the plan does. See
+    services/queue_plan.
+    """
+    try:
+        result = await apply_plan(
+            db,
+            [(lane.printer_id, lane.item_ids) for lane in data.lanes],
+            set(data.reserve),
+            visible_printer=printer_scope.allows,
+        )
+    except PlanError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    logger.info("Applied the queue plan: %s reserved, %s forecast elsewhere", result.reserved, result.moved_elsewhere)
+    return QueuePlanResponse(reserved=result.reserved, moved_elsewhere=result.moved_elsewhere)
 
 
 HISTORY_STATUSES = ("completed", "failed", "skipped", "cancelled")
@@ -2690,6 +2750,12 @@ async def update_queue_item(
     if claimed is not None:
         raise HTTPException(409, "Item is being dispatched — cancel it first to make changes")
 
+    # Fork: another printer, model or location ends a timeline reservation.
+    if any(
+        name in update_data and update_data[name] != getattr(item, name)
+        for name in ("printer_id", "target_model", "target_location")
+    ):
+        await release_reservation(db, item.id)
     for field, value in update_data.items():
         setattr(item, field, value)
     if set_tags:
@@ -2778,6 +2844,30 @@ def _notify_dispatch_cancelled(item_ids: list[int]) -> None:
 
     for item_id in item_ids:
         _scheduler.notify_dispatch_cancelled(item_id)
+
+
+@router.delete("/{item_id}/reservation")
+async def release_queue_reservation(
+    item_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    auth_result: tuple[User | ApiKeyActor | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.QUEUE_UPDATE_ALL,
+            Permission.QUEUE_UPDATE_OWN,
+        )
+    ),
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Hand a job the timeline's plan reserved back to any printer of its model (fork)."""
+    user, can_modify_all = auth_result
+    item = await db.get(PrintQueueItem, item_id)
+    if not item or not printer_scope.allows(item.printer_id):
+        raise HTTPException(404, "Queue item not found")
+    if not can_modify_all and item.created_by_id != user.id:
+        raise HTTPException(403, "You can only update your own queue items")
+    released = await release_reservation(db, item_id)
+    await db.commit()
+    return {"released": released}
 
 
 @router.delete("/{item_id}")

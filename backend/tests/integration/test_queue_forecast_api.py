@@ -136,3 +136,73 @@ async def test_a_pinned_job_waiting_for_its_plate_stays_on_its_lane(
     assert set(starts) == {pinned, any_job}
     assert starts[pinned] < starts[any_job]
     assert body["off_timeline"] == [{"item_id": other, "reason": "waiting", "detail": "Waiting for filament: PETG"}]
+
+
+async def test_a_job_with_alternatives_shows_the_file_its_printer_gets(
+    async_client: AsyncClient, db_session, printer_factory
+):
+    from backend.app.models.library import LibraryFile
+    from backend.app.models.print_queue import PrintQueueVariant
+
+    p1s = await printer_factory(name="P1S", model="P1S")
+    h2s = await printer_factory(name="BigBoy", model="H2S")
+    p1s_id, h2s_id = p1s.id, h2s.id
+    p1s_file = LibraryFile(
+        filename="box_p1s.3mf",
+        file_path="l/box_p1s.3mf",
+        file_type="3mf",
+        file_size=1,
+        file_metadata={"print_name": "Box (P1S)"},
+    )
+    h2s_file = LibraryFile(
+        filename="box_h2s.3mf",
+        file_path="l/box_h2s.3mf",
+        file_type="3mf",
+        file_size=1,
+        thumbnail_path="thumbs/box_h2s.png",
+    )
+    db_session.add_all([p1s_file, h2s_file])
+    await db_session.flush()
+    item = PrintQueueItem(status="pending", position=1, target_model="P1S", print_time_seconds=3600)
+    db_session.add(item)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            PrintQueueVariant(
+                queue_item_id=item.id,
+                library_file_id=p1s_file.id,
+                target_model="P1S",
+                position=0,
+                print_time_seconds=3 * 3600,
+            ),
+            PrintQueueVariant(
+                queue_item_id=item.id,
+                library_file_id=h2s_file.id,
+                target_model="H2S",
+                position=1,
+                print_time_seconds=2 * 3600,
+                plate_id=2,
+            ),
+        ]
+    )
+    await db_session.commit()
+    item_id, h2s_file_id = item.id, h2s_file.id
+
+    # The P1S is busy for five hours, so the H2S takes the job, with its own file.
+    connected, status = _live({p1s_id, h2s_id}, printing={p1s_id: 300})
+    with connected, status:
+        response = await async_client.get("/api/v1/queue/forecast")
+
+    assert response.status_code == 200, response.text
+    [placement] = [p for p in response.json()["placements"] if p["item_id"] == item_id]
+    assert placement["printer_id"] == h2s_id
+    assert placement["variant"] == {
+        "library_file_id": h2s_file_id,
+        "target_model": "H2S",
+        "name": "box_h2s.3mf",
+        "plate_id": 2,
+        "has_thumbnail": True,
+        "print_time_seconds": 7200,
+    }
+    start, end = datetime.fromisoformat(placement["start"]), datetime.fromisoformat(placement["end"])
+    assert (end - start).total_seconds() == 7200

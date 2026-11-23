@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from backend.app.services.queue_forecast import (
     ForecastJob,
     ForecastPrinter,
+    ForecastVariant,
     Refusal,
     place_jobs,
     placement_refusal,
@@ -122,6 +123,27 @@ def test_jobs_with_alternatives_run_on_any_alternatives_model():
     placements, _ = place_jobs([job], printers, NOW)
 
     assert _where(placements) == {10: (2, 0)}
+
+
+def test_a_job_with_alternatives_prints_the_file_for_its_printers_model():
+    p1s_file = ForecastVariant(library_file_id=7, model="P1S", duration_s=3 * HOUR, name="Box P1S")
+    h2s_file = ForecastVariant(library_file_id=8, model="H2S", duration_s=2 * HOUR, name="Box H2S")
+    printers = [_p1s(1, free_at=NOW + timedelta(hours=5)), ForecastPrinter(id=2, model="H2S")]
+    job = ForecastJob(id=10, variant_models=("P1S", "H2S"), variants=(p1s_file, h2s_file), duration_s=HOUR)
+
+    placements, _ = place_jobs([job], printers, NOW)
+
+    assert len(placements) == 1
+    placed = placements[0]
+    assert (placed.printer_id, placed.variant) == (2, h2s_file)
+    # The H2S file's print time, not the item's (the shortest of its files).
+    assert placed.end - placed.start == timedelta(hours=2)
+
+
+def test_an_ordinary_job_has_no_variant():
+    placements, _ = place_jobs([_any(1)], [_p1s(1)], NOW)
+
+    assert placements[0].variant is None
 
 
 def test_dropping_a_job_on_a_printer_needs_compatible_gcode_not_the_same_model():

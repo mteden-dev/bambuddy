@@ -1,9 +1,24 @@
 import { useEffect, useState } from 'react';
-import { CalendarClock, Clock, Layers, Pencil, Pin, PinOff, Scale, Shuffle, Square, Trash2, User, X } from 'lucide-react';
+import {
+  CalendarClock,
+  Clock,
+  Layers,
+  Lock,
+  LockOpen,
+  Pencil,
+  Pin,
+  PinOff,
+  Scale,
+  Shuffle,
+  Square,
+  Trash2,
+  User,
+  X,
+} from 'lucide-react';
 
-import type { PrintQueueItem, Printer } from '../api/client';
+import type { PrintQueueItem, Printer, QueueForecastVariant } from '../api/client';
 import { formatDuration, parseUTCDate } from '../utils/date';
-import { queueItemThumbnailUrl } from '../utils/queueItemThumbnail';
+import { queueJobModels, queueJobName, queueJobPrintTime, queueJobThumbnailUrl } from '../utils/queueJobDisplay';
 import { Button } from './Button';
 import { QueueItemTagChips } from './QueueItemTagChips';
 
@@ -15,6 +30,12 @@ export interface QueueJobDetailsProps {
   printers: Printer[];
   /** Where the timeline expects the job, when it is on a lane. */
   expected?: { printerId: number; start: Date; end: Date } | null;
+  /** For a job with alternatives: the one the expected printer takes. */
+  variant?: QueueForecastVariant | null;
+  /** The printer the timeline's plan holds this "Any" job for, and whether that holds now. */
+  reservation?: { printer: string; active: boolean } | null;
+  /** Hand the job back to any printer of its model. */
+  onReleaseReservation?: () => void;
   /** A running print's progress (0-100). */
   progress?: number | null;
   /** Why the job is not on the timeline, worded for the user. */
@@ -67,6 +88,9 @@ export function QueueJobDetails({
   item,
   printers,
   expected,
+  variant,
+  reservation,
+  onReleaseReservation,
   progress,
   heldReason,
   pinChoices,
@@ -103,15 +127,17 @@ export function QueueJobDetails({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const name = item.archive_name || item.library_file_name || `#${item.id}`;
-  const thumbnail = queueItemThumbnailUrl(item);
+  const name = queueJobName(item, variant);
+  const thumbnail = queueJobThumbnailUrl(item, variant);
+  const printTime = queueJobPrintTime(item, variant);
+  const plate = variant ? variant.plate_id : item.plate_id;
   const scheduled = parseUTCDate(item.scheduled_time);
   const added = parseUTCDate(item.created_at);
   const filaments = swatches(item);
   const where = pinned
     ? t('queue.timeline.details.pinned', { printer: nameOf(item.printer_id) })
     : hasAlternatives
-      ? `${t('queue.filter.any')} ${item.variants!.map((v) => v.target_model).join(' / ')}`
+      ? `${t('queue.filter.any')} ${queueJobModels(item).join(' / ')}`
       : item.target_model
         ? `${t('queue.filter.any')} ${item.target_model}${item.target_location ? ` @ ${item.target_location}` : ''}`
         : t('queue.filter.unassigned');
@@ -163,7 +189,12 @@ export function QueueJobDetails({
             </div>
             {!pinned && expected && (
               <div className="text-xs text-bambu-gray mt-0.5">
-                {t('queue.timeline.details.expected', { printer: nameOf(expected.printerId) })}
+                {variant
+                  ? t('queue.timeline.details.expectedVersion', {
+                      printer: nameOf(expected.printerId),
+                      model: variant.target_model,
+                    })
+                  : t('queue.timeline.details.expected', { printer: nameOf(expected.printerId) })}
               </div>
             )}
             <div className="mt-2 text-xs text-bambu-gray break-words">{status}</div>
@@ -184,9 +215,9 @@ export function QueueJobDetails({
               {formatTime(expected.start)} → {formatTime(expected.end)}
             </Row>
           )}
-          {item.print_time_seconds ? (
+          {printTime ? (
             <Row icon={<Clock className="w-4 h-4" />} label={t('queue.timeline.details.printTime')}>
-              {formatDuration(item.print_time_seconds)}
+              {formatDuration(printTime)}
             </Row>
           ) : null}
           {item.filament_used_grams ? (
@@ -211,9 +242,9 @@ export function QueueJobDetails({
               </span>
             </Row>
           )}
-          {item.plate_id != null && (
+          {plate != null && (
             <Row icon={<Layers className="w-4 h-4" />} label={t('queue.timeline.details.plate')}>
-              {item.plate_id}
+              {plate}
             </Row>
           )}
           {item.batch_name && (
@@ -232,6 +263,38 @@ export function QueueJobDetails({
             </Row>
           )}
         </div>
+
+        {/* Held for a printer by the timeline's plan, until it starts or is released. */}
+        {!isPrinting && reservation && (
+          <div
+            className="mx-4 sm:mx-5 mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2"
+            data-testid="queue-job-reservation"
+          >
+            <Lock className="w-4 h-4 text-amber-300 shrink-0" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm text-white">
+                {t('queue.timeline.details.reserved', { printer: reservation.printer })}
+              </div>
+              <div className="text-xs text-bambu-gray">
+                {reservation.active
+                  ? t('queue.timeline.details.reservedHelp')
+                  : t('queue.timeline.details.reservedInactive')}
+              </div>
+            </div>
+            {onReleaseReservation && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onReleaseReservation}
+                disabled={!canModify}
+                title={!canModify ? t('queue.timeline.details.noPermission') : undefined}
+              >
+                <LockOpen className="w-4 h-4" />
+                {t('queue.timeline.details.release')}
+              </Button>
+            )}
+          </div>
+        )}
 
         {/* Pinning: the one place a job is tied to (or freed from) a printer. */}
         {!isPrinting && onPin && (
