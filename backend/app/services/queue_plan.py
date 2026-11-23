@@ -61,12 +61,14 @@ def planned_order(
     lanes: list[tuple[ForecastPrinter, list]],
     rank: dict[int, int],
     now: datetime,
+    ready_after: Callable[[datetime], datetime] | None = None,
 ) -> list[int]:
     """The ids of the laid-out jobs in the order the plan starts them.
 
     ``lanes`` pairs each printer with its forecast jobs, in the plan's order. A
     lane starts when its printer is free and runs its jobs back to back, a job
-    scheduled for later waiting for its time. Equal starts go in the order an
+    scheduled for later waiting for its time, and each waiting for the plate
+    before it to be cleared (``ready_after``). Equal starts go in the order an
     "Any" job picks among free printers, as the forecast breaks them.
     """
     starts: list[tuple[datetime, int, int, int]] = []
@@ -78,6 +80,8 @@ def planned_order(
                 t = scheduled
             starts.append((t, rank[printer.id], index, job.id))
             t += timedelta(seconds=duration_on(job, printer.model))
+            if ready_after is not None:
+                t = ready_after(t)
     return [job_id for *_, job_id in sorted(starts)]
 
 
@@ -142,7 +146,7 @@ async def apply_plan(
     for item_id in to_reserve:
         inputs.jobs[item_id].reserved_printer_id = on_lane[item_id]
 
-    planned = iter(planned_order(laid_out, rank, inputs.now))
+    planned = iter(planned_order(laid_out, rank, inputs.now, inputs.ready_after))
     planned_ids = set(on_lane)
     items = inputs.pending
     order = [next(planned) if item.id in planned_ids else item.id for item in items]
@@ -155,7 +159,9 @@ async def apply_plan(
     schedulable = sorted(inputs.schedulable, key=lambda job: position[job.id])
     on_timeline = {job.id for job in schedulable}
     for _ in range(len(on_lane)):
-        placed = {p.item_id: p.printer_id for p in place_jobs(schedulable, inputs.printers, inputs.now)[0]}
+        placed = {
+            p.item_id: p.printer_id for p in place_jobs(schedulable, inputs.printers, inputs.now, inputs.ready_after)[0]
+        }
         jumped = [
             item_id
             for item_id, printer_id in on_lane.items()

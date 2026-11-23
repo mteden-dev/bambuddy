@@ -59,7 +59,12 @@ from backend.app.schemas.print_queue import (
     QueueVariantCreate,
     QueueVariantSummary,
 )
-from backend.app.schemas.queue_forecast import QueueForecastResponse, QueuePlanRequest, QueuePlanResponse
+from backend.app.schemas.queue_forecast import (
+    QueueForecastResponse,
+    QueuePlanRequest,
+    QueuePlanResponse,
+    QueueStaffedHours,
+)
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.filament_requirements import overrides_for_plate
 from backend.app.services.finance_budget import release_budget_reservation, validate_print_budget
@@ -79,6 +84,7 @@ from backend.app.services.queue_item_printer import PRINTER_RESOLVED_DEFAULTS, d
 from backend.app.services.queue_plan import PlanError, apply_plan
 from backend.app.services.queue_position import lock_queue_positions, max_queue_position
 from backend.app.services.queue_reservations import release as release_reservation
+from backend.app.services.staffed_hours import parse as parse_staffed_hours, read_staffed_hours, write_staffed_hours
 from backend.app.utils.printer_models import (
     is_gcode_compatible,
 )
@@ -908,7 +914,46 @@ async def queue_forecast(
             for item_id, variants in forecast.variants.items()
             if visible(item_id)
         },
+        plate_waits=[
+            {"printer_id": w.printer_id, "start": w.start, "end": w.end}
+            for w in forecast.plate_waits
+            if printer_scope.allows(w.printer_id)
+        ],
+        staffed=(
+            {
+                "enabled": forecast.turnaround.hours.enabled,
+                "windows": [{"start": a, "end": b} for a, b in forecast.turnaround.windows],
+                "clear_minutes": forecast.turnaround.hours.clear_minutes,
+                "waits_for_plate": forecast.turnaround.waits_for_plate,
+            }
+            if forecast.turnaround is not None
+            else None
+        ),
     )
+
+
+@router.get("/staffed-hours", response_model=QueueStaffedHours)
+async def get_staffed_hours(
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: tuple[User | ApiKeyActor | None, bool] = Depends(
+        require_ownership_permission(Permission.QUEUE_READ_ALL, Permission.QUEUE_READ_OWN)
+    ),
+):
+    """When someone is there to clear finished plates, for the timeline's forecast (fork)."""
+    return (await read_staffed_hours(db)).to_json()
+
+
+@router.put("/staffed-hours", response_model=QueueStaffedHours)
+async def put_staffed_hours(
+    data: QueueStaffedHours,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.SETTINGS_UPDATE),
+):
+    """Set the staffed hours (fork, services/staffed_hours.py)."""
+    hours = parse_staffed_hours(data.model_dump())
+    await write_staffed_hours(db, hours)
+    await db.commit()
+    return hours.to_json()
 
 
 def _forecast_variant(variant: ForecastVariant) -> dict:

@@ -3188,6 +3188,26 @@ export interface QueueForecast {
   reservations?: Record<string, { printer_id: number; active: boolean }>;
   /** item id -> the job's alternatives (#671), each with its file and print time. */
   variants?: Record<string, QueueForecastVariant[]>;
+  /** Printers standing with a finished plate until someone clears it: now, and after each forecast print. */
+  plate_waits?: Array<{ printer_id: number; start: string; end: string }>;
+  /** When someone is there to clear plates; null on servers without staffed hours. */
+  staffed?: {
+    enabled: boolean;
+    /** Staffed stretches from a day back to two weeks ahead. */
+    windows: Array<{ start: string; end: string }>;
+    clear_minutes: number;
+    /** Plate-clear confirmation is on: a printer waits for it after each print. */
+    waits_for_plate: boolean;
+  } | null;
+}
+
+/** When someone is at the farm to clear plates (fork): wall-clock hours in `timezone`, Monday first. */
+export interface QueueStaffedHours {
+  enabled: boolean;
+  timezone: string;
+  /** null is a day nobody is there; an end at or before the start runs past midnight. */
+  days: Array<{ start: string; end: string } | null>;
+  clear_minutes: number;
 }
 
 /** The timeline's plan (fork): each printer's queued jobs in order, and the jobs to hold there. */
@@ -7031,6 +7051,9 @@ export const api = {
     request<QueuePlanResult>('/queue/plan', { method: 'POST', body: JSON.stringify(plan) }),
   releaseQueueReservation: (id: number) =>
     request<{ released: boolean }>(`/queue/${id}/reservation`, { method: 'DELETE' }),
+  getStaffedHours: () => request<QueueStaffedHours>('/queue/staffed-hours'),
+  updateStaffedHours: (hours: QueueStaffedHours) =>
+    request<QueueStaffedHours>('/queue/staffed-hours', { method: 'PUT', body: JSON.stringify(hours) }),
   addToQueue: (data: PrintQueueItemCreate) =>
     request<PrintQueueItem>('/queue/', {
       method: 'POST',

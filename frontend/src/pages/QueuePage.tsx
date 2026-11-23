@@ -3018,6 +3018,7 @@ export function QueuePage() {
             hasPermission('queue:reorder') && hasPermission('queue:update_all') && !settings?.queue_shortest_first
           }
           onReleaseReservation={(item) => timelineReleaseMutation.mutate(item)}
+          canEditStaffedHours={hasPermission('settings:update')}
           onPinItem={(item, target) => timelineMoveMutation.mutate({ item, target })}
           canModifyItem={(item) => canModify('queue', 'update', item.created_by_id)}
           onEditItem={setEditItem}

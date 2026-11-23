@@ -18,12 +18,14 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import {
+  CalendarClock,
   Check,
   ChevronLeft,
   ChevronRight,
   Clock,
   Layers,
   Lock,
+  Moon,
   PencilRuler,
   Pin,
   Printer as PrinterIcon,
@@ -47,6 +49,7 @@ import type {
 import { queueJobModels, queueJobName, queueJobPrintTime, queueJobThumbnailUrl } from '../utils/queueJobDisplay';
 import { Button } from './Button';
 import { QueueJobDetails, type QueuePinTarget } from './QueueJobDetails';
+import { StaffedHoursDialog } from './StaffedHoursDialog';
 
 /** Gantt-style rolling timeline. One horizontal swimlane per printer. A
  *  print that is running is drawn from the printer's live status; every
@@ -95,6 +98,9 @@ const PINCH_ZOOM_RATIO = 1.3;
 const MIN_BAR_PX = 32;
 // Lane height for the bar row + label.
 const LANE_BAR_HEIGHT_PX = 40;
+// A printer standing with a finished plate: hatched, behind the bars.
+const PLATE_WAIT_PATTERN =
+  'repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(156,163,175,0.18) 4px, rgba(156,163,175,0.18) 6px)';
 // The lane under the pointer (or finger) is the target. Overlap with the
 // dragged tile would pick the lane below the thin "back to any" strip.
 const pointerFirst: CollisionDetection = (args) => {
@@ -149,6 +155,8 @@ interface QueueTimelineViewProps {
   canReorder?: boolean;
   /** Hand a job the plan reserved back to any printer of its model. */
   onReleaseReservation?: (item: PrintQueueItem) => void;
+  /** May change when someone is there to clear plates (settings:update). */
+  canEditStaffedHours?: boolean;
   /** Pin a job to a printer, or hand it back to any printer of a model. */
   onPinItem?: (item: PrintQueueItem, target: QueueMoveTarget) => void;
   /** Whether the user may change this job (its owner or queue:update_all). */
@@ -405,6 +413,7 @@ export function QueueTimelineView({
   onApplyPlan,
   canReorder = true,
   onReleaseReservation,
+  canEditStaffedHours = false,
   onPinItem,
   canModifyItem,
   onEditItem,
@@ -634,10 +643,45 @@ export function QueueTimelineView({
     return result;
   }, [queueItems, printerStatuses, nowMs]);
 
-  // Queued jobs on each lane: where the forecast has them, or where the plan does.
-  const queuedByPrinter = useMemo(() => {
+  // When someone is there to clear plates (fork, services/staffed_hours.py).
+  const staffed = forecast?.staffed ?? null;
+  const staffedWindows = useMemo(
+    () => (staffed?.enabled
+      ? staffed.windows
+          .map((w) => [parseUTCDate(w.start)?.getTime() ?? 0, parseUTCDate(w.end)?.getTime() ?? 0] as const)
+          .sort((a, b) => a[0] - b[0])
+      : []),
+    [staffed],
+  );
+  // When a printer whose print ends at `endMs` can start the next one: once
+  // someone is there and has cleared the plate, as the forecast has it.
+  const readyAfter = (endMs: number): number => {
+    if (!staffed?.waits_for_plate) return endMs;
+    let t = endMs;
+    const shift = staffedWindows.find(([, closes]) => closes > t);
+    if (shift) t = Math.max(t, shift[0]);
+    return t + staffed.clear_minutes * 60_000;
+  };
+
+  // Queued jobs on each lane: where the forecast has them, or where the plan
+  // does; and the stretches a printer stands with a finished plate.
+  const { queuedByPrinter, plateWaitsByPrinter } = useMemo(() => {
     const map = new Map<number, ScheduleEvent[]>();
+    const waits = new Map<number, Array<{ start: number; end: number }>>();
+    const addWait = (printerId: number, start: number, end: number) => {
+      if (end <= start) return;
+      if (!waits.has(printerId)) waits.set(printerId, []);
+      waits.get(printerId)!.push({ start, end });
+    };
     if (planLanes && draft) {
+      // Before its first job: the plate it has now, as forecast.
+      for (const w of forecast?.plate_waits ?? []) {
+        const end = parseUTCDate(w.end)?.getTime();
+        const free = parseUTCDate(lanePrinterState.get(w.printer_id)?.free_at)?.getTime();
+        if (end != null && free != null && end === free) {
+          addWait(w.printer_id, parseUTCDate(w.start)?.getTime() ?? end, end);
+        }
+      }
       // Back to back from when the printer is free, as the forecast replays them.
       for (const printer of printers) {
         const free = parseUTCDate(lanePrinterState.get(printer.id)?.free_at)?.getTime() ?? nowMs;
@@ -663,10 +707,17 @@ export function QueueTimelineView({
             reserved: item.printer_id == null
               && (moved || (reservation?.active === true && reservation.printer_id === printer.id)),
           });
-          t += duration;
+          const end = t + duration;
+          t = readyAfter(end);
+          addWait(printer.id, end, t);
         }
       }
-      return map;
+      return { queuedByPrinter: map, plateWaitsByPrinter: waits };
+    }
+    for (const w of forecast?.plate_waits ?? []) {
+      const start = parseUTCDate(w.start)?.getTime();
+      const end = parseUTCDate(w.end)?.getTime();
+      if (start != null && end != null) addWait(w.printer_id, start, end);
     }
     for (const placement of forecast?.placements ?? []) {
       const item = itemsById.get(placement.item_id);
@@ -685,10 +736,26 @@ export function QueueTimelineView({
         reserved: placement.reserved ?? false,
       });
     }
-    return map;
-    // variantOn reads forecast, which is listed.
+    return { queuedByPrinter: map, plateWaitsByPrinter: waits };
+    // variantOn and readyAfter read forecast and staffedWindows, which are listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planLanes, draft, printers, lanePrinterState, nowMs, itemsById, forecast]);
+  }, [planLanes, draft, printers, lanePrinterState, nowMs, itemsById, forecast, staffedWindows]);
+
+  // The stretches of the window nobody is there, shaded on the lanes.
+  const unstaffed = useMemo(() => {
+    if (!staffed?.enabled || staffedWindows.length === 0) return [];
+    const gaps: Array<{ start: number; end: number }> = [];
+    let cursor = rangeStartMs;
+    for (const [opens, closes] of staffedWindows) {
+      if (closes <= cursor) continue;
+      if (opens >= rangeEndMs) break;
+      if (opens > cursor) gaps.push({ start: cursor, end: opens });
+      cursor = Math.max(cursor, closes);
+    }
+    if (cursor < rangeEndMs) gaps.push({ start: cursor, end: rangeEndMs });
+    return gaps;
+  }, [staffed, staffedWindows, rangeStartMs, rangeEndMs]);
+  const [staffedOpen, setStaffedOpen] = useState(false);
 
   const eventsByPrinter = useMemo(() => {
     const map = new Map<number, ScheduleEvent[]>();
@@ -1005,6 +1072,16 @@ export function QueueTimelineView({
               <ZoomIn className="w-4 h-4" />
             </Button>
           </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setStaffedOpen(true)}
+            className="text-xs"
+            title={t('queue.timeline.staffed.title')}
+          >
+            <CalendarClock className="w-4 h-4" />
+            {t('queue.timeline.staffed.button')}
+          </Button>
         </div>
         {allDoneBy && (
           <span className="text-xs text-bambu-gray flex items-center gap-1.5">
@@ -1041,6 +1118,19 @@ export function QueueTimelineView({
           <span className="inline-flex w-5 h-3.5 rounded-sm bg-blue-500/30 border border-blue-400/60" />
           {t('queue.timeline.legend.printing')}
         </span>
+        {staffed?.waits_for_plate && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-flex w-5 h-3.5 rounded-sm border border-dashed border-bambu-gray/50" style={{ backgroundImage: PLATE_WAIT_PATTERN }} />
+            {t('queue.timeline.legend.plateWait')}
+          </span>
+        )}
+        {staffed?.enabled && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-flex w-5 h-3.5 rounded-sm bg-black/40" />
+            <Moon className="w-3 h-3" aria-hidden />
+            {t('queue.timeline.legend.unstaffed')}
+          </span>
+        )}
         {onApplyPlan && (
           <span className="sm:ml-auto italic">
             {canReorder ? t('queue.timeline.legend.dragHint') : t('queue.timeline.legend.sjfHint')}
@@ -1135,6 +1225,25 @@ export function QueueTimelineView({
 
             {/* Lanes */}
             <div className="relative">
+              {/* Nobody there to clear plates: shaded behind the lanes. */}
+              {unstaffed.length > 0 && (
+                <div className="absolute inset-0 flex pointer-events-none" aria-hidden>
+                  <div className="w-32 sm:w-40 shrink-0" />
+                  <div className="relative flex-1">
+                    {unstaffed.map((gap) => (
+                      <div
+                        key={gap.start}
+                        className="absolute top-0 bottom-0 bg-black/30"
+                        data-testid="unstaffed"
+                        style={{
+                          left: `${((gap.start - rangeStartMs) / rangeMs) * 100}%`,
+                          width: `${((gap.end - gap.start) / rangeMs) * 100}%`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
               {printers.map((printer) => {
                 const laneEvents = eventsByPrinter.get(printer.id) ?? [];
                 const live = lanePrinterState.get(printer.id);
@@ -1197,6 +1306,31 @@ export function QueueTimelineView({
                           </div>
                         );
                       })()}
+
+                      {/* The finished plate waiting for someone to clear it. */}
+                      {(plateWaitsByPrinter.get(printer.id) ?? []).map((w) => {
+                        const startMs = Math.max(rangeStartMs, w.start);
+                        const endMs = Math.min(rangeEndMs, w.end);
+                        if (endMs <= startMs) return null;
+                        const until = new Date(w.end).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+                        return (
+                          <div
+                            key={`plate-${w.start}`}
+                            className="absolute rounded-md border border-dashed border-bambu-gray/40 flex items-center px-1.5 overflow-hidden text-[10px] text-bambu-gray"
+                            data-testid={`plate-wait-${printer.id}`}
+                            title={t('queue.timeline.plateWait', { time: until })}
+                            style={{
+                              left: `${((startMs - rangeStartMs) / rangeMs) * 100}%`,
+                              width: `${((endMs - startMs) / rangeMs) * 100}%`,
+                              top: 8,
+                              height: LANE_BAR_HEIGHT_PX,
+                              backgroundImage: PLATE_WAIT_PATTERN,
+                            }}
+                          >
+                            <span className="truncate">{t('queue.timeline.legend.plateWait')}</span>
+                          </div>
+                        );
+                      })}
 
                       {/* Job bars */}
                       {laneEvents.map((ev) => {
@@ -1286,6 +1420,14 @@ export function QueueTimelineView({
         </DndContext>
       )}
 
+      {staffedOpen && (
+        <StaffedHoursDialog
+          canEdit={canEditStaffedHours}
+          waitsForPlate={staffed?.waits_for_plate ?? false}
+          onClose={() => setStaffedOpen(false)}
+          t={t}
+        />
+      )}
       {detailsItem && (
         <QueueJobDetails
           item={detailsItem}

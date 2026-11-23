@@ -73,8 +73,17 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     („Dowolna P1S / H2S”) pokazuje na kafelku i w szczegółach wersję, którą weźmie jego drukarka
     (nazwa, miniatura, czas druku tego pliku, „Dowolna H2S”). Oś ma zoom od 4 h do 3 dni:
     lupy +/−, Ctrl + kółko lub szczypanie na touchpadzie i dwoma palcami na telefonie (czas pod
-    kursorem zostaje na miejscu); poziom zapamiętuje przeglądarka. Na telefonie oś przewija się
-    w poziomie. Bez zmian w bazie,
+    kursorem zostaje na miejscu); poziom zapamiętuje przeglądarka. **Godziny obsady** (przycisk
+    na osi, `GET/PUT /queue/staffed-hours`, `services/staffed_hours.py`): kiedy ktoś jest na
+    miejscu, osobno na każdy dzień tygodnia w strefie czasowej farmy (zmiana może iść przez
+    północ), i ile trwa zdjęcie płyty. Przy włączonym potwierdzaniu czystego stołu prognoza
+    zakłada, że drukarka po wydruku startuje dopiero, gdy ktoś przyjdzie i zdejmie płytę
+    (np. wydruk kończący się o 3:00 czeka do rana); dotyczy też drukarek, które teraz drukują
+    albo czekają na zdjęcie płyty, oraz kolejności z „Zastosuj”. Na osi godziny bez obsady są
+    zacieniowane, a czekanie na zdjęcie płyty to kreskowany odcinek. Scheduler się nie zmienia
+    (i tak czeka na potwierdzenie); bez potwierdzania godziny nie zmieniają prognozy. Na
+    telefonie oś przewija się w poziomie. Bez zmian w bazie poza jednym wierszem ustawień
+    (`queue_staffed_hours`),
   - **szpule slotów** (licznik filamentu bez numerów, tagów i QR): rolka w slocie AMS bez
     przypisanej szpuli świeci się na karcie drukarki („NOWY”). „Nowa szpula…” w karcie slotu
     otwiera okno konfiguracji slotu (preset, profil K, kolor) z wyborem ilości: **pełna 1 kg**,
@@ -105,7 +114,7 @@ wrócić na oficjalny obraz tej samej lub nowszej wersji. Poprawki dokładają d
 bazy wiersze w tabeli ustawień (`hidden_filament_presets`,
 `hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
 `slicer_inbox_manual_start`, `printer_tags`, `filament_check_per_slot`,
-`filament_check_margin_pct`), które oficjalna wersja po prostu pomija, i trzy własne tabele
+`filament_check_margin_pct`, `queue_staffed_hours`), które oficjalna wersja po prostu pomija, i trzy własne tabele
 zakładane przez `create_all` bez migracji: `custom_queue_item_tags` (tagi ustawione zadaniu w
 oknie druku), `custom_queue_reservations` (rezerwacje z planu osi czasu) i
 `custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”). Oficjalny obraz ich nie zna i

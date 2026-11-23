@@ -23,6 +23,8 @@ vi.mock('../../api/client', () => ({
     getQueueItemTags: vi.fn().mockResolvedValue([]),
     getPrinterTags: vi.fn().mockResolvedValue([]),
     getLibraryTags: vi.fn().mockResolvedValue([]),
+    getStaffedHours: vi.fn(),
+    updateStaffedHours: vi.fn(),
     getLibraryFileThumbnailUrl: (id: number) => `/thumb/${id}`,
     getLibraryFilePlateThumbnail: (id: number, plate: number) => `/thumb/${id}/plate/${plate}`,
   },
@@ -241,6 +243,115 @@ describe('QueueTimelineView', () => {
       } finally {
         vi.mocked(localStorage.getItem).mockReset();
       }
+    });
+  });
+
+  describe('staffed hours', () => {
+    const HOUR = 3600 * 1000;
+    // Nobody there from half an hour from now until six hours from now.
+    const staffed = (waits = true) => ({
+      enabled: true,
+      windows: [{ start: iso(-2), end: iso(0.5) }, { start: iso(6), end: iso(18) }],
+      clear_minutes: 5,
+      waits_for_plate: waits,
+    });
+    const leftOf = (el: HTMLElement) => parseFloat(el.style.left);
+    const pctOf = (ms: number) => ((ms - Math.floor(Date.now() / HOUR) * HOUR) / (24 * HOUR)) * 100;
+
+    it('shades the hours nobody is there and shows a plate waiting to be cleared', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+        staffed: staffed(),
+        plate_waits: [{ printer_id: 2, start: iso(1), end: iso(3) }],
+      }));
+      renderTimeline();
+
+      const wait = await within(lane(2)).findByTestId('plate-wait-2');
+      expect(wait.getAttribute('title')).toContain('queue.timeline.plateWait');
+      expect(screen.getAllByTestId('unstaffed').length).toBeGreaterThan(0);
+      expect(screen.getByText('queue.timeline.legend.unstaffed')).toBeInTheDocument();
+      // In the legend and on the waiting stretch.
+      expect(screen.getAllByText('queue.timeline.legend.plateWait').length).toBe(2);
+    });
+
+    it('lays out a plan with the night in mind', async () => {
+      const shifts = staffed();
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: shifts }));
+      const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const el = this as HTMLElement;
+        const laneEl = el.closest('[data-lane]') as HTMLElement | null;
+        const index = (laneEl ? Number(laneEl.dataset.lane) : 2) - 1;
+        const isLane = el.hasAttribute('data-lane');
+        const top = index * 56 + (isLane ? 0 : 8);
+        const height = isLane ? 56 : 40;
+        const width = isLane ? 800 : 100;
+        const left = el.hasAttribute('data-bar-item') ? (parseFloat(el.style.left) / 100) * 800 : 0;
+        return { x: left, y: top, top, left, right: left + width, bottom: top + height, width, height, toJSON: () => ({}) } as DOMRect;
+      });
+      try {
+        renderTimeline({ onApplyPlan: vi.fn() });
+        const later = await within(lane(2)).findByTitle((title) => title.startsWith('Later cup'));
+
+        // Later cup goes first on printer 2 and ends an hour from now, when
+        // nobody is there: Any tray starts once the plate is cleared at six.
+        const fromX = later.getBoundingClientRect().left + 10;
+        fireEvent.mouseDown(later, { button: 0, clientX: fromX, clientY: 76 });
+        act(() => {
+          fireEvent.mouseMove(document, { clientX: fromX + 10, clientY: 76 });
+        });
+        act(() => {
+          fireEvent.mouseMove(document, { clientX: 0, clientY: 76 });
+        });
+        act(() => {
+          fireEvent.mouseUp(document);
+        });
+
+        const opens = Date.parse(shifts.windows[1].start);
+        expect(leftOf(bar('Any tray'))).toBeCloseTo(pctOf(opens + 5 * 60_000), 1);
+        expect(within(lane(2)).getAllByTestId('plate-wait-2').length).toBeGreaterThan(0);
+      } finally {
+        rectSpy.mockRestore();
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+    });
+
+    it('edits the staffed hours', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: staffed() }));
+      const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
+      vi.mocked(api.getStaffedHours).mockResolvedValue({ enabled: false, timezone: 'UTC', days: week, clear_minutes: 0 });
+      vi.mocked(api.updateStaffedHours).mockImplementation(async (hours) => hours);
+      renderTimeline({ canEditStaffedHours: true });
+
+      fireEvent.click(await screen.findByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
+      const dialog = await screen.findByTestId('staffed-hours-dialog');
+      fireEvent.click(await within(dialog).findByRole('checkbox', { name: 'queue.timeline.staffed.enabled' }));
+      fireEvent.click(within(within(dialog).getByTestId('staffed-day-6')).getByRole('checkbox'));
+      fireEvent.change(within(dialog).getByRole('spinbutton'), { target: { value: '5' } });
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'common.save' }));
+      });
+
+      expect(api.updateStaffedHours).toHaveBeenCalledWith({
+        enabled: true,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+        days: [...week.slice(0, 6), null],
+        clear_minutes: 5,
+      });
+      expect(screen.queryByTestId('staffed-hours-dialog')).toBeNull();
+    });
+
+    it('is read-only without the right, and says when it changes nothing', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: staffed(false) }));
+      const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
+      vi.mocked(api.getStaffedHours).mockResolvedValue({ enabled: true, timezone: 'Europe/Warsaw', days: week, clear_minutes: 5 });
+      renderTimeline();
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+
+      fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
+      const dialog = await screen.findByTestId('staffed-hours-dialog');
+
+      expect(await within(dialog).findByTestId('staffed-no-plate-clear')).toBeInTheDocument();
+      expect(within(dialog).getByRole('checkbox', { name: 'queue.timeline.staffed.enabled' })).toBeDisabled();
+      expect(within(dialog).queryByRole('button', { name: 'common.save' })).toBeNull();
     });
   });
 

@@ -1,9 +1,10 @@
 """GET /queue/forecast and POST /queue/plan (fork): see services/queue_forecast
 and services/queue_plan."""
 
+import re
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class QueueForecastVariant(BaseModel):
@@ -52,6 +53,30 @@ class QueueForecastRefusal(BaseModel):
     detail: str | None = None
 
 
+class QueueForecastPlateWait(BaseModel):
+    """A printer standing with a finished print on its plate until someone clears it."""
+
+    printer_id: int
+    start: datetime
+    end: datetime
+
+
+class QueueForecastWindow(BaseModel):
+    start: datetime
+    end: datetime
+
+
+class QueueForecastStaffed(BaseModel):
+    """When someone is there to clear plates (services/staffed_hours.py)."""
+
+    enabled: bool
+    # Staffed stretches from a day back to two weeks ahead (empty when not enabled).
+    windows: list[QueueForecastWindow]
+    clear_minutes: int
+    # Plate-clear confirmation is on, so a printer waits for it after each print.
+    waits_for_plate: bool
+
+
 class QueueForecastReservation(BaseModel):
     printer_id: int
     active: bool
@@ -74,6 +99,32 @@ class QueueForecastResponse(BaseModel):
     reservations: dict[str, QueueForecastReservation] = {}
     # Keyed by queue item id: a job's alternatives (#671), each with its file and time.
     variants: dict[str, list[QueueForecastVariant]] = {}
+    # Printers standing with a finished plate: now, and after each forecast print.
+    plate_waits: list[QueueForecastPlateWait] = []
+    staffed: QueueForecastStaffed | None = None
+
+
+class QueueStaffedDay(BaseModel):
+    start: str
+    end: str
+
+    @field_validator("start", "end")
+    @classmethod
+    def _hhmm(cls, value: str) -> str:
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
+            raise ValueError("expected HH:MM")
+        return value
+
+
+class QueueStaffedHours(BaseModel):
+    """GET/PUT /queue/staffed-hours (fork)."""
+
+    enabled: bool = False
+    # IANA time zone the hours are wall-clock times in, e.g. "Europe/Warsaw".
+    timezone: str = "UTC"
+    # Monday first; null is a day nobody is there. An end at or before the start runs past midnight.
+    days: list[QueueStaffedDay | None] = Field(min_length=7, max_length=7)
+    clear_minutes: int = Field(default=0, ge=0, le=240)
 
 
 class QueuePlanLane(BaseModel):

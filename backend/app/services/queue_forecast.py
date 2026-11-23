@@ -18,9 +18,10 @@ for the forecast's "Any" jobs and for the timeline's drag and drop alike.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,9 @@ from backend.app.core.printer_scope import PrinterScope, resolve_user_id_printer
 from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.printer import Printer
 from backend.app.utils.printer_models import is_gcode_compatible, normalize_printer_model
+
+if TYPE_CHECKING:
+    from backend.app.services.staffed_hours import PlateTurnaround
 
 ACTIVE_PRINT_STATES = ("RUNNING", "PAUSE", "PREPARE", "SLICING")
 # Stand-in for a job whose file gives no print time, and for a running print that
@@ -177,7 +181,10 @@ def _aware(value: datetime | None) -> datetime | None:
 
 
 def place_jobs(
-    jobs: list[ForecastJob], printers: list[ForecastPrinter], now: datetime
+    jobs: list[ForecastJob],
+    printers: list[ForecastPrinter],
+    now: datetime,
+    ready_after: Callable[[datetime], datetime] | None = None,
 ) -> tuple[list[Placement], list[int]]:
     """Place ``jobs`` on ``printers`` the way the scheduler would take them.
 
@@ -187,7 +194,9 @@ def place_jobs(
     time has come; ties go to the printer earlier in that order. A pinned job
     waits for its printer even when the printer is offline, so it stays on its
     lane; an "Any" job only counts printers that can take work, and one the
-    timeline's plan reserved only its printer.
+    timeline's plan reserved only its printer. ``ready_after`` says when a
+    printer whose print ends at a given time can start the next one (someone
+    has to clear the plate: services/staffed_hours.py); without it, at once.
 
     Returns the placements and the ids of "Any" jobs no printer can take.
     """
@@ -237,7 +246,7 @@ def place_jobs(
                 reserved=ready.printer_id is None and ready.reserved_printer_id is not None,
             )
         )
-        free_at[printer_id] = end
+        free_at[printer_id] = ready_after(end) if ready_after is not None else end
         waiting.remove(ready)
     return placements, unplaced
 
@@ -250,6 +259,15 @@ class OffTimeline:
     # manual_start | waiting | no_printer | unassigned | starting
     reason: str
     detail: str | None = None
+
+
+@dataclass
+class PlateWait:
+    """A printer standing with a finished print on its plate until someone clears it."""
+
+    printer_id: int
+    start: datetime
+    end: datetime
 
 
 @dataclass
@@ -279,6 +297,10 @@ class QueueForecast:
     reserve_refusals: dict[int, dict[int, Refusal]] = field(default_factory=dict)
     # item id -> its alternatives (#671), for the jobs that have them
     variants: dict[int, tuple[ForecastVariant, ...]] = field(default_factory=dict)
+    # Printers standing with a finished plate, now and after each forecast print.
+    plate_waits: list[PlateWait] = field(default_factory=list)
+    # When someone is there to clear plates, and whether the scheduler waits for it.
+    turnaround: PlateTurnaround | None = None
 
 
 @dataclass
@@ -297,6 +319,13 @@ class ForecastInputs:
     schedulable: list[ForecastJob]
     off_timeline: list[OffTimeline]
     reservations: dict[int, tuple[int, bool]]
+    turnaround: PlateTurnaround
+    # Printers whose plate waits to be cleared before their first forecast job.
+    plate_waits: list[PlateWait]
+
+    @property
+    def ready_after(self) -> Callable[[datetime], datetime] | None:
+        return self.turnaround.as_function()
 
 
 def _dispatch_order_key(sjf_enabled: bool):
@@ -371,6 +400,7 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
     from backend.app.services.printer_manager import printer_manager
     from backend.app.services.printer_tags import TagRouting
     from backend.app.services.queue_reservations import QueueReservations
+    from backend.app.services.staffed_hours import PlateTurnaround, read_staffed_hours
 
     now = now or datetime.now(timezone.utc)
 
@@ -382,6 +412,12 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
     printers = _order_printers(printers, order, last_finished)
     wakeable = await scheduler._wakeable_printer_ids(db)
     sjf_enabled = await scheduler._get_bool_setting(db, "queue_shortest_first")
+    turnaround = PlateTurnaround.build(
+        await read_staffed_hours(db),
+        await scheduler._get_bool_setting(db, "require_plate_clear", default=False),
+        now,
+    )
+    plate_waits: list[PlateWait] = []
 
     rows = (
         (
@@ -420,6 +456,13 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
                 free_at = now + timedelta(seconds=remaining)
             else:
                 free_at = now + timedelta(seconds=DEFAULT_DURATION_S)
+        awaiting_plate = printer_manager.is_awaiting_plate_clear(printer.id)
+        if running is not None or busy or awaiting_plate:
+            # Its plate has to be cleared first: after the print, or now.
+            plate_from = free_at
+            free_at = turnaround.ready_after(plate_from)
+            if free_at > plate_from:
+                plate_waits.append(PlateWait(printer.id, plate_from, free_at))
         available = connected or printer.id in wakeable
         forecast_printers.append(
             ForecastPrinter(
@@ -438,7 +481,7 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
                 available=available,
                 connected=connected,
                 external_print=busy and running is None,
-                awaiting_plate_clear=printer_manager.is_awaiting_plate_clear(printer.id),
+                awaiting_plate_clear=awaiting_plate,
             )
         )
 
@@ -504,14 +547,22 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
         schedulable=schedulable,
         off_timeline=off_timeline,
         reservations=reservations,
+        turnaround=turnaround,
+        plate_waits=plate_waits,
     )
 
 
 async def build_queue_forecast(db: AsyncSession, now: datetime | None = None) -> QueueForecast:
     """Forecast the whole queue on every printer, from the database and live printer state."""
     inputs = await load_forecast_inputs(db, now)
-    placements, unplaced = place_jobs(inputs.schedulable, inputs.printers, inputs.now)
+    ready_after = inputs.ready_after
+    placements, unplaced = place_jobs(inputs.schedulable, inputs.printers, inputs.now, ready_after)
     off_timeline = [*inputs.off_timeline, *(OffTimeline(item_id, "no_printer") for item_id in unplaced)]
+    plate_waits = list(inputs.plate_waits)
+    if ready_after is not None:
+        for p in placements:
+            if (ready := ready_after(p.end)) > p.end:
+                plate_waits.append(PlateWait(p.printer_id, p.end, ready))
 
     refusals: dict[int, dict[int, Refusal]] = {}
     reserve_refusals: dict[int, dict[int, Refusal]] = {}
@@ -542,4 +593,6 @@ async def build_queue_forecast(db: AsyncSession, now: datetime | None = None) ->
         reservations=inputs.reservations,
         reserve_refusals=reserve_refusals,
         variants={item_id: job.variants for item_id, job in inputs.jobs.items() if job.variants},
+        plate_waits=plate_waits,
+        turnaround=inputs.turnaround,
     )
