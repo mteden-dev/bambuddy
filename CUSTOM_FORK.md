@@ -49,10 +49,15 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     Prognozę liczy backend (`GET /queue/forecast`, `services/queue_forecast.py`): drukarka, która
     zwolni się pierwsza, bierze pierwsze pasujące zadanie w kolejności schedulera (SJF, kolejność
     wyboru drukarek, lokalizacja, tagi drukarek, drukarki twórcy, offline bez wtyczki Auto On).
-    Zadania wstrzymane (ręczny start, brak filamentu itp.) są pod osią z powodem. Nierozpoczęte
-    zadanie można przeciągnąć na inną drukarkę (przypina je tam jak okno edycji) albo na pasek
-    „oddaj do dowolnej <model>”; drukarki, na które nie wolno (inny model G-code, inna lokalizacja,
-    tagi, wyłączona), są wyszarzone z powodem i nie przyjmują upuszczenia. Na telefonie oś
+    Zadania wstrzymane (ręczny start, brak filamentu itp.) są pod osią z powodem; przypięte,
+    które czekają tylko na potwierdzenie czystego stołu, zostają na pasie swojej drukarki.
+    Przeciąganie nierozpoczętego zadania zmienia tylko kolejność (znacznik pokazuje szczelinę,
+    zadanie idzie przed kafelek po prawej) i nigdy nie przypina; przypięte zostaje na swoim pasie,
+    a drukarki, na które nie wolno (inny model G-code, lokalizacja, tagi, wyłączona), są
+    wyszarzone z powodem. Klik w kafelek otwiera szczegóły zadania (duża miniatura, gdzie i kiedy,
+    czas, waga, filament, tagi) z przypinaniem do wybranej drukarki, odpinaniem, edycją i
+    usuwaniem lub zatrzymaniem; upuszczenie na pusty pas otwiera szczegóły z tą drukarką do
+    przypięcia. Przy „najkrótsze najpierw” kolejności się nie przeciąga. Na telefonie oś
     przewija się w poziomie. Bez zmian w bazie,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):

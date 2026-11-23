@@ -2061,8 +2061,26 @@ export function QueuePage() {
     onError: () => showToast(t('queue.toast.updateFailed'), 'error'),
   });
 
-  // A job dragged on the timeline: onto a printer (pinned there, as the edit
-  // dialog pins it), or back to any printer of a model.
+  // A job dragged on the timeline (fork): just before (or after) another in the
+  // one queue order every printer shares, whatever the list's sort or filter.
+  // False when it was dropped where it already was.
+  const timelineReorder = (itemId: number, anchorId: number, placeAfter: boolean): boolean => {
+    const ordered = (queue ?? [])
+      .filter((i) => i.status === 'pending')
+      .sort((a, b) => compareQueueOrder(a, b, false));
+    const moving = ordered.find((i) => i.id === itemId);
+    const remaining = ordered.filter((i) => i.id !== itemId);
+    let insertAt = remaining.findIndex((i) => i.id === anchorId);
+    if (!moving || insertAt === -1) return false;
+    if (placeAfter) insertAt += 1;
+    const reordered = [...remaining.slice(0, insertAt), moving, ...remaining.slice(insertAt)];
+    if (reordered.every((item, index) => item.id === ordered[index].id)) return false;
+    reorderMutation.mutate(reordered.map((item, index) => ({ id: item.id, position: index + 1 })));
+    return true;
+  };
+
+  // A job pinned from the timeline's details: to a printer, or back to any
+  // printer of a model.
   const timelineMoveMutation = useMutation({
     mutationFn: ({ item, target }: { item: PrintQueueItem; target: QueueMoveTarget }) =>
       api.updateQueueItem(
@@ -2075,7 +2093,7 @@ export function QueuePage() {
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       if ('printer_id' in target) {
         const name = printers?.find((p) => p.id === target.printer_id)?.name ?? `#${target.printer_id}`;
-        showToast(t('queue.timeline.drop.moved', { printer: name }));
+        showToast(t('queue.timeline.details.pinnedToast', { printer: name }));
       } else {
         showToast(t('queue.timeline.drop.movedToAny', { model: target.target_model }));
       }
@@ -2984,17 +3002,15 @@ export function QueuePage() {
           printers={printers || []}
           printerStatuses={printerStatusMap}
           sjfEnabled={settings?.queue_shortest_first ?? false}
-          onItemClick={(item) => {
-            if (['completed', 'failed', 'skipped', 'cancelled'].includes(item.status)) {
-              setRequeueItem(item);
-            } else if (item.status === 'pending') {
-              setEditItem(item);
-            } else if (item.status === 'printing') {
-              setConfirmAction({ type: 'stop', item });
-            }
-          }}
-          onMoveItem={(item, target) => timelineMoveMutation.mutate({ item, target })}
-          canMoveItem={(item) => canModify('queue', 'update', item.created_by_id)}
+          // Fork: dragging only orders; a click opens the job's details, where
+          // it is pinned, edited, removed or stopped.
+          onReorder={timelineReorder}
+          canReorder={hasPermission('queue:reorder') && !settings?.queue_shortest_first}
+          onPinItem={(item, target) => timelineMoveMutation.mutate({ item, target })}
+          canModifyItem={(item) => canModify('queue', 'update', item.created_by_id)}
+          onEditItem={setEditItem}
+          onCancelItem={(item) => setConfirmAction({ type: 'cancel', item })}
+          onStopItem={(item) => setConfirmAction({ type: 'stop', item })}
           t={t}
         />
       ) : activeTab === 'history' ? (

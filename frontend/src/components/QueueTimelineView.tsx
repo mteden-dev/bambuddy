@@ -13,23 +13,30 @@ import {
   useSensors,
   type CollisionDetection,
   type DragEndEvent,
+  type DragMoveEvent,
+  type DragOverEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import { ChevronLeft, ChevronRight, Clock, Layers, Pin, Printer as PrinterIcon, Shuffle, Undo2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, Layers, Pin, Printer as PrinterIcon, Shuffle } from 'lucide-react';
 import { formatDuration, parseUTCDate } from '../utils/date';
 import { api } from '../api/client';
 import type { PrintQueueItem, Printer, QueueForecast, QueueForecastRefusal } from '../api/client';
 import { queueItemThumbnailUrl } from '../utils/queueItemThumbnail';
 import { Button } from './Button';
+import { QueueJobDetails, type QueuePinTarget } from './QueueJobDetails';
 
 /** Gantt-style 24h-rolling timeline. One horizontal swimlane per printer. A
  *  print that is running is drawn from the printer's live status; every
  *  pending job is drawn where the server's forecast (GET /queue/forecast)
  *  expects the scheduler to run it, including jobs for "Any <model>", which
  *  land on the printer they are expected to get (drawn dashed, as a forecast,
- *  while jobs pinned to a printer are solid). A job that has not started can
- *  be dragged onto another printer; printers it may not go on (another model,
- *  outside its location, printer tags…) refuse the drop and say why. */
+ *  while jobs pinned to a printer are solid). A job that has not started is
+ *  dragged to change the queue order: dropped between two jobs, it goes before
+ *  the one on the right. Dragging never pins it; a click opens the job's
+ *  details, where it is pinned to a printer or handed back to any of its model
+ *  (fork). Printers it may not run on (another model, outside its location,
+ *  printer tags…), and other printers than its own for a pinned job, refuse
+ *  the drop and say why. */
 
 const HOUR_MS = 60 * 60 * 1000;
 const RANGE_HOURS = 24;
@@ -39,7 +46,6 @@ const RANGE_MS = RANGE_HOURS * HOUR_MS;
 const MIN_BAR_PX = 32;
 // Lane height for the bar row + label.
 const LANE_BAR_HEIGHT_PX = 40;
-const ANY_MODEL_DROP_ID = 'any-model';
 // The lane under the pointer (or finger) is the target. Overlap with the
 // dragged tile would pick the lane below the thin "back to any" strip.
 const pointerFirst: CollisionDetection = (args) => {
@@ -66,7 +72,7 @@ interface ScheduleEvent {
 }
 
 /** Where a job is moved to: a printer, or back to any printer of a model. */
-export type QueueMoveTarget = { printer_id: number } | { target_model: string };
+export type QueueMoveTarget = QueuePinTarget;
 
 interface QueueTimelineViewProps {
   queueItems: PrintQueueItem[];
@@ -75,11 +81,19 @@ interface QueueTimelineViewProps {
   /** `queue_shortest_first`. Dispatch order depends on it, and with it where
    *  every job is forecast to run (#3043), so toggling it refetches. */
   sjfEnabled: boolean;
-  onItemClick: (item: PrintQueueItem) => void;
-  /** Move a job that has not started. Without it nothing can be dragged. */
-  onMoveItem?: (item: PrintQueueItem, target: QueueMoveTarget) => void;
-  /** Whether the user may move this job (its owner or queue:update_all). */
-  canMoveItem?: (item: PrintQueueItem) => boolean;
+  /** Put a job just before (or, at the end of a lane, just after) another in
+   *  the queue order. Without it, or without `canReorder`, nothing is dragged.
+   *  Returns false when the job was dropped where it already was. */
+  onReorder?: (itemId: number, anchorId: number, placeAfter: boolean) => boolean;
+  /** Manual order applies: queue:reorder and shortest-first off. */
+  canReorder?: boolean;
+  /** Pin a job to a printer, or hand it back to any printer of a model. */
+  onPinItem?: (item: PrintQueueItem, target: QueueMoveTarget) => void;
+  /** Whether the user may change this job (its owner or queue:update_all). */
+  canModifyItem?: (item: PrintQueueItem) => boolean;
+  onEditItem?: (item: PrintQueueItem) => void;
+  onCancelItem?: (item: PrintQueueItem) => void;
+  onStopItem?: (item: PrintQueueItem) => void;
   t: (key: string, options?: Record<string, unknown>) => string;
 }
 
@@ -154,6 +168,7 @@ function TimelineBar({
       {...listeners}
       onClick={onClick}
       title={tooltipParts}
+      data-bar-item={ev.item.id}
       data-kind={isPrinting ? 'printing' : ev.projected ? 'projected' : 'pinned'}
       className={`absolute rounded-md transition-[filter,opacity] hover:brightness-110 hover:z-10 overflow-hidden flex items-center gap-1.5 px-1.5 text-left ${barClasses(ev)} ${
         draggable ? 'cursor-grab active:cursor-grabbing' : ''
@@ -214,18 +229,21 @@ function BarContent({ ev, t }: { ev: ScheduleEvent; t: QueueTimelineViewProps['t
 function LaneTrack({
   printerId,
   dragState,
+  markerX,
   children,
 }: {
   printerId: number;
   /** null when nothing is dragged. */
-  dragState: { allowed: boolean; current: boolean; reason: string | null; title?: string } | null;
+  dragState: { allowed: boolean; reason: string | null; title?: string } | null;
+  /** Where the dragged job would be inserted, in px from the track's left. */
+  markerX: number | null;
   children: ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `printer-${printerId}`, data: { printerId } });
-  const highlight = dragState && dragState.allowed && !dragState.current
+  const highlight = dragState && dragState.allowed
     ? isOver
-      ? 'ring-2 ring-inset ring-bambu-green bg-bambu-green/10'
-      : 'ring-1 ring-inset ring-bambu-green/40'
+      ? 'bg-bambu-green/5'
+      : 'ring-1 ring-inset ring-bambu-green/30'
     : '';
   return (
     <div
@@ -235,6 +253,18 @@ function LaneTrack({
       style={{ height: LANE_BAR_HEIGHT_PX + 16 }}
     >
       {children}
+      {markerX != null && (
+        // The gap the job drops into: it goes before the job on the right.
+        <div
+          className="absolute top-1 bottom-1 z-20 w-1 -ml-0.5 rounded-full bg-bambu-green shadow-[0_0_10px_rgba(0,174,66,0.8)] pointer-events-none"
+          style={{ left: markerX }}
+          data-testid={`drop-marker-${printerId}`}
+          aria-hidden
+        >
+          <div className="absolute -top-1 -left-1 w-3 h-3 rotate-45 bg-bambu-green" />
+          <div className="absolute -bottom-1 -left-1 w-3 h-3 rotate-45 bg-bambu-green" />
+        </div>
+      )}
       {dragState && !dragState.allowed && (
         <div
           className="absolute inset-0 z-20 flex items-center justify-center bg-bambu-dark/70 text-xs text-bambu-gray px-2 text-center pointer-events-none"
@@ -244,21 +274,6 @@ function LaneTrack({
           {dragState.reason}
         </div>
       )}
-    </div>
-  );
-}
-
-function AnyModelDropZone({ label }: { label: string }) {
-  const { setNodeRef, isOver } = useDroppable({ id: ANY_MODEL_DROP_ID });
-  return (
-    <div
-      ref={setNodeRef}
-      className={`flex items-center gap-2 px-3 py-3 border-b border-dashed text-xs ${
-        isOver ? 'bg-blue-500/15 border-blue-400 text-white' : 'bg-blue-500/5 border-blue-400/40 text-bambu-gray'
-      }`}
-    >
-      <Undo2 className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
-      {label}
     </div>
   );
 }
@@ -307,9 +322,13 @@ export function QueueTimelineView({
   printers,
   printerStatuses,
   sjfEnabled,
-  onItemClick,
-  onMoveItem,
-  canMoveItem,
+  onReorder,
+  canReorder = true,
+  onPinItem,
+  canModifyItem,
+  onEditItem,
+  onCancelItem,
+  onStopItem,
   t,
 }: QueueTimelineViewProps) {
   // Tick "now" every minute so the NOW line and ETA labels stay live.
@@ -397,11 +416,6 @@ export function QueueTimelineView({
     return result;
   }, [queueItems, printerStatuses, nowMs, forecast, itemsById]);
 
-  const laneOf = (ev: ScheduleEvent): number | null => {
-    if (ev.type === 'printing') return ev.item.printer_id;
-    return forecast?.placements.find((p) => p.item_id === ev.item.id)?.printer_id ?? null;
-  };
-
   const eventsByPrinter = useMemo(() => {
     const map = new Map<number, ScheduleEvent[]>();
     const placementPrinter = new Map((forecast?.placements ?? []).map((p) => [p.item_id, p.printer_id]));
@@ -445,12 +459,14 @@ export function QueueTimelineView({
     return latest > 0 ? new Date(latest) : null;
   }, [events]);
 
-  // ── Drag and drop ────────────────────────────────────────────────────────
+  // ── Drag and drop: the queue order ─────────────────────────────────────────
+  const mayModify = (item: PrintQueueItem): boolean => (canModifyItem ? canModifyItem(item) : true);
   const isDraggable = (item: PrintQueueItem): boolean =>
-    onMoveItem != null
+    onReorder != null
+    && canReorder
     && item.status === 'pending'
     && !(item.variants && item.variants.length > 0)
-    && (canMoveItem ? canMoveItem(item) : true);
+    && mayModify(item);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
@@ -462,43 +478,136 @@ export function QueueTimelineView({
     () => (dragItem ? events.find((ev) => ev.item.id === dragItem.id) ?? null : null),
     [dragItem, events],
   );
-  const dragLane = dragEvent ? laneOf(dragEvent) : dragItem?.printer_id ?? null;
-  // Where a pinned job goes back to "Any <model>": its printer's model.
-  const unpinModel = dragItem?.printer_id != null ? printersById.get(dragItem.printer_id)?.model ?? null : null;
+  // The gap the dragged job would drop into.
+  const [dropTarget, setDropTarget] = useState<{
+    printerId: number;
+    x: number;
+    anchorId: number | null;
+    placeAfter: boolean;
+  } | null>(null);
 
   const laneDragState = (printerId: number) => {
     if (!dragItem) return null;
-    if (printerId === dragLane) return { allowed: true, current: true, reason: null };
+    if (dragItem.printer_id != null) {
+      // Dragging changes the order, not the printer: a pinned job stays on its
+      // own lane. Moving it is a choice made in its details.
+      return dragItem.printer_id === printerId
+        ? { allowed: true, reason: null }
+        : {
+            allowed: false,
+            reason: t('queue.timeline.drop.pinnedElsewhere', {
+              printer: printersById.get(dragItem.printer_id)?.name ?? `#${dragItem.printer_id}`,
+            }),
+          };
+    }
     const refusal = forecast?.refusals[String(dragItem.id)]?.[String(printerId)];
     if (refusal) {
-      return { allowed: false, current: false, reason: refusalText(refusal, t), title: refusal.detail ?? undefined };
+      return { allowed: false, reason: refusalText(refusal, t), title: refusal.detail ?? undefined };
     }
-    return { allowed: true, current: false, reason: null };
+    return { allowed: true, reason: null };
+  };
+
+  // Where the pointer (or finger) is now: where the drag started plus how far it went.
+  const pointerX = (event: DragMoveEvent | DragOverEvent | DragEndEvent): number | null => {
+    const start = event.activatorEvent as MouseEvent | TouchEvent | null;
+    if (!start) return null;
+    const point = 'touches' in start ? start.touches[0] ?? start.changedTouches[0] : start;
+    return point ? point.clientX + event.delta.x : null;
+  };
+
+  // The queued jobs on a lane, as drawn, without the one being dragged: the
+  // gap under the pointer is before the first whose middle is right of it.
+  const gapAt = (printerId: number, x: number, draggedId: number) => {
+    const lane = document.querySelector<HTMLElement>(`[data-lane="${printerId}"]`);
+    if (!lane) return null;
+    const laneLeft = lane.getBoundingClientRect().left;
+    const bars = Array.from(lane.querySelectorAll<HTMLElement>('[data-bar-item]'))
+      .filter((el) => el.dataset.kind !== 'printing' && Number(el.dataset.barItem) !== draggedId)
+      .map((el) => ({ id: Number(el.dataset.barItem), rect: el.getBoundingClientRect() }))
+      .sort((a, b) => a.rect.left - b.rect.left);
+    const index = bars.findIndex((bar) => x < bar.rect.left + bar.rect.width / 2);
+    if (bars.length === 0) return { printerId, x: 0, anchorId: null, placeAfter: false };
+    if (index === -1) {
+      const last = bars[bars.length - 1];
+      return { printerId, x: last.rect.right - laneLeft, anchorId: last.id, placeAfter: true };
+    }
+    return { printerId, x: bars[index].rect.left - laneLeft, anchorId: bars[index].id, placeAfter: false };
   };
 
   const handleDragStart = (event: DragStartEvent) => {
     const item = (event.active.data.current as { item?: PrintQueueItem } | undefined)?.item;
     setDragItem(item ?? null);
+    setDropTarget(null);
   };
+
+  // The gap under the pointer on the lane it is over, if the job may go there.
+  const gapFor = (event: DragMoveEvent | DragOverEvent | DragEndEvent) => {
+    const printerId = (event.over?.data.current as { printerId?: number } | undefined)?.printerId;
+    const x = pointerX(event);
+    if (!dragItem || printerId == null || x == null || !laneDragState(printerId)?.allowed) return null;
+    return gapAt(printerId, x, dragItem.id);
+  };
+
+  // On every move, and when the lane under the pointer changes: a move event
+  // can still carry the lane it was over a moment ago.
+  const handleDragMove = (event: DragMoveEvent | DragOverEvent) => {
+    const gap = gapFor(event);
+    setDropTarget((prev) =>
+      prev && gap && prev.printerId === gap.printerId && prev.anchorId === gap.anchorId && prev.placeAfter === gap.placeAfter
+        ? prev
+        : gap,
+    );
+  };
+
+  // The job whose details are open, and a printer to offer for pinning.
+  const [details, setDetails] = useState<{ itemId: number; suggestedPrinterId?: number } | null>(null);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const item = dragItem;
+    const target = gapFor(event);
     setDragItem(null);
-    if (!item || !event.over || !onMoveItem) return;
-    if (event.over.id === ANY_MODEL_DROP_ID) {
-      if (unpinModel) {
+    setDropTarget(null);
+    if (!item || !target || !onReorder) return;
+    if (target.anchorId != null) {
+      if (onReorder(item.id, target.anchorId, target.placeAfter)) {
         setMovingIds((ids) => new Set(ids).add(item.id));
-        onMoveItem(item, { target_model: unpinModel });
       }
-      return;
+    } else if (item.printer_id == null) {
+      // An empty lane has no order to join: the way to put a job there is to
+      // pin it, so its details open with that printer offered.
+      setDetails({ itemId: item.id, suggestedPrinterId: target.printerId });
     }
-    const printerId = (event.over.data.current as { printerId?: number } | undefined)?.printerId;
-    if (printerId == null) return;
-    const state = laneDragState(printerId);
-    if (!state || !state.allowed || state.current) return;
-    setMovingIds((ids) => new Set(ids).add(item.id));
-    onMoveItem(item, { printer_id: printerId });
   };
+
+  // ── The open job's details ────────────────────────────────────────────────
+  const detailsItem = details ? itemsById.get(details.itemId) ?? null : null;
+  const detailsEvent = detailsItem ? events.find((ev) => ev.item.id === detailsItem.id) ?? null : null;
+  const detailsLane = detailsItem
+    ? detailsItem.status === 'printing'
+      ? detailsItem.printer_id
+      : forecast?.placements.find((p) => p.item_id === detailsItem.id)?.printer_id ?? null
+    : null;
+  const detailsExpected = detailsEvent && detailsLane != null
+    ? { printerId: detailsLane, start: detailsEvent.estimatedStart, end: detailsEvent.estimatedEnd }
+    : null;
+  const detailsOff = detailsItem ? offTimeline.find((row) => row.item.id === detailsItem.id)?.entry : undefined;
+  const detailsHeld = detailsOff
+    ? detailsOff.reason === 'waiting' && detailsOff.detail
+      ? detailsOff.detail
+      : t(`queue.timeline.offTimeline.${OFF_TIMELINE_KEYS[detailsOff.reason] ?? 'waiting'}`)
+    : null;
+  const detailsPinChoices = detailsItem
+    ? printers.filter(
+        (p) =>
+          p.is_active
+          && p.id !== detailsItem.printer_id
+          && !forecast?.refusals[String(detailsItem.id)]?.[String(p.id)],
+      )
+    : [];
+  // A job that went away (started elsewhere, removed) closes its details.
+  useEffect(() => {
+    if (details && !detailsItem) setDetails(null);
+  }, [details, detailsItem]);
 
   return (
     <div>
@@ -575,7 +684,11 @@ export function QueueTimelineView({
           <span className="inline-flex w-5 h-3.5 rounded-sm bg-blue-500/30 border border-blue-400/60" />
           {t('queue.timeline.legend.printing')}
         </span>
-        {onMoveItem && <span className="sm:ml-auto italic">{t('queue.timeline.legend.dragHint')}</span>}
+        {onReorder && (
+          <span className="sm:ml-auto italic">
+            {canReorder ? t('queue.timeline.legend.dragHint') : t('queue.timeline.legend.sjfHint')}
+          </span>
+        )}
       </div>
 
       {forecastFailed && !forecast && (
@@ -594,8 +707,13 @@ export function QueueTimelineView({
           sensors={sensors}
           collisionDetection={pointerFirst}
           onDragStart={handleDragStart}
+          onDragMove={handleDragMove}
+          onDragOver={handleDragMove}
           onDragEnd={handleDragEnd}
-          onDragCancel={() => setDragItem(null)}
+          onDragCancel={() => {
+            setDragItem(null);
+            setDropTarget(null);
+          }}
         >
           <div className="bg-bambu-dark-secondary rounded-xl border border-bambu-dark-tertiary overflow-hidden">
           {/* On a phone 24 hours would leave a print a few pixels: the track
@@ -620,10 +738,6 @@ export function QueueTimelineView({
               </div>
             </div>
 
-            {dragItem && unpinModel && (
-              <AnyModelDropZone label={t('queue.timeline.drop.toAny', { model: unpinModel })} />
-            )}
-
             {/* Lanes */}
             <div className="relative">
               {printers.map((printer) => {
@@ -643,7 +757,11 @@ export function QueueTimelineView({
                         )}
                       </div>
                     </div>
-                    <LaneTrack printerId={printer.id} dragState={laneDragState(printer.id)}>
+                    <LaneTrack
+                      printerId={printer.id}
+                      dragState={laneDragState(printer.id)}
+                      markerX={dropTarget?.printerId === printer.id ? dropTarget.x : null}
+                    >
                       {/* Hour grid lines */}
                       {hourTicks.map((tick) => (
                         <div
@@ -699,7 +817,7 @@ export function QueueTimelineView({
                             widthPct={((endMs - startMs) / RANGE_MS) * 100}
                             draggable={ev.type === 'queued' && isDraggable(ev.item)}
                             dimmed={movingIds.has(ev.item.id)}
-                            onClick={() => onItemClick(ev.item)}
+                            onClick={() => setDetails({ itemId: ev.item.id })}
                             t={t}
                           />
                         );
@@ -746,7 +864,7 @@ export function QueueTimelineView({
                       item={item}
                       reason={reason}
                       draggable={isDraggable(item)}
-                      onClick={() => onItemClick(item)}
+                      onClick={() => setDetails({ itemId: item.id })}
                     />
                   );
                 })}
@@ -770,6 +888,29 @@ export function QueueTimelineView({
             )}
           </DragOverlay>
         </DndContext>
+      )}
+
+      {detailsItem && (
+        <QueueJobDetails
+          item={detailsItem}
+          printers={printers}
+          expected={detailsExpected}
+          progress={detailsItem.status === 'printing' ? detailsEvent?.progress ?? null : null}
+          heldReason={detailsHeld}
+          pinChoices={detailsPinChoices}
+          suggestedPrinterId={details?.suggestedPrinterId ?? null}
+          canModify={mayModify(detailsItem)}
+          onPin={onPinItem ? (target) => {
+            setMovingIds((ids) => new Set(ids).add(detailsItem.id));
+            onPinItem(detailsItem, target);
+            setDetails(null);
+          } : undefined}
+          onEdit={onEditItem ? () => { setDetails(null); onEditItem(detailsItem); } : undefined}
+          onCancel={onCancelItem ? () => { setDetails(null); onCancelItem(detailsItem); } : undefined}
+          onStop={onStopItem ? () => { setDetails(null); onStopItem(detailsItem); } : undefined}
+          onClose={() => setDetails(null)}
+          t={t}
+        />
       )}
     </div>
   );
