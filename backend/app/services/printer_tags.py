@@ -23,7 +23,7 @@ image ignores.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from sqlalchemy import inspect as sa_inspect, select
@@ -180,6 +180,24 @@ async def check_tag_ids(db: AsyncSession, tag_ids: Iterable[int]) -> list[int]:
         return []
     found = set((await db.execute(select(LibraryTag.id).where(LibraryTag.id.in_(wanted)))).scalars().all())
     return sorted(wanted - found)
+
+
+async def printer_queue_filter(
+    db: AsyncSession, items: Iterable[PrintQueueItem]
+) -> Callable[[PrintQueueItem, int], bool]:
+    """Whether a job belongs in one printer's own queue list (card, "Next in queue").
+
+    That list holds the printer's jobs and every "Any <model>" job for its
+    model. One whose tags that printer refuses never runs there, so it is left
+    out, as the scheduler and the queue timeline leave it out.
+    """
+    unassigned = [item for item in items if item.printer_id is None]
+    routing = await TagRouting.load(db, unassigned) if unassigned else TagRouting()
+
+    def allows(item: PrintQueueItem, printer_id: int) -> bool:
+        return item.printer_id is not None or routing.accepts(item, printer_id)
+
+    return allows
 
 
 @dataclass

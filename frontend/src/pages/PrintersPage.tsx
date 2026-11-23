@@ -8814,6 +8814,8 @@ function EditPrinterModal({
     api.setPrinterTags(printer.id, shownTagIds, shownExclusive).then(
       () => {
         queryClient.invalidateQueries({ queryKey: printerTagsQueryKey });
+        // Each card's queue list leaves out the jobs its tags refuse.
+        queryClient.invalidateQueries({ queryKey: ['queue'] });
         updateMutation.mutate(data);
       },
       (error: Error) => showToast(error.message || t('printerTags.saveFailed'), 'error'),

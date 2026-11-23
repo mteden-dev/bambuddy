@@ -229,6 +229,25 @@ def _is_busy_only(reason: str) -> bool:
     return all(part.strip().startswith("Busy:") for part in reason.split(" | "))
 
 
+# The scheduler's wording for a pinned job whose printer waits for someone to
+# confirm the plate is clear (PrintScheduler._pinned_hold_reason).
+_PLATE_HOLD_PREFIX = "Waiting for plate confirmation:"
+
+
+def _waits_only_for_its_plate(item: PrintQueueItem) -> bool:
+    """A pinned job held only until its own printer's plate is confirmed clear.
+
+    It keeps its place on that printer's lane, which the timeline marks "Plate
+    to clear": once the plate is confirmed it runs there, in dispatch order with
+    the "Any" jobs forecast onto the same printer. Listing it apart left the
+    lane showing other jobs than the printer card's "Next in queue".
+    """
+    reason = item.waiting_reason or ""
+    return item.printer_id is not None and all(
+        part.strip().startswith(("Busy:", _PLATE_HOLD_PREFIX)) for part in reason.split(" | ")
+    )
+
+
 def _sliced_for(item: PrintQueueItem) -> str | None:
     if item.archive is not None:
         return item.archive.sliced_for_model
@@ -347,7 +366,7 @@ async def build_queue_forecast(db: AsyncSession, now: datetime | None = None) ->
             off_timeline.append(OffTimeline(item.id, "starting"))
         elif item.manual_start:
             off_timeline.append(OffTimeline(item.id, "manual_start"))
-        elif item.waiting_reason and not _is_busy_only(item.waiting_reason):
+        elif item.waiting_reason and not _is_busy_only(item.waiting_reason) and not _waits_only_for_its_plate(item):
             off_timeline.append(OffTimeline(item.id, "waiting", item.waiting_reason))
         elif item.printer_id is None and not item.target_model and not variant_models:
             off_timeline.append(OffTimeline(item.id, "unassigned"))

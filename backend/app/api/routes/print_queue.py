@@ -72,7 +72,7 @@ from backend.app.services.print_batch import (
     refresh_batches_after,
 )
 from backend.app.services.print_cost_estimate import estimate_queue_source_cost
-from backend.app.services.printer_tags import check_tag_ids, set_override
+from backend.app.services.printer_tags import check_tag_ids, printer_queue_filter, set_override
 from backend.app.services.queue_announcements import announce_queue_jobs_added
 from backend.app.services.queue_forecast import build_queue_forecast
 from backend.app.services.queue_item_printer import PRINTER_RESOLVED_DEFAULTS, drop_printer_resolved
@@ -811,6 +811,10 @@ async def list_queue(
 
     result = await db.execute(query)
     items = result.scalars().all()
+    if printer_id is not None and printer_id != -1:
+        # Fork: an "Any <model>" job stays off a printer its tags refuse.
+        tags_allow = await printer_queue_filter(db, items)
+        items = [item for item in items if tags_allow(item, printer_id)]
     return [_enrich_response(item) for item in items]
 
 

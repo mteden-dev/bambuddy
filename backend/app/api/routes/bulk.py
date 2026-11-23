@@ -53,6 +53,7 @@ from backend.app.schemas.printer import PrinterStatus
 from backend.app.schemas.printer_ha_sensor import PrinterHASensorReading
 from backend.app.schemas.smart_plug import SmartPlugResponse
 from backend.app.services.firmware_check import get_firmware_service
+from backend.app.services.printer_tags import printer_queue_filter
 from backend.app.utils.id_list import parse_id_list
 
 router = APIRouter(prefix="/bulk", tags=["bulk"])
@@ -240,12 +241,14 @@ async def list_queue_by_printers(
 
     items = (await db.execute(query)).scalars().all()
     responses = {item.id: _enrich_response(item) for item in items}
+    # Fork: an "Any <model>" job stays off a printer its tags refuse.
+    tags_allow = await printer_queue_filter(db, items)
 
     def belongs(item: PrintQueueItem, printer_id: int) -> bool:
         if item.printer_id is not None:
             return item.printer_id == printer_id
         model = models.get(printer_id)
-        return bool(model and item.target_model and item.target_model.lower() == model)
+        return bool(model and item.target_model and item.target_model.lower() == model) and tags_allow(item, printer_id)
 
     return {printer_id: [responses[item.id] for item in items if belongs(item, printer_id)] for printer_id in wanted}
 

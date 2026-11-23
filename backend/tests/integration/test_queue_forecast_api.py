@@ -111,3 +111,28 @@ async def test_a_scheduled_job_starts_at_its_time(
     [placement] = response.json()["placements"]
     assert placement["item_id"] == job
     assert datetime.fromisoformat(placement["start"]) == at.replace(tzinfo=timezone.utc)
+
+
+async def test_a_pinned_job_waiting_for_its_plate_stays_on_its_lane(
+    async_client: AsyncClient, db_session, printer_factory, archive_factory
+):
+    # The printer card's "Next in queue" names this job: the lane must too, not
+    # only the "Any" jobs forecast onto the same printer.
+    a = await printer_factory(name="P1S-A", model="P1S")
+    a_id = a.id
+    archive_id = (await archive_factory(a_id, sliced_for_model="P1S")).id
+    pinned = await _item(
+        db_session, archive_id, 1, printer_id=a_id, waiting_reason="Waiting for plate confirmation: P1S-A"
+    )
+    other = await _item(db_session, archive_id, 2, printer_id=a_id, waiting_reason="Waiting for filament: PETG")
+    any_job = await _item(db_session, archive_id, 3, target_model="P1S")
+
+    connected, status = _live({a_id})
+    with connected, status:
+        response = await async_client.get("/api/v1/queue/forecast")
+
+    body = response.json()
+    starts = {p["item_id"]: datetime.fromisoformat(p["start"]) for p in body["placements"]}
+    assert set(starts) == {pinned, any_job}
+    assert starts[pinned] < starts[any_job]
+    assert body["off_timeline"] == [{"item_id": other, "reason": "waiting", "detail": "Waiting for filament: PETG"}]

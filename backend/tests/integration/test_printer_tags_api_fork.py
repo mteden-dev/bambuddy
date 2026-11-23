@@ -120,3 +120,34 @@ class TestFileRoutingTags:
         await async_client.put(f"/api/v1/printer-tags/{p1.id}", json={"tag_ids": [tray]})
         response = await async_client.get(f"/api/v1/printer-tags/files?file_id={lib}&file_id=999")
         assert response.json() == [{"file_id": lib, "tag_ids": [tray]}]
+
+
+class TestPrinterQueueList:
+    """A printer card lists its jobs and the "Any <model>" jobs it may take."""
+
+    async def test_jobs_its_tags_refuse_stay_off_the_printer(self, async_client: AsyncClient, db_session, tagged):
+        p1, p2, tray, _, lib = tagged
+        cube = LibraryFile(
+            filename="cube.gcode.3mf", file_path="/test/library/cube.gcode.3mf", file_size=1, file_type="gcode.3mf"
+        )
+        db_session.add(cube)
+        await db_session.commit()
+        await async_client.put(f"/api/v1/printer-tags/{p2.id}", json={"tag_ids": [tray], "exclusive": True})
+        tray_job = (
+            await async_client.post("/api/v1/queue/", json={"target_model": "P1S", "library_file_id": lib})
+        ).json()["id"]
+        cube_job = (
+            await async_client.post("/api/v1/queue/", json={"target_model": "P1S", "library_file_id": cube.id})
+        ).json()["id"]
+
+        def ids(response):
+            return [item["id"] for item in response.json()]
+
+        # p1 has no "tray"; p2 takes only tagged jobs.
+        assert ids(await async_client.get(f"/api/v1/queue/?printer_id={p1.id}&status=pending")) == [cube_job]
+        assert ids(await async_client.get(f"/api/v1/queue/?printer_id={p2.id}&status=pending")) == [tray_job]
+        bulk = (await async_client.get(f"/api/v1/bulk/printer-queues?ids={p1.id},{p2.id}&status=pending")).json()
+        assert [i["id"] for i in bulk[str(p1.id)]] == [cube_job]
+        assert [i["id"] for i in bulk[str(p2.id)]] == [tray_job]
+        # The queue page's full list is untouched.
+        assert sorted(ids(await async_client.get("/api/v1/queue/?status=pending"))) == sorted([tray_job, cube_job])
