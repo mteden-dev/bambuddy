@@ -9,7 +9,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,7 @@ from backend.app.core.auth import (
     RequestActor,
     RequestPrinterScope,
     RequirePermissionIfAuthEnabled,
+    require_media_token_ownership,
     require_ownership_permission,
 )
 from backend.app.core.database import get_db
@@ -58,18 +60,34 @@ class PartIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     quantity: int = Field(1, ge=1, le=100)
     matched: bool = False
+    # Work after printing before the product is done (a tray glued into the
+    # base drying): the planner prints such parts earlier.
+    finish_minutes: int = Field(0, ge=0, le=7 * 24 * 60)
 
 
 class PlatePieceIn(BaseModel):
-    # Index into the product's ``parts`` as sent.
-    part: int = Field(ge=0)
+    # The part as the index into the product's ``parts`` as sent, or by name.
+    part: int | None = Field(None, ge=0)
+    part_name: str | None = Field(None, min_length=1, max_length=255)
     pieces: int = Field(ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def _one_part(self) -> PlatePieceIn:
+        if (self.part is None) == (self.part_name is None):
+            raise ValueError("Name the part by part (its index) or part_name, not both")
+        return self
 
 
 class PlateIn(BaseModel):
     library_file_id: int
     plate_id: int | None = Field(None, ge=1)
     pieces: list[PlatePieceIn] = Field(min_length=1, max_length=20)
+
+
+class SkuRef(BaseModel):
+    # A shop SKU (Base) that is this product; units: products one item is (a set of 3 -> 3).
+    sku: str = Field(min_length=1, max_length=100)
+    units: int = Field(1, ge=1, le=1000)
 
 
 class ProductIn(IgnoresNullForRequiredColumns):
@@ -80,12 +98,23 @@ class ProductIn(IgnoresNullForRequiredColumns):
     notes: str | None = Field(None, max_length=5000)
     parts: list[PartIn] = Field(min_length=1, max_length=20)
     plates: list[PlateIn] = Field(default_factory=list, max_length=100)
+    # The product's shop SKUs; omitted leaves them as they are.
+    skus: list[SkuRef] | None = Field(None, max_length=50)
 
     @model_validator(mode="after")
     def _pieces_name_parts(self) -> ProductIn:
+        by_name = {part.name.strip().casefold(): index for index, part in enumerate(self.parts)}
+        if len(by_name) < len(self.parts):
+            raise ValueError("Two parts have the same name")
         for plate in self.plates:
             seen = set()
             for piece in plate.pieces:
+                if piece.part_name is not None:
+                    index = by_name.get(piece.part_name.strip().casefold())
+                    if index is None:
+                        raise ValueError(f"A plate names part {piece.part_name!r}, which the product does not have")
+                    piece.part, piece.part_name = index, None
+                assert piece.part is not None
                 if piece.part >= len(self.parts):
                     raise ValueError(f"A plate names part {piece.part}, but there are {len(self.parts)} parts")
                 if piece.part in seen:
@@ -130,6 +159,57 @@ class StockIn(BaseModel):
         return self
 
 
+class PlatePieceRef(BaseModel):
+    # The part by id, or by name (case does not matter).
+    part_id: int | None = None
+    part_name: str | None = Field(None, min_length=1, max_length=255)
+    pieces: int = Field(ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def _one_part(self) -> PlatePieceRef:
+        if (self.part_id is None) == (self.part_name is None):
+            raise ValueError("Name the part by part_id or part_name, not both")
+        return self
+
+
+class PlateAdd(BaseModel):
+    library_file_id: int
+    plate_id: int | None = Field(None, ge=1)
+    pieces: list[PlatePieceRef] = Field(min_length=1, max_length=20)
+
+
+class PlatesAdd(BaseModel):
+    # A file (and plate) the product already has gets these pieces instead.
+    plates: list[PlateAdd] = Field(min_length=1, max_length=200)
+
+
+class PlateSuggestIn(BaseModel):
+    # Where to look: a folder (with its subfolders unless recursive is false),
+    # or files by id; at least one.
+    folder_id: int | None = None
+    recursive: bool = True
+    library_file_ids: list[int] | None = Field(None, max_length=1000)
+    # Part name -> more words that name it in file names, e.g. {"Góra": ["top", "lid"]}.
+    keywords: dict[str, list[str]] = Field(default_factory=dict)
+    # Add the suggestions that found pieces, skipping files the product has.
+    apply: bool = False
+
+    @model_validator(mode="after")
+    def _somewhere(self) -> PlateSuggestIn:
+        if self.folder_id is None and not self.library_file_ids:
+            raise ValueError("Give folder_id or library_file_ids")
+        return self
+
+
+class StockMoveIn(BaseModel):
+    part_id: int
+    # 0 or null: pieces whose printer is not known.
+    from_printer_id: int | None = None
+    to_printer_id: int | None = None
+    pieces: int = Field(ge=1, le=10000)
+    note: str | None = Field(None, max_length=255)
+
+
 class ProductSettings(IgnoresNullForRequiredColumns):
     # Stored in one settings row, so no column says it can't be null; the field
     # is required, and a null is a 422.
@@ -145,6 +225,23 @@ class ProductSettings(IgnoresNullForRequiredColumns):
 class PartPieces(BaseModel):
     part_id: int
     pieces: int
+
+
+class ProductSettingsOut(BaseModel):
+    plate_cost_minutes: int
+    # "Shortest first" is on: the scheduler takes jobs by print time, not in
+    # the order the plan put them (pinned and reserved jobs keep their printer).
+    sjf_enabled: bool = False
+
+
+class PlateSuggestion(BaseModel):
+    file: PlateFile
+    # Empty when the name says nothing usable.
+    pieces: list[PartPieces]
+    # "single_part" or "name"; None when nothing was found.
+    found_by: str | None
+    # The product has this file already.
+    added: bool
 
 
 class PlateFile(BaseModel):
@@ -166,6 +263,7 @@ class PartOut(BaseModel):
     name: str
     quantity: int
     matched: bool
+    finish_minutes: int = 0
 
 
 class PlateOut(BaseModel):
@@ -182,8 +280,14 @@ class ProductOut(BaseModel):
     notes: str | None
     parts: list[PartOut]
     plates: list[PlateOut]
+    skus: list[SkuRef] = Field(default_factory=list)
     open_orders: int = 0
     open_units: int = 0
+    # GET /products/{id}/thumbnail answers: the uploaded picture, else the
+    # first plate's. thumbnail_version changes with it (for caches).
+    has_thumbnail: bool = False
+    custom_thumbnail: bool = False
+    thumbnail_version: str | None = None
     created_at: UTCDatetime = None
 
 
@@ -241,7 +345,11 @@ class ProductDetail(ProductOut):
 
 class PlanOut(BaseModel):
     product: ProductDetail
+    # Plates in the queue for the plan: new jobs plus waiting jobs it kept.
     planned_jobs: int
+    created: int = 0
+    kept: int = 0
+    # Waiting jobs it took out of the queue.
     replaced: int
     # order id -> when the plan expects it ready
     ready_at: dict[int, UTCDatetime] = Field(default_factory=dict)
@@ -302,7 +410,10 @@ def _product_out(product: Product, counts: tuple[int, int] = (0, 0)) -> dict:
         "id": product.id,
         "name": product.name,
         "notes": product.notes,
-        "parts": [PartOut(id=p.id, name=p.name, quantity=p.quantity, matched=p.matched) for p in product.parts],
+        "parts": [
+            PartOut(id=p.id, name=p.name, quantity=p.quantity, matched=p.matched, finish_minutes=p.finish_minutes or 0)
+            for p in product.parts
+        ],
         "plates": [
             PlateOut(
                 id=plate.id,
@@ -313,10 +424,21 @@ def _product_out(product: Product, counts: tuple[int, int] = (0, 0)) -> dict:
             )
             for plate in product.plates
         ],
+        "skus": [SkuRef(sku=row.sku, units=row.units) for row in product.skus],
         "open_orders": counts[0],
         "open_units": counts[1],
+        "has_thumbnail": svc.has_thumbnail(product),
+        "custom_thumbnail": bool(product.thumbnail_path),
+        "thumbnail_version": _thumbnail_version(product),
         "created_at": product.created_at,
     }
+
+
+def _thumbnail_version(product: Product) -> str | None:
+    if product.thumbnail_path:
+        return product.thumbnail_path.rsplit("/", 1)[-1].removesuffix(".png")
+    first = next((p for p in product.plates if svc.plate_usable(p) and p.library_file.thumbnail_path), None)
+    return f"plate-{first.library_file_id}" if first is not None else None
 
 
 def _order_out(order: ProductOrder, **extra) -> OrderOut:
@@ -423,20 +545,15 @@ async def _get_product(db: AsyncSession, product_id: int) -> Product:
     return product
 
 
-async def _write_product(db: AsyncSession, product: Product, data: ProductIn, actor: User | ApiKeyActor | None) -> None:
-    """Apply ``data`` to ``product``: parts by id, plates replaced. The caller commits."""
+async def _check_plate_files(db: AsyncSession, file_ids: set[int], actor: User | ApiKeyActor | None) -> None:
+    """Every file exists, the caller may print it, and it says which printer it is for."""
     from backend.app.api.routes.print_queue import _assert_can_queue_library_file
 
-    existing = {p.id: p for p in product.parts}
-    for part in data.parts:
-        if part.id is not None and part.id not in existing:
-            raise HTTPException(400, f"Part {part.id} is not a part of this product")
-    file_ids = {plate.library_file_id for plate in data.plates}
     files = {}
     if file_ids:
         rows = (await db.execute(LibraryFile.active().where(LibraryFile.id.in_(file_ids)))).scalars()
         files = {f.id: f for f in rows}
-    for file_id in file_ids:
+    for file_id in sorted(file_ids):
         library_file = files.get(file_id)
         if library_file is None:
             raise HTTPException(404, f"Library file {file_id} not found")
@@ -447,6 +564,77 @@ async def _write_product(db: AsyncSession, product: Product, data: ProductIn, ac
                 f"{library_file.filename} does not say which printer it was sliced for; "
                 "slice it or set its printer in File Manager",
             )
+
+
+async def _set_plate(
+    db: AsyncSession, product: Product, library_file_id: int, plate_id: int | None, pieces: dict[int, int]
+) -> ProductPlate:
+    """The product's plate for this file (and plate), new or with these pieces now. The caller commits."""
+    row = next((p for p in product.plates if p.library_file_id == library_file_id and p.plate_id == plate_id), None)
+    if row is None:
+        row = ProductPlate(
+            product_id=product.id,
+            library_file_id=library_file_id,
+            plate_id=plate_id,
+            sort_order=max((p.sort_order for p in product.plates), default=-1) + 1,
+        )
+        db.add(row)
+        await db.flush()
+        product.plates.append(row)
+    else:
+        for piece in list(row.pieces):
+            await db.delete(piece)
+        await db.flush()
+    for part_id, n in pieces.items():
+        db.add(ProductPlatePart(plate_id=row.id, part_id=part_id, pieces=n))
+    return row
+
+
+async def _write_skus(db: AsyncSession, product: Product, skus: list[SkuRef]) -> None:
+    """Make ``skus`` the product's SKUs. A SKU another product has is refused (409);
+    one marked "not printed" is taken over."""
+    from backend.app.models.base_sync import ProductSku
+
+    wanted = {ref.sku.strip(): ref.units for ref in skus}
+    folded = {sku.casefold() for sku in wanted}
+    if len(folded) < len(wanted):
+        raise HTTPException(400, "The same SKU twice")
+    rows = (await db.execute(select(ProductSku).where(func.lower(ProductSku.sku).in_(folded)))).scalars()
+    taken = {row.sku.casefold(): row for row in rows}
+    for sku in wanted:
+        row = taken.get(sku.casefold())
+        if row is not None and row.product_id not in (None, product.id):
+            owner = await db.get(Product, row.product_id)
+            raise HTTPException(409, f"SKU {sku} is product {owner.name if owner else row.product_id} already")
+    for row in list(product.skus):
+        if row.sku.casefold() not in folded:
+            product.skus.remove(row)
+            await db.delete(row)
+    for sku, units in wanted.items():
+        row = taken.get(sku.casefold())
+        if row is None:
+            row = ProductSku(sku=sku, product_id=product.id, units=units)
+            db.add(row)
+            product.skus.append(row)
+        else:
+            row.product_id = product.id
+            row.units = units
+    await db.flush()
+
+
+async def _write_product(db: AsyncSession, product: Product, data: ProductIn, actor: User | ApiKeyActor | None) -> None:
+    """Apply ``data`` to ``product``: parts by id, plates by file. The caller commits.
+
+    A plate whose file (and plate) the product had keeps its row, so the
+    planner's waiting jobs for it can stay in the queue.
+    """
+    existing = {p.id: p for p in product.parts}
+    for part in data.parts:
+        if part.id is not None and part.id not in existing:
+            raise HTTPException(400, f"Part {part.id} is not a part of this product")
+    await _check_plate_files(db, {plate.library_file_id for plate in data.plates}, actor)
+    if data.skus is not None:
+        await _write_skus(db, product, data.skus)
 
     product.name = data.name.strip()
     product.notes = data.notes
@@ -463,20 +651,35 @@ async def _write_product(db: AsyncSession, product: Product, data: ProductIn, ac
         row.name = part.name.strip()
         row.quantity = part.quantity
         row.matched = part.matched
+        row.finish_minutes = part.finish_minutes
         row.sort_order = index
         parts.append(row)
+    await db.flush()
+    wanted = {(plate.library_file_id, plate.plate_id) for plate in data.plates}
     for plate in list(product.plates):
-        await db.delete(plate)
+        if (plate.library_file_id, plate.plate_id) not in wanted:
+            product.plates.remove(plate)
+            await db.delete(plate)
     await db.flush()
     for index, plate in enumerate(data.plates):
-        row = ProductPlate(
-            product_id=product.id, library_file_id=plate.library_file_id, plate_id=plate.plate_id, sort_order=index
-        )
-        db.add(row)
-        await db.flush()
+        pieces: dict[int, int] = {}
         for piece in plate.pieces:
-            db.add(ProductPlatePart(plate_id=row.id, part_id=parts[piece.part].id, pieces=piece.pieces))
+            assert piece.part is not None  # names were turned into indexes
+            pieces[parts[piece.part].id] = piece.pieces
+        row = await _set_plate(db, product, plate.library_file_id, plate.plate_id, pieces)
+        row.sort_order = index
     await db.flush()
+
+
+async def _follow_base_orders(db: AsyncSession, data: ProductIn) -> None:
+    """New or changed SKUs: accepted Base orders still waiting get their product orders, then replan."""
+    if not data.skus:
+        return
+    from backend.app.services import base_sync
+
+    changed = await base_sync.refresh_accepted(db)
+    if changed:
+        await base_sync.replan_products(db, changed, await base_sync.read_config(db))
 
 
 async def _plan_response(
@@ -494,10 +697,18 @@ async def _plan_response(
     product = await _get_product(db, product_id)
     plan = outcome.plan
     plates = plan.plates if plan is not None else []
-    logger.info("[PRODUCTS] Planned product %s: %s plates, %s replaced", product_id, len(plates), outcome.replaced)
+    logger.info(
+        "[PRODUCTS] Planned product %s: %s plates (%s kept), %s replaced",
+        product_id,
+        len(plates),
+        outcome.kept,
+        outcome.replaced,
+    )
     return PlanOut(
         product=await _detail(db, product),
-        planned_jobs=len(outcome.item_ids),
+        planned_jobs=len(outcome.item_ids) + outcome.kept,
+        created=len(outcome.item_ids),
+        kept=outcome.kept,
         replaced=outcome.replaced,
         ready_at={k: _utc(v) for k, v in (plan.ready_at if plan else {}).items() if v is not None},
         finish_at=_utc(max((p.ready for p in plates), default=None)),
@@ -523,12 +734,19 @@ async def list_products(db: AsyncSession = Depends(get_db, scope="function"), _=
     return result
 
 
-@router.get("/settings", response_model=ProductSettings)
+async def _settings_out(db: AsyncSession) -> ProductSettingsOut:
+    from backend.app.api.routes.settings import get_setting
+
+    sjf = (await get_setting(db, "queue_shortest_first") or "").lower() == "true"
+    return ProductSettingsOut(plate_cost_minutes=await svc.read_plate_cost_minutes(db), sjf_enabled=sjf)
+
+
+@router.get("/settings", response_model=ProductSettingsOut)
 async def get_product_settings(db: AsyncSession = Depends(get_db, scope="function"), _=ReadAccess):
-    return ProductSettings(plate_cost_minutes=await svc.read_plate_cost_minutes(db))
+    return await _settings_out(db)
 
 
-@router.put("/settings", response_model=ProductSettings)
+@router.put("/settings", response_model=ProductSettingsOut)
 async def put_product_settings(
     data: ProductSettings,
     db: AsyncSession = Depends(get_db, scope="function"),
@@ -536,7 +754,7 @@ async def put_product_settings(
 ):
     await svc.write_plate_cost_minutes(db, data.plate_cost_minutes)
     await db.commit()
-    return ProductSettings(plate_cost_minutes=await svc.read_plate_cost_minutes(db))
+    return await _settings_out(db)
 
 
 @router.get("/file-info/{library_file_id}", response_model=PlateFile)
@@ -572,6 +790,7 @@ async def create_product(
     product = await svc.load_product(db, product.id)
     assert product is not None
     await _write_product(db, product, data, actor)
+    await _follow_base_orders(db, data)
     await db.commit()
     return await _detail(db, await _get_product(db, product.id), estimates=False)
 
@@ -595,6 +814,7 @@ async def update_product(
 ):
     product = await _get_product(db, product_id)
     await _write_product(db, product, data, actor)
+    await _follow_base_orders(db, data)
     await db.commit()
     return await _detail(db, await _get_product(db, product_id), estimates=False)
 
@@ -614,6 +834,7 @@ async def delete_product(
     if any(j.status == "printing" for j in jobs):
         raise HTTPException(409, "A print of this product is running; delete it when it is done")
     await svc._remove_waiting_jobs(db, jobs)
+    svc.remove_thumbnail(product)
     await db.delete(product)
     await db.commit()
     return {"deleted": product_id}
@@ -738,6 +959,251 @@ async def adjust_stock(
             delta=data.delta,
             note=data.note,
             created_by_id=actor.id if actor is not None else None,
+        )
+    )
+    await db.flush()
+    return await _plan_response(db, product_id, actor, review_required, printer_scope)
+
+
+# --- plates ---------------------------------------------------------------------------------
+
+
+def _resolve_pieces(product: Product, refs: list[PlatePieceRef]) -> dict[int, int]:
+    by_id = {p.id: p for p in product.parts}
+    by_name = {p.name.strip().casefold(): p for p in product.parts}
+    pieces: dict[int, int] = {}
+    for ref in refs:
+        if ref.part_id is not None:
+            part = by_id.get(ref.part_id)
+            if part is None:
+                raise HTTPException(400, f"Part {ref.part_id} is not a part of this product")
+        else:
+            assert ref.part_name is not None
+            part = by_name.get(ref.part_name.strip().casefold())
+            if part is None:
+                raise HTTPException(400, f"The product has no part named {ref.part_name!r}")
+        if part.id in pieces:
+            raise HTTPException(400, f"A plate names {part.name!r} twice")
+        pieces[part.id] = ref.pieces
+    return pieces
+
+
+@router.post("/{product_id}/plates", response_model=ProductDetail)
+async def add_plates(
+    product_id: int,
+    data: PlatesAdd,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+):
+    """Add plates to a product (parts by id or name); a file it has gets the new pieces.
+
+    Open orders are not replanned: POST /products/{id}/replan when they should
+    use the new plates.
+    """
+    product = await _get_product(db, product_id)
+    await _check_plate_files(db, {plate.library_file_id for plate in data.plates}, actor)
+    resolved = [(plate, _resolve_pieces(product, plate.pieces)) for plate in data.plates]
+    for plate, pieces in resolved:
+        await _set_plate(db, product, plate.library_file_id, plate.plate_id, pieces)
+    await db.commit()
+    return await _detail(db, await _get_product(db, product_id), estimates=False)
+
+
+@router.delete("/{product_id}/plates/{plate_id}", response_model=ProductDetail)
+async def delete_plate(
+    product_id: int,
+    plate_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+):
+    """Take a plate off a product (by its id in the product's ``plates``)."""
+    product = await _get_product(db, product_id)
+    plate = next((p for p in product.plates if p.id == plate_id), None)
+    if plate is None:
+        raise HTTPException(404, "The product has no such plate")
+    await db.delete(plate)
+    await db.commit()
+    return await _detail(db, await _get_product(db, product_id), estimates=False)
+
+
+@router.post("/{product_id}/plates/suggest")
+async def suggest_plates(
+    product_id: int,
+    data: PlateSuggestIn,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+) -> dict:
+    """Which sliced files in a folder (or by id) print which parts, from their names.
+
+    Every sliced file that says which printer it is for is listed, with the
+    pieces its name and objects suggest (see services/products.guess_plate),
+    so this also lists a folder's plates for a script to assign itself. With
+    ``apply`` the suggestions with pieces are added (files the product has
+    are left alone).
+    """
+    from backend.app.core.permissions import Permission as P
+
+    product = await _get_product(db, product_id)
+    query = LibraryFile.active()
+    if data.library_file_ids:
+        query = query.where(LibraryFile.id.in_(data.library_file_ids))
+    if data.folder_id is not None:
+        folders = await svc.folder_and_below(db, data.folder_id) if data.recursive else {data.folder_id}
+        query = query.where(LibraryFile.folder_id.in_(folders))
+    files = list((await db.execute(query.order_by(LibraryFile.filename))).scalars())
+    can_read_all = actor is None or actor.has_permission(P.LIBRARY_READ_ALL.value)
+    files = [
+        f
+        for f in files
+        if svc.is_sliced_file(f)
+        and svc.plate_model(f)
+        and (can_read_all or (f.created_by_id is not None and f.created_by_id == actor.id))
+    ]
+    have = {(p.library_file_id, p.plate_id) for p in product.plates}
+    suggestions = []
+    applied = 0
+    for library_file in files:
+        guess = svc.guess_plate(list(product.parts), library_file, data.keywords)
+        added = (library_file.id, None) in have
+        if data.apply and guess.pieces and not added:
+            await _set_plate(db, product, library_file.id, None, guess.pieces)
+            applied += 1
+            added = True
+        suggestions.append(
+            PlateSuggestion(
+                file=_file_info(library_file),
+                pieces=[PartPieces(part_id=k, pieces=v) for k, v in guess.pieces.items()],
+                found_by=guess.found_by,
+                added=added,
+            )
+        )
+    if applied:
+        await db.commit()
+    return {"suggestions": [s.model_dump() for s in suggestions], "applied": applied}
+
+
+# --- thumbnail ------------------------------------------------------------------------------
+
+
+@router.get("/{product_id}/thumbnail")
+async def get_thumbnail(
+    product_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _=Depends(require_media_token_ownership(Permission.QUEUE_READ_ALL, Permission.QUEUE_READ_OWN)),
+):
+    """The product's picture: the uploaded one, else its first plate's thumbnail.
+
+    Accepts a media token in ``?token=`` because <img> cannot send headers.
+    """
+    path = svc.thumbnail_file(await _get_product(db, product_id))
+    if path is None:
+        raise HTTPException(404, "The product has no picture")
+    media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+    return FileResponse(path, media_type=media.get(path.suffix.lower(), "image/png"))
+
+
+@router.post("/{product_id}/thumbnail", response_model=ProductDetail)
+async def upload_thumbnail(
+    product_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+):
+    """Upload the product's picture (PNG, JPEG, WebP…; stored as a PNG of at most 512 px)."""
+    product = await _get_product(db, product_id)
+    data = await file.read(svc.THUMBNAIL_MAX_BYTES + 1)
+    try:
+        svc.save_thumbnail(product, data)
+    except svc.ThumbnailError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await db.commit()
+    return await _detail(db, await _get_product(db, product_id), estimates=False)
+
+
+@router.post("/{product_id}/thumbnail/from-file/{library_file_id}", response_model=ProductDetail)
+async def thumbnail_from_file(
+    product_id: int,
+    library_file_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+):
+    """Use a library file's thumbnail (any file, e.g. a photo uploaded to File Manager) as the picture."""
+    from backend.app.api.routes.print_queue import _assert_can_queue_library_file
+
+    product = await _get_product(db, product_id)
+    library_file = (
+        await db.execute(LibraryFile.active().where(LibraryFile.id == library_file_id))
+    ).scalar_one_or_none()
+    if library_file is None:
+        raise HTTPException(404, "Library file not found")
+    _assert_can_queue_library_file(library_file, actor)
+    source = svc._absolute(library_file.thumbnail_path)
+    if source is None or not source.is_file():
+        raise HTTPException(404, "The file has no thumbnail")
+    try:
+        svc.save_thumbnail(product, source.read_bytes())
+    except svc.ThumbnailError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await db.commit()
+    return await _detail(db, await _get_product(db, product_id), estimates=False)
+
+
+@router.delete("/{product_id}/thumbnail", response_model=ProductDetail)
+async def delete_thumbnail(
+    product_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+):
+    """Drop the uploaded picture; the product shows its first plate's thumbnail again."""
+    product = await _get_product(db, product_id)
+    svc.remove_thumbnail(product)
+    await db.commit()
+    return await _detail(db, await _get_product(db, product_id), estimates=False)
+
+
+# --- moving pieces between printers ------------------------------------------------------------
+
+
+@router.post("/{product_id}/stock/move", response_model=PlanOut)
+async def move_stock(
+    product_id: int,
+    data: StockMoveIn,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+    review_required: bool = QueueReviewRequired,
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Count pieces of a part as made on another printer, then replan.
+
+    For pairing on purpose what the planner keeps apart: a lid from one
+    printer with a base from another makes a product once both count on
+    one printer.
+    """
+    product = await _get_product(db, product_id)
+    part = next((p for p in product.parts if p.id == data.part_id), None)
+    if part is None:
+        raise HTTPException(400, "The part is not a part of this product")
+    source = data.from_printer_id or planner.UNKNOWN_PRINTER
+    target = data.to_printer_id or planner.UNKNOWN_PRINTER
+    if source == target:
+        raise HTTPException(400, "The pieces are on that printer already")
+    there = (await svc.stock_pool(db, product)).get(part.id, {}).get(source, 0)
+    if there < data.pieces:
+        raise HTTPException(400, f"Only {max(0, there)} pieces of {part.name} are counted on that printer")
+    note = data.note or "moved"
+    actor_id = actor.id if actor is not None else None
+    db.add(
+        ProductStockAdjustment(
+            part_id=part.id, printer_id=source or None, delta=-data.pieces, note=note, created_by_id=actor_id
+        )
+    )
+    db.add(
+        ProductStockAdjustment(
+            part_id=part.id, printer_id=target or None, delta=data.pieces, note=note, created_by_id=actor_id
         )
     )
     await db.flush()

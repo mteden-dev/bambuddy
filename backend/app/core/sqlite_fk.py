@@ -85,6 +85,7 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         ("custom_product_jobs", "product_id"),
         ("custom_product_jobs", "product_plate_id"),
         ("custom_product_stock", "part_id"),
+        ("custom_product_skus", "product_id"),
         # print_batches
         ("print_batch_plates", "batch_id"),
         ("print_queue", "batch_id"),

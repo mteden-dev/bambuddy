@@ -27,9 +27,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +45,7 @@ from backend.app.models.products import (
     Product,
     ProductJob,
     ProductOrder,
+    ProductPart,
     ProductPlate,
     ProductStockAdjustment,
 )
@@ -98,6 +101,7 @@ async def load_product(db: AsyncSession, product_id: int) -> Product | None:
             .where(Product.id == product_id)
             .options(
                 selectinload(Product.parts),
+                selectinload(Product.skus),
                 selectinload(Product.plates).selectinload(ProductPlate.pieces),
                 selectinload(Product.plates).selectinload(ProductPlate.library_file),
             )
@@ -107,7 +111,10 @@ async def load_product(db: AsyncSession, product_id: int) -> Product | None:
 
 
 def part_specs(product: Product) -> list[planner.PartSpec]:
-    return [planner.PartSpec(p.id, max(1, p.quantity or 1), bool(p.matched)) for p in product.parts]
+    return [
+        planner.PartSpec(p.id, max(1, p.quantity or 1), bool(p.matched), max(0, p.finish_minutes or 0) * 60)
+        for p in product.parts
+    ]
 
 
 def job_pieces(job: ProductJob, part_ids: set[int]) -> planner.Pieces:
@@ -340,7 +347,9 @@ class PlanOutcome:
     plan: planner.Plan | None
     # Queue jobs made by this plan, in start order.
     item_ids: list[int] = field(default_factory=list)
-    # Waiting jobs it replaced.
+    # Waiting jobs the plan kept as they were (same plate, same printer).
+    kept: int = 0
+    # Waiting jobs it took out of the queue.
     replaced: int = 0
     # Plates it could not use: (plate id, why).
     skipped_plates: list[tuple[int, str]] = field(default_factory=list)
@@ -356,6 +365,25 @@ async def _file_tag_ids(db: AsyncSession, file_ids: set[int]) -> dict[int, froze
     for file_id, tag_id in rows.all():
         tags.setdefault(file_id, set()).add(tag_id)
     return {file_id: frozenset(ids) for file_id, ids in tags.items()}
+
+
+async def _waiting_jobs(db: AsyncSession, jobs: list[ProductJob]) -> list[ProductJob]:
+    """The planner's jobs still waiting in the queue and not being sent."""
+    planned = [j for j in jobs if j.status == "planned" and j.queue_item_id is not None]
+    if not planned:
+        return []
+    waiting = set(
+        (
+            await db.execute(
+                select(PrintQueueItem.id).where(
+                    PrintQueueItem.id.in_([j.queue_item_id for j in planned]),
+                    PrintQueueItem.status == "pending",
+                    PrintQueueItem.dispatching_at.is_(None),
+                )
+            )
+        ).scalars()
+    )
+    return [j for j in planned if j.queue_item_id in waiting]
 
 
 async def _remove_waiting_jobs(db: AsyncSession, jobs: list[ProductJob]) -> int:
@@ -404,10 +432,12 @@ async def replan(
 ) -> PlanOutcome:
     """Plan the product's open orders again and put the plates in the queue.
 
-    The planner's waiting jobs are replaced; started ones stay and count as
-    coming. ``printer_ids`` limits the printers (the user's printer scope);
-    ``manual_start`` makes the new jobs wait for someone to press Start. The
-    caller commits.
+    Started jobs stay and count as coming. A waiting job the new plan has too
+    (the same plate on the same printer) is kept, with whatever was changed
+    on it in the queue (filament mapping, options), and moved to its place in
+    the plan; the other waiting jobs leave the queue. ``printer_ids`` limits
+    the printers (the user's printer scope); ``manual_start`` makes new jobs
+    wait for someone to press Start. The caller commits.
     """
     from backend.app.services.print_defaults import default_print_options
     from backend.app.services.printer_tags import NO_TAGS, read_printer_tags
@@ -420,16 +450,21 @@ async def replan(
         return PlanOutcome(plan=None)
     jobs = await active_jobs(db, product.id)
     await sync_jobs(db, jobs)
-    replaced = await _remove_waiting_jobs(db, jobs)
+    await db.flush()
     pool = await stock_pool(db, product)
     await complete_ready_orders(db, product, pool)
     orders = await open_orders(db, product.id)
     jobs = await active_jobs(db, product.id)
+    waiting = await _waiting_jobs(db, jobs)
+    waiting_items = {job.queue_item_id for job in waiting}
 
     inputs = await load_forecast_inputs(db)
     now = inputs.now
     ready_after = inputs.ready_after
-    placements, _ = place_jobs(inputs.schedulable, inputs.printers, now, ready_after)
+    # The lanes as they are without this product's waiting jobs: the plan
+    # places them again.
+    others = [job for job in inputs.schedulable if job.id not in waiting_items]
+    placements, _ = place_jobs(others, inputs.printers, now, ready_after)
     lane_end = {p.id: max(_aware(p.free_at) or now, now) for p in inputs.printers}
     for placement in placements:
         end = ready_after(placement.end) if ready_after is not None else placement.end
@@ -503,8 +538,9 @@ async def replan(
 
     rank = {p.id: i for i, p in enumerate(inputs.printers)}
     planned = sorted(result.plates, key=lambda p: (p.start, rank.get(p.printer_id, 0)))
-    outcome = PlanOutcome(plan=result, replaced=replaced, skipped_plates=skipped)
+    outcome = PlanOutcome(plan=result, skipped_plates=skipped)
     if not planned:
+        outcome.replaced = await _remove_waiting_jobs(db, waiting)
         return outcome
 
     from backend.app.api.routes.library_variants import normalize_model_name
@@ -521,12 +557,33 @@ async def replan(
     await lock_queue_positions(db)
     position = await max_queue_position(db) + 1
     filament_types: dict[tuple[int, int | None], list[str]] = {}
+    reusable: dict[tuple[int | None, int | None, bool], list[ProductJob]] = {}
+    for job in waiting:
+        reusable.setdefault((job.product_plate_id, job.printer_id, bool(job.pinned)), []).append(job)
+    items = {
+        item.id: item
+        for item in (await db.execute(select(PrintQueueItem).where(PrintQueueItem.id.in_(waiting_items)))).scalars()
+    }
+    for queue in reusable.values():
+        queue.sort(key=lambda j: (items[j.queue_item_id].position or 0, j.id))
     for planned_plate in planned:
         plate = plates_by_id[planned_plate.option.id]
+        pinned = planned_plate.pinned
+        kept_jobs = reusable.get((plate.id, planned_plate.printer_id, pinned))
+        if kept_jobs:
+            job = kept_jobs.pop(0)
+            item = items[job.queue_item_id]
+            item.position = position
+            position += 1
+            job.pieces = {str(part_id): n for part_id, n in planned_plate.option.pieces}
+            if not pinned:
+                await reserve(db, item, planned_plate.printer_id)
+            waiting.remove(job)
+            outcome.kept += 1
+            continue
         library_file = plate.library_file
         path = library_file_disk_path(library_file)
         plate_id = plate.plate_id or printed_plate_of_multi_plate_file(path)
-        pinned = planned_plate.pinned
         target_model = None if pinned else normalize_model_name(printer_models.get(planned_plate.printer_id))
         required_types = None
         if target_model:
@@ -575,6 +632,7 @@ async def replan(
         )
         outcome.item_ids.append(item.id)
     await db.flush()
+    outcome.replaced = await _remove_waiting_jobs(db, waiting)
     return outcome
 
 
@@ -709,3 +767,170 @@ async def _replan_later(product_id: int, actor_id: int | None, manual_start: boo
         logger.info("[PRODUCTS] Replanned product %s after a failed print", product_id)
     except Exception as e:
         logger.warning("[PRODUCTS] Could not replan product %s after a failed print: %s", product_id, e)
+
+
+# --- thumbnails -------------------------------------------------------------------------
+
+THUMBNAIL_DIR = Path("products") / "thumbnails"
+THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024
+THUMBNAIL_SIZE = 512
+
+
+class ThumbnailError(ValueError):
+    """The image can't be read."""
+
+
+def _thumbnails_dir() -> Path:
+    from backend.app.core.config import settings
+
+    directory = settings.base_dir / THUMBNAIL_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _absolute(relative: str | None) -> Path | None:
+    if not relative:
+        return None
+    from backend.app.core.config import settings
+
+    path = Path(relative)
+    return path if path.is_absolute() else settings.base_dir / path
+
+
+def remove_thumbnail(product: Product) -> None:
+    """Forget the uploaded picture and delete its file. The caller commits."""
+    path = _absolute(product.thumbnail_path)
+    product.thumbnail_path = None
+    if path is not None and path.is_file() and path.parent == _thumbnails_dir():
+        path.unlink(missing_ok=True)
+
+
+def save_thumbnail(product: Product, data: bytes) -> None:
+    """Store ``data`` (any image Pillow reads) as the product's picture, as a PNG of at most 512 px.
+
+    The caller commits. Raises ThumbnailError for something that is not an image.
+    """
+    import io
+    import uuid
+
+    from PIL import Image, UnidentifiedImageError
+
+    if len(data) > THUMBNAIL_MAX_BYTES:
+        raise ThumbnailError(f"The image is larger than {THUMBNAIL_MAX_BYTES // (1024 * 1024)} MB")
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+            picture = image.convert("RGBA") if image.mode not in ("RGB", "RGBA") else image.copy()
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise ThumbnailError("The file is not an image") from exc
+    picture.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+    name = f"{product.id}_{uuid.uuid4().hex}.png"
+    picture.save(_thumbnails_dir() / name, format="PNG")
+    remove_thumbnail(product)
+    product.thumbnail_path = str(THUMBNAIL_DIR / name)
+
+
+def thumbnail_file(product: Product) -> Path | None:
+    """The picture to show: the uploaded one, else the first plate's file thumbnail."""
+    uploaded = _absolute(product.thumbnail_path)
+    if uploaded is not None and uploaded.is_file():
+        return uploaded
+    for plate in product.plates:
+        if plate_usable(plate) and plate.library_file.thumbnail_path:
+            path = _absolute(plate.library_file.thumbnail_path)
+            if path is not None and path.is_file():
+                return path
+    return None
+
+
+def has_thumbnail(product: Product) -> bool:
+    return bool(product.thumbnail_path) or any(
+        plate_usable(plate) and plate.library_file.thumbnail_path for plate in product.plates
+    )
+
+
+# --- suggesting plates from file names ------------------------------------------------------
+
+_COUNT_PATTERNS = (
+    re.compile(r"(?:^| )x ?(\d{1,3})(?: |$)"),
+    re.compile(r"(?:^| )(\d{1,3}) ?(?:x|szt|pcs|pc|st|stk)(?: |$)"),
+)
+
+
+def fold(text: str) -> str:
+    """Lower case, no diacritics, words split on anything else: "Góra_x2" -> "gora x2"."""
+    import unicodedata
+
+    text = text.lower().replace("ł", "l")
+    text = "".join(c for c in unicodedata.normalize("NFD", text) if not unicodedata.combining(c))
+    return " ".join(re.split(r"[^a-z0-9]+", text)).strip()
+
+
+def _count_in_name(text: str) -> int | None:
+    for pattern in _COUNT_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            count = int(match.group(1))
+            if count > 0:
+                return count
+    return None
+
+
+@dataclass
+class PlateGuess:
+    library_file: LibraryFile
+    # part id -> pieces; empty when the name says nothing usable
+    pieces: dict[int, int]
+    # How the pieces were found: "single_part", "name", or None.
+    found_by: str | None
+
+
+def guess_plate(
+    parts: list[ProductPart], library_file: LibraryFile, keywords: dict[str, list[str]] | None = None
+) -> PlateGuess:
+    """Which parts a sliced file prints, from its name and objects.
+
+    A part is named in the file when its name, or one of ``keywords[part
+    name]``, is a word (or words) of the file name or print name. The pieces
+    are the plate's objects (one plate in the file), else a count in the name
+    ("x3", "3szt", "3pcs"), else 1; a file naming several parts splits its
+    objects evenly between them when they divide, else takes the count in the
+    name for each.
+    """
+    meta = library_file.file_metadata or {}
+    objects_raw = meta.get("printable_objects")
+    objects = len(objects_raw) if isinstance(objects_raw, dict) and objects_raw else None
+    text = f" {fold(str(meta.get('print_name') or ''))} {fold(library_file.filename or '')} "
+    named_count = _count_in_name(text.strip())
+    if len(parts) == 1:
+        return PlateGuess(library_file, {parts[0].id: objects or named_count or 1}, "single_part")
+    keywords = {fold(k): v for k, v in (keywords or {}).items()}
+    named = []
+    for part in parts:
+        words = [fold(part.name), *(fold(w) for w in keywords.get(fold(part.name), []))]
+        if any(len(w) >= 2 and f" {w} " in text for w in words):
+            named.append(part)
+    if not named:
+        return PlateGuess(library_file, {}, None)
+    if len(named) == 1:
+        return PlateGuess(library_file, {named[0].id: objects or named_count or 1}, "name")
+    if objects is not None and objects % len(named) == 0:
+        return PlateGuess(library_file, {p.id: objects // len(named) for p in named}, "name")
+    return PlateGuess(library_file, {p.id: named_count or 1 for p in named}, "name")
+
+
+async def folder_and_below(db: AsyncSession, folder_id: int) -> set[int]:
+    from backend.app.models.library import LibraryFolder
+
+    found = {folder_id}
+    frontier = [folder_id]
+    while frontier:
+        children = (await db.execute(select(LibraryFolder.id).where(LibraryFolder.parent_id.in_(frontier)))).scalars()
+        frontier = [c for c in children if c not in found]
+        found.update(frontier)
+    return found
+
+
+def is_sliced_file(library_file: LibraryFile) -> bool:
+    name = (library_file.filename or "").lower()
+    return name.endswith((".gcode.3mf", ".gcode")) or bool((library_file.file_metadata or {}).get("sliced_for_model"))

@@ -62,11 +62,15 @@ describe('text helpers', () => {
 });
 
 describe('planSummary', () => {
-  const result = (planned: number, replaced: number) => ({ planned_jobs: planned, replaced }) as ProductPlanResult;
+  const result = (planned: number, kept: number, replaced: number) =>
+    ({ planned_jobs: planned, kept, replaced }) as ProductPlanResult;
 
   it('says what the plan did', () => {
-    expect(planSummary(result(0, 2)).key).toBe('products.toast.nothingToPrint');
-    expect(planSummary(result(3, 0))).toEqual({ key: 'products.toast.planned', values: { n: 3 } });
-    expect(planSummary(result(3, 6))).toEqual({ key: 'products.toast.replanned', values: { n: 3, replaced: 6 } });
+    expect(planSummary(result(0, 0, 2)).key).toBe('products.toast.nothingToPrint');
+    expect(planSummary(result(3, 0, 0))).toEqual({ key: 'products.toast.planned', values: { n: 3 } });
+    expect(planSummary(result(3, 2, 6))).toEqual({
+      key: 'products.toast.replanned',
+      values: { n: 3, kept: 2, replaced: 6 },
+    });
   });
 });

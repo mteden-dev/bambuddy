@@ -19,9 +19,9 @@ const PRODUCT = {
   name: '9mm box',
   notes: null,
   parts: [
-    { id: 1, name: 'Lid', quantity: 1, matched: true },
-    { id: 2, name: 'Base', quantity: 1, matched: true },
-    { id: 3, name: 'Tray', quantity: 1, matched: false },
+    { id: 1, name: 'Lid', quantity: 1, matched: true, finish_minutes: 0 },
+    { id: 2, name: 'Base', quantity: 1, matched: true, finish_minutes: 60 },
+    { id: 3, name: 'Tray', quantity: 1, matched: false, finish_minutes: 60 },
   ],
   plates: [
     {
@@ -42,8 +42,12 @@ const PRODUCT = {
       },
     },
   ],
+  skus: [{ sku: 'AB-9x19.100.B', units: 1 }],
   open_orders: 1,
   open_units: 2,
+  has_thumbnail: true,
+  custom_thumbnail: true,
+  thumbnail_version: 'abc',
   created_at: '2026-11-24T08:00:00Z',
 };
 
@@ -88,18 +92,32 @@ const DETAIL: ProductDetail = {
 };
 
 let posted: unknown[];
+let moved: unknown[];
+let sjf = false;
 
 beforeEach(() => {
   posted = [];
+  moved = [];
+  sjf = false;
   server.use(
     http.get('/api/v1/products/', () => HttpResponse.json([PRODUCT])),
-    http.get('/api/v1/products/settings', () => HttpResponse.json({ plate_cost_minutes: 15 })),
+    http.get('/api/v1/products/settings', () => HttpResponse.json({ plate_cost_minutes: 15, sjf_enabled: sjf })),
+    http.get('/api/v1/printers/', () => HttpResponse.json([{ id: 7, name: 'P1S-A' }, { id: 8, name: 'P1S-B' }])),
+    http.post('/api/v1/products/4/stock/move', async ({ request }) => {
+      moved.push(await request.json());
+      return HttpResponse.json({
+        product: DETAIL, planned_jobs: 0, created: 0, kept: 0, replaced: 0,
+        ready_at: {}, finish_at: null, short: [], extra: [], skipped_plates: [],
+      });
+    }),
     http.get('/api/v1/products/4', () => HttpResponse.json(DETAIL)),
     http.post('/api/v1/products/4/orders', async ({ request }) => {
       posted.push(await request.json());
       const result: ProductPlanResult = {
         product: DETAIL,
         planned_jobs: 4,
+        created: 2,
+        kept: 2,
         replaced: 3,
         ready_at: {},
         finish_at: null,
@@ -117,7 +135,6 @@ const allowAll = () => true;
 describe('ProductsView', () => {
   it('lists products with their parts', async () => {
     render(<ProductsView hasPermission={allowAll} />);
-    expect(screen.getByRole('heading', { level: 1, name: 'Products' })).toBeInTheDocument();
     expect(await screen.findByText('9mm box')).toBeInTheDocument();
     expect(screen.getByText(/Lid ×1 · Base ×1 · Tray ×1/)).toBeInTheDocument();
     expect(screen.getByText('Open: 1 orders, 2 pcs')).toBeInTheDocument();
@@ -147,8 +164,79 @@ describe('ProductsView', () => {
 
     await waitFor(() => expect(posted).toEqual([{ quantity: 3, due_date: null, notes: null }]));
     expect(
-      await screen.findByText('Plan updated: 4 plates queued, 3 waiting jobs replaced.'),
+      await screen.findByText('Plan updated: 4 plates in the queue (2 unchanged), 3 waiting jobs removed.'),
     ).toBeInTheDocument();
+  });
+
+  it('shows the picture and which parts dry after printing', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<ProductsView hasPermission={allowAll} />);
+    await screen.findByText('9mm box');
+    expect(container.querySelector('img')?.getAttribute('src')).toContain('/products/4/thumbnail?v=abc');
+    await user.click(screen.getByText('9mm box'));
+    expect(await screen.findByText('Printed earlier, then worked on: Base 60 min, Tray 60 min.')).toBeInTheDocument();
+  });
+
+  it('moves pieces to another printer', async () => {
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByText('9mm box'));
+    await user.click(await screen.findByRole('button', { name: 'Correct' }));
+    await user.click(screen.getByRole('tab', { name: 'Move to another printer' }));
+    const [part, from, to] = screen.getAllByRole('combobox');
+    await user.selectOptions(part, '2');
+    await user.selectOptions(from, '8');
+    await user.selectOptions(to, '7');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(moved).toEqual([{ part_id: 2, from_printer_id: 8, to_printer_id: 7, pieces: 1, note: null }]),
+    );
+  });
+
+  it('warns when shortest-first can reorder the plan', async () => {
+    sjf = true;
+    render(<ProductsView hasPermission={allowAll} />);
+    expect(await screen.findByText(/"Shortest first" is on/)).toBeInTheDocument();
+  });
+
+  it('creates a product with a finishing time and uploads its picture', async () => {
+    const created: unknown[] = [];
+    let uploaded = false;
+    server.use(
+      http.post('/api/v1/products/', async ({ request }) => {
+        created.push(await request.json());
+        return HttpResponse.json({ ...DETAIL, id: 9, name: 'Clip' });
+      }),
+      http.post('/api/v1/products/9/thumbnail', async ({ request }) => {
+        // jsdom's FormData does not parse back in msw; the multipart body is what matters.
+        uploaded = (request.headers.get('content-type') ?? '').startsWith('multipart/form-data');
+        return HttpResponse.json({ ...DETAIL, id: 9, name: 'Clip' });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: /New product/ }));
+    await user.type(screen.getByPlaceholderText('e.g. 9mm box'), 'Clip');
+    await user.type(screen.getByLabelText('Part name'), 'Base');
+    const finish = screen.getByLabelText('after printing (min)');
+    await user.clear(finish);
+    await user.type(finish, '45');
+    await user.upload(
+      screen.getByLabelText('Upload picture…'),
+      new File([new Uint8Array([137, 80, 78, 71])], 'clip.png', { type: 'image/png' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(uploaded).toBe(true));
+    expect(created).toEqual([
+      {
+        name: 'Clip',
+        notes: null,
+        parts: [{ id: null, name: 'Base', quantity: 1, matched: false, finish_minutes: 45 }],
+        plates: [],
+        skus: [],
+      },
+    ]);
   });
 
   it('hides the editing buttons without the right to queue', async () => {

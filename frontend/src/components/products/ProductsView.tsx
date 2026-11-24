@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Settings2,
   ShoppingCart,
+  Timer,
   Trash2,
   XCircle,
 } from 'lucide-react';
@@ -102,14 +103,7 @@ export function ProductsView({ hasPermission }: ProductsViewProps) {
 
   return (
     <div>
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-            <Boxes className="w-7 h-7 text-bambu-green" />
-            {t('products.title')}
-          </h1>
-          <p className="text-bambu-gray mt-1">{t('products.subtitle')}</p>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-3 mb-4">
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={() => setShowSettings((v) => !v)} aria-expanded={showSettings}>
             <Settings2 className="w-4 h-4" />
@@ -123,6 +117,13 @@ export function ProductsView({ hasPermission }: ProductsViewProps) {
           )}
         </div>
       </div>
+
+      {productSettings?.sjf_enabled && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 mb-4 text-sm text-amber-600 dark:text-amber-300">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{t('products.sjfWarning')}</span>
+        </div>
+      )}
 
       {showSettings && productSettings && (
         <Card className="p-4 mb-4">
@@ -171,6 +172,18 @@ export function ProductsView({ hasPermission }: ProductsViewProps) {
                   ) : (
                     <ChevronRight className="w-4 h-4 text-bambu-gray shrink-0" />
                   )}
+                  <span className="w-12 h-12 rounded-lg bg-bambu-dark overflow-hidden flex items-center justify-center shrink-0">
+                    {product.has_thumbnail ? (
+                      <img
+                        src={api.getProductThumbnailUrl(product.id, product.thumbnail_version)}
+                        alt=""
+                        loading="lazy"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Boxes className="w-5 h-5 text-bambu-gray" />
+                    )}
+                  </span>
                   <span className="min-w-0">
                     <span className="block text-white font-medium truncate">{product.name}</span>
                     <span className="block text-xs text-bambu-gray truncate">
@@ -434,6 +447,17 @@ function ProductDetailPanel({ productId, canEdit, timeFormat, onEditOrder, onPla
             })}
           </p>
         )}
+        {detail.parts.some((p) => p.finish_minutes > 0) && (
+          <p className="text-xs text-bambu-gray mt-1 flex items-center gap-1">
+            <Timer className="w-3.5 h-3.5" />
+            {t('products.finishNote', {
+              parts: detail.parts
+                .filter((p) => p.finish_minutes > 0)
+                .map((p) => `${p.name} ${p.finish_minutes} min`)
+                .join(', '),
+            })}
+          </p>
+        )}
         {correcting && <StockCorrection detail={detail} onDone={(result) => { setCorrecting(false); afterPlan(result); }} />}
       </section>
 
@@ -468,71 +492,122 @@ function ProductDetailPanel({ productId, canEdit, timeFormat, onEditOrder, onPla
 function StockCorrection({ detail, onDone }: { detail: ProductDetail; onDone: (result: ProductPlanResult) => void }) {
   const { t } = useTranslation();
   const { showToast } = useToast();
+  const [mode, setMode] = useState<'adjust' | 'move'>('adjust');
   const [partId, setPartId] = useState(detail.parts[0]?.id ?? 0);
   const [printerId, setPrinterId] = useState(0);
+  const [targetId, setTargetId] = useState(0);
   const [delta, setDelta] = useState(-1);
+  const [pieces, setPieces] = useState(1);
   const [note, setNote] = useState('');
   const { data: printers } = useQuery({ queryKey: ['printers'], queryFn: api.getPrinters });
 
   const mutation = useMutation({
     mutationFn: () =>
-      api.adjustProductStock(detail.id, {
-        part_id: partId,
-        printer_id: printerId || null,
-        delta,
-        note: note.trim() || null,
-      }),
+      mode === 'move'
+        ? api.moveProductStock(detail.id, {
+            part_id: partId,
+            from_printer_id: printerId || null,
+            to_printer_id: targetId || null,
+            pieces,
+            note: note.trim() || null,
+          })
+        : api.adjustProductStock(detail.id, {
+            part_id: partId,
+            printer_id: printerId || null,
+            delta,
+            note: note.trim() || null,
+          }),
     onSuccess: onDone,
     onError: (e: Error) => showToast(e.message, 'error'),
   });
 
+  const printerSelect = (value: number, onChange: (id: number) => void) => (
+    <select className={inputClass} value={value} onChange={(e) => onChange(Number(e.target.value))}>
+      <option value={0}>{t('products.unknownPrinter')}</option>
+      {(printers ?? []).map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}
+        </option>
+      ))}
+    </select>
+  );
+  const invalid = mode === 'move' ? printerId === targetId : delta === 0;
+
   return (
     <form
-      className="mt-3 flex flex-wrap items-end gap-2 rounded-lg border border-bambu-dark-tertiary p-3"
+      className="mt-3 rounded-lg border border-bambu-dark-tertiary p-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (delta !== 0) mutation.mutate();
+        if (!invalid) mutation.mutate();
       }}
     >
-      <label className="text-xs text-bambu-gray">
-        <span className="block mb-1">{t('products.stockPart')}</span>
-        <select className={inputClass} value={partId} onChange={(e) => setPartId(Number(e.target.value))}>
-          {detail.parts.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="text-xs text-bambu-gray">
-        <span className="block mb-1">{t('products.stockPrinter')}</span>
-        <select className={inputClass} value={printerId} onChange={(e) => setPrinterId(Number(e.target.value))}>
-          <option value={0}>{t('products.unknownPrinter')}</option>
-          {(printers ?? []).map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="text-xs text-bambu-gray">
-        <span className="block mb-1">{t('products.stockDelta')}</span>
-        <NumberInput
-          min={-10000}
-          max={10000}
-          className={`${inputClass} w-20`}
-          value={delta}
-          onChange={setDelta}
-        />
-      </label>
-      <label className="text-xs text-bambu-gray flex-1 min-w-[8rem]">
-        <span className="block mb-1">{t('products.stockNote')}</span>
-        <input className={`${inputClass} w-full`} value={note} onChange={(e) => setNote(e.target.value)} />
-      </label>
-      <Button type="submit" size="sm" disabled={delta === 0 || mutation.isPending}>
-        {mutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-        {t('products.stockApply')}
-      </Button>
+      <div className="flex gap-1 mb-3" role="tablist">
+        {(['adjust', 'move'] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={mode === value}
+            onClick={() => setMode(value)}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+              mode === value
+                ? 'border-bambu-green bg-bambu-green/10 text-bambu-green'
+                : 'border-bambu-dark-tertiary text-bambu-gray hover:border-bambu-gray'
+            }`}
+          >
+            {t(value === 'move' ? 'products.stockModeMove' : 'products.stockModeAdjust')}
+          </button>
+        ))}
+      </div>
+      {mode === 'move' && <p className="text-xs text-bambu-gray mb-2">{t('products.stockMoveHint')}</p>}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="text-xs text-bambu-gray">
+          <span className="block mb-1">{t('products.stockPart')}</span>
+          <select className={inputClass} value={partId} onChange={(e) => setPartId(Number(e.target.value))}>
+            {detail.parts.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs text-bambu-gray">
+          <span className="block mb-1">{t(mode === 'move' ? 'products.stockFrom' : 'products.stockPrinter')}</span>
+          {printerSelect(printerId, setPrinterId)}
+        </label>
+        {mode === 'move' ? (
+          <>
+            <label className="text-xs text-bambu-gray">
+              <span className="block mb-1">{t('products.stockTo')}</span>
+              {printerSelect(targetId, setTargetId)}
+            </label>
+            <label className="text-xs text-bambu-gray">
+              <span className="block mb-1">{t('products.stockPieces')}</span>
+              <NumberInput
+                min={1}
+                max={10000}
+                fallback={1}
+                className={`${inputClass} w-20`}
+                value={pieces}
+                onChange={setPieces}
+              />
+            </label>
+          </>
+        ) : (
+          <label className="text-xs text-bambu-gray">
+            <span className="block mb-1">{t('products.stockDelta')}</span>
+            <NumberInput min={-10000} max={10000} className={`${inputClass} w-20`} value={delta} onChange={setDelta} />
+          </label>
+        )}
+        <label className="text-xs text-bambu-gray flex-1 min-w-[8rem]">
+          <span className="block mb-1">{t('products.stockNote')}</span>
+          <input className={`${inputClass} w-full`} value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
+        <Button type="submit" size="sm" disabled={invalid || mutation.isPending}>
+          {mutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+          {t('products.stockApply')}
+        </Button>
+      </div>
     </form>
   );
 }

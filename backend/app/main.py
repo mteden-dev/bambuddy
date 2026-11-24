@@ -12760,6 +12760,11 @@ async def lifespan(app: FastAPI):
 
     announcements_service.start()
 
+    # Fork: read orders from Base (base.com) every few minutes when switched on.
+    from backend.app.services import base_sync as base_sync_service
+
+    base_sync_service.start()
+
     from backend.app.services.printer_media import start_printer_download_cleanup
 
     start_printer_download_cleanup()
@@ -12824,6 +12829,9 @@ async def lifespan(app: FastAPI):
     from backend.app.services import announcements as announcements_service
 
     announcements_service.stop()
+    from backend.app.services import base_sync as base_sync_service
+
+    base_sync_service.stop()
     from backend.app.services.printer_media import stop_printer_download_cleanup
 
     await stop_printer_download_cleanup()
@@ -13488,6 +13496,11 @@ app.include_router(slot_spools_routes.router, prefix=app_settings.api_prefix)
 from backend.app.api.routes import products as products_routes  # noqa: E402
 
 app.include_router(products_routes.router, prefix=app_settings.api_prefix)
+
+# Fork: orders from Base (base.com) become product orders (services/base_sync.py).
+from backend.app.api.routes import base_sync as base_sync_routes  # noqa: E402
+
+app.include_router(base_sync_routes.router, prefix=app_settings.api_prefix)
 
 
 # Serve static files (React build)

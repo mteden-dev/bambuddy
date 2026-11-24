@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Boxes, Link2, Loader2, Plus, Search, Trash2, X } from 'lucide-react';
+import { Boxes, ImageIcon, Link2, Loader2, Plus, Search, Timer, Trash2, Upload, X } from 'lucide-react';
 import { api } from '../../api/client';
 import type { LibraryFileListItem, Product, ProductPlateFile, ProductWrite } from '../../api/client';
 import { Card, CardContent } from '../Card';
@@ -17,6 +17,7 @@ interface DraftPart {
   name: string;
   quantity: number;
   matched: boolean;
+  finish_minutes: number;
 }
 
 interface DraftPlate {
@@ -37,8 +38,14 @@ const inputClass =
   'w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray text-sm focus:border-bambu-green focus:outline-none';
 
 function draftFrom(product: Product | null | undefined): { parts: DraftPart[]; plates: DraftPlate[] } {
-  if (!product) return { parts: [{ name: '', quantity: 1, matched: false }], plates: [] };
-  const parts = product.parts.map((p) => ({ id: p.id, name: p.name, quantity: p.quantity, matched: p.matched }));
+  if (!product) return { parts: [{ name: '', quantity: 1, matched: false, finish_minutes: 0 }], plates: [] };
+  const parts = product.parts.map((p) => ({
+    id: p.id,
+    name: p.name,
+    quantity: p.quantity,
+    matched: p.matched,
+    finish_minutes: p.finish_minutes ?? 0,
+  }));
   const plates = product.plates.map((plate) => ({
     library_file_id: plate.library_file_id,
     plate_id: plate.plate_id,
@@ -64,10 +71,25 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
   const [notes, setNotes] = useState(product?.notes ?? '');
   const [parts, setParts] = useState<DraftPart[]>(initial.parts);
   const [plates, setPlates] = useState<DraftPlate[]>(initial.plates);
+  const [skus, setSkus] = useState<{ sku: string; units: number }[]>(() =>
+    (product?.skus ?? []).map((s) => ({ sku: s.sku, units: s.units })),
+  );
   const [picking, setPicking] = useState(false);
   const [search, setSearch] = useState('');
   const [adding, setAdding] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A picture picked to upload on save, or the uploaded one to drop.
+  const [picture, setPicture] = useState<File | null>(null);
+  const [dropPicture, setDropPicture] = useState(false);
+  const picturePreview = useMemo(() => (picture ? URL.createObjectURL(picture) : null), [picture]);
+  useEffect(() => () => {
+    if (picturePreview) URL.revokeObjectURL(picturePreview);
+  }, [picturePreview]);
+  const shownPicture =
+    picturePreview ??
+    (product && product.has_thumbnail && !(dropPicture && product.custom_thumbnail)
+      ? api.getProductThumbnailUrl(product.id, product.thumbnail_version)
+      : null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -94,7 +116,12 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
   }, [files, plates, search]);
 
   const saveMutation = useMutation({
-    mutationFn: (data: ProductWrite) => (product ? api.updateProduct(product.id, data) : api.createProduct(data)),
+    mutationFn: async (data: ProductWrite) => {
+      let saved = product ? await api.updateProduct(product.id, data) : await api.createProduct(data);
+      if (picture) saved = await api.uploadProductThumbnail(saved.id, picture);
+      else if (dropPicture && saved.custom_thumbnail) saved = await api.deleteProductThumbnail(saved.id);
+      return saved;
+    },
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['product', saved.id] });
@@ -127,7 +154,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
   };
 
   const addPart = () => {
-    setParts((current) => [...current, { name: '', quantity: 1, matched: false }]);
+    setParts((current) => [...current, { name: '', quantity: 1, matched: false, finish_minutes: 0 }]);
     setPlates((current) => current.map((plate) => ({ ...plate, pieces: [...plate.pieces, 0] })));
   };
 
@@ -139,12 +166,21 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
     saveMutation.mutate({
       name: name.trim(),
       notes: notes.trim() || null,
-      parts: parts.map((p) => ({ id: p.id ?? null, name: p.name.trim(), quantity: p.quantity, matched: p.matched })),
+      parts: parts.map((p) => ({
+        id: p.id ?? null,
+        name: p.name.trim(),
+        quantity: p.quantity,
+        matched: p.matched,
+        finish_minutes: p.finish_minutes,
+      })),
       plates: plates.map((plate) => ({
         library_file_id: plate.library_file_id,
         plate_id: plate.plate_id,
         pieces: plate.pieces.flatMap((n, part) => (n > 0 ? [{ part, pieces: n }] : [])),
       })),
+      skus: skus
+        .map((s) => ({ sku: s.sku.trim(), units: s.units }))
+        .filter((s) => s.sku),
     });
   };
 
@@ -184,9 +220,53 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
               </label>
             </div>
 
+            <section className="flex items-center gap-3">
+              <div className="w-16 h-16 rounded-lg bg-bambu-dark border border-bambu-dark-tertiary overflow-hidden flex items-center justify-center shrink-0">
+                {shownPicture ? (
+                  <img src={shownPicture} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <ImageIcon className="w-6 h-6 text-bambu-gray" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-bambu-dark-tertiary hover:bg-bambu-gray-dark text-white cursor-pointer">
+                    <Upload className="w-4 h-4" />
+                    {t('products.editor.pictureUpload')}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      aria-label={t('products.editor.pictureUpload')}
+                      onChange={(e) => {
+                        const chosen = e.target.files?.[0] ?? null;
+                        setPicture(chosen);
+                        setDropPicture(false);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  {(picture || (product?.custom_thumbnail && !dropPicture)) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setPicture(null);
+                        setDropPicture(true);
+                      }}
+                    >
+                      {t('products.editor.pictureRemove')}
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-bambu-gray mt-1">{t('products.editor.pictureHint')}</p>
+              </div>
+            </section>
+
             <section>
               <h3 className="text-sm font-semibold text-white mb-1">{t('products.editor.parts')}</h3>
               <p className="text-xs text-bambu-gray mb-2">{t('products.editor.partsHint')}</p>
+              <p className="text-xs text-bambu-gray mb-2">{t('products.editor.finishHint')}</p>
               <div className="space-y-2">
                 {parts.map((part, index) => (
                   <div key={index} className="flex flex-wrap items-center gap-2">
@@ -225,6 +305,24 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                       <Link2 className="w-3.5 h-3.5" />
                       {t('products.editor.matched')}
                     </label>
+                    <label
+                      className="flex items-center gap-1 text-sm text-bambu-gray whitespace-nowrap"
+                      title={t('products.editor.finishHint')}
+                    >
+                      <Timer className="w-3.5 h-3.5" />
+                      {t('products.editor.finish')}
+                      <NumberInput
+                        min={0}
+                        max={10080}
+                        fallback={0}
+                        className={`${inputClass} w-20`}
+                        value={part.finish_minutes}
+                        aria-label={t('products.editor.finish')}
+                        onChange={(finish_minutes) =>
+                          setParts((current) => current.map((p, i) => (i === index ? { ...p, finish_minutes } : p)))
+                        }
+                      />
+                    </label>
                     <button
                       type="button"
                       onClick={() => removePart(index)}
@@ -240,6 +338,56 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
               <Button variant="ghost" size="sm" className="mt-2" onClick={addPart}>
                 <Plus className="w-4 h-4" />
                 {t('products.editor.addPart')}
+              </Button>
+            </section>
+
+            <section>
+              <h3 className="text-sm font-semibold text-white mb-1">{t('products.editor.skus')}</h3>
+              <p className="text-xs text-bambu-gray mb-2">{t('products.editor.skusHint')}</p>
+              <div className="space-y-2">
+                {skus.map((entry, index) => (
+                  <div key={index} className="flex flex-wrap items-center gap-2">
+                    <input
+                      className={`${inputClass} flex-1 min-w-[10rem]`}
+                      value={entry.sku}
+                      placeholder="AB-9x19.100.B"
+                      aria-label={t('products.editor.sku')}
+                      onChange={(e) =>
+                        setSkus((current) => current.map((s, i) => (i === index ? { ...s, sku: e.target.value } : s)))
+                      }
+                    />
+                    <label className="flex items-center gap-1 text-sm text-bambu-gray whitespace-nowrap">
+                      {t('products.editor.skuUnits')}
+                      <NumberInput
+                        min={1}
+                        max={1000}
+                        fallback={1}
+                        className={`${inputClass} w-20`}
+                        value={entry.units}
+                        onChange={(units) =>
+                          setSkus((current) => current.map((s, i) => (i === index ? { ...s, units } : s)))
+                        }
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setSkus((current) => current.filter((_, i) => i !== index))}
+                      className="p-2 text-bambu-gray hover:text-red-400"
+                      aria-label={t('products.editor.removeSku')}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-2"
+                onClick={() => setSkus((current) => [...current, { sku: '', units: 1 }])}
+              >
+                <Plus className="w-4 h-4" />
+                {t('products.editor.addSku')}
               </Button>
             </section>
 

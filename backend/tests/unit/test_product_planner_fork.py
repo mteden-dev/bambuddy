@@ -212,3 +212,24 @@ def test_a_due_date_keeps_bigger_plates_from_making_an_order_late():
 def test_nothing_to_do_without_orders():
     result = plan(_inputs([]))
     assert result.plates == [] and result.ready_at == {}
+
+
+def test_parts_that_dry_after_printing_go_first_and_count_later():
+    # The tray is glued into the base and dries an hour: on one printer the base
+    # prints before the lid, which prints while it dries.
+    box = [PartSpec(LID, 1, True), PartSpec(BASE, 1, True, finish_s=H), PartSpec(TRAY, 1, False, finish_s=H)]
+    result = plan(_inputs([OrderNeed(10, 1)], parts=box, h2s=False))
+    matched = [p for p in result.plates if p.pinned]
+    assert [p.option.pieces for p in sorted(matched, key=lambda p: p.start)] == [((BASE, 1),), ((LID, 1),)]
+    # Base 10-12 (+1 h drying), tray 10-12 (+1 h), lid 12-14: ready at 14:00.
+    assert result.ready_at[10] == NOW + timedelta(hours=4)
+
+
+def test_finishing_time_holds_an_order_back_until_it_has_passed():
+    box = [PartSpec(LID, 1, True), PartSpec(BASE, 1, True, finish_s=H), PartSpec(TRAY, 1, False)]
+    later = NOW + timedelta(hours=2)
+    arrivals = [Arrival(later, 1, ((LID, 1), (BASE, 1), (TRAY, 1)))]
+    assert ready_times(box, [OrderNeed(10, 1)], arrivals, NOW) == {10: later + timedelta(hours=1)}
+    # Pieces in stock are finished already.
+    stock = [Arrival(NOW, 1, ((LID, 1), (BASE, 1), (TRAY, 1)), finished=True)]
+    assert ready_times(box, [OrderNeed(10, 1)], stock, NOW) == {10: NOW}

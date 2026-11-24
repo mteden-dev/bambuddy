@@ -672,6 +672,7 @@ async def init_db():
         api_key,
         archive,
         auth_ephemeral,
+        base_sync,
         bug_report,
         color_catalog,
         connected_app,

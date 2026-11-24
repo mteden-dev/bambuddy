@@ -60,6 +60,9 @@ class PartSpec:
     per_unit: int
     # Comes from the same printer as the product's other matched parts.
     matched: bool = False
+    # Work on a printed piece before the product is done (a tray glued into
+    # the base drying), in seconds: the piece counts as there that much later.
+    finish_s: int = 0
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,8 @@ class Arrival:
     at: datetime
     printer_id: int
     pieces: Pieces
+    # Already finished (stock): no finishing time on top.
+    finished: bool = False
 
 
 @dataclass
@@ -278,7 +283,8 @@ def ready_times(
     """When each order has all its products, as ``arrivals`` come in (None: never).
 
     Orders take whole products in order, so order k is complete once the pool
-    makes as many products as orders 1..k want together.
+    makes as many products as orders 1..k want together. A printed piece
+    counts once its part's finishing time has passed too.
     """
     ready: dict[int, datetime | None] = {o.id: None for o in orders}
     wanted_by = []
@@ -286,14 +292,20 @@ def ready_times(
     for order in orders:
         total += order.units
         wanted_by.append((order.id, total))
-    events = sorted(arrivals, key=lambda a: a.at)
+    finish = {p.id: timedelta(seconds=p.finish_s) for p in parts}
+    events: list[tuple[datetime, int, int, int]] = []
+    for arrival in arrivals:
+        for part_id, n in arrival.pieces:
+            delay = timedelta(0) if arrival.finished else finish.get(part_id, timedelta(0))
+            events.append((arrival.at + delay, arrival.printer_id, part_id, n))
+    events.sort(key=lambda e: e[0])
     pool: Pool = {}
     i = 0
     next_order = 0
     while i < len(events) and next_order < len(wanted_by):
-        at = events[i].at
-        while i < len(events) and events[i].at == at:
-            pool_add(pool, events[i].printer_id, events[i].pieces)
+        at = events[i][0]
+        while i < len(events) and events[i][0] == at:
+            pool_add(pool, events[i][1], ((events[i][2], events[i][3]),))
             i += 1
         units = complete_units(parts, pool)
         while next_order < len(wanted_by) and units >= wanted_by[next_order][1]:
@@ -304,7 +316,7 @@ def ready_times(
 
 def stock_arrivals(stock: Pool, now: datetime) -> list[Arrival]:
     return [
-        Arrival(now, printer_id, ((part_id, n),))
+        Arrival(now, printer_id, ((part_id, n),), finished=True)
         for part_id, by_printer in stock.items()
         for printer_id, n in by_printer.items()
         if n > 0
@@ -448,8 +460,15 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
     made: dict[int, int] = {}
     piece_time = _piece_times(inputs)
 
+    finish_of = {p.id: p.finish_s for p in inputs.parts}
+
+    def finishing(option: PlateOption) -> int:
+        return max((finish_of.get(part_id, 0) for part_id, _ in option.pieces), default=0)
+
     def schedule(printer: PlannerPrinter, chosen: tuple[PlateOption, ...], pinned: bool) -> None:
-        for option in chosen:
+        # Pieces that still need work after printing (a base to glue a tray
+        # into) go first; the rest prints while they dry.
+        for option in sorted(chosen, key=lambda o: -finishing(o)):
             start = free[printer.id]
             end = start + timedelta(seconds=option.duration_s)
             ready = max(end, inputs.ready_after(end)) if inputs.ready_after is not None else end
@@ -497,10 +516,12 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
         groups: list[tuple[float, int, int, str, int]] = []
         if missing_units > 0:
             left_s = missing_units * sum(m.per_unit * piece_time.get(m.id, 0.0) for m in matched)
+            left_s += max(m.finish_s for m in matched)
             groups.append((left_s, 1, 0, "matched", 0))
         for index, part in enumerate(loose):
             if missing[part.id] > 0:
-                groups.append((missing[part.id] * piece_time.get(part.id, 0.0), 0, -index, "loose", part.id))
+                left_s = missing[part.id] * piece_time.get(part.id, 0.0) + part.finish_s
+                groups.append((left_s, 0, -index, "loose", part.id))
         groups.sort(reverse=True)
         placed = False
         for _, _, _, kind, part_id in groups:

@@ -22,6 +22,9 @@ class Product(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # An uploaded picture, relative to the data dir; without one the product
+    # shows its first plate's thumbnail.
+    thumbnail_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -35,6 +38,13 @@ class Product(Base):
         back_populates="product",
         cascade="all, delete-orphan",
         order_by="ProductPlate.sort_order",
+    )
+    # Shop SKUs that are this product (models/base_sync.py). Deleting the
+    # product deletes them, never turns them into "not printed".
+    skus: Mapped[list["ProductSku"]] = relationship(
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ProductSku.sku",
     )
 
 
@@ -53,6 +63,10 @@ class ProductPart(Base):
     name: Mapped[str] = mapped_column(String(255))
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     matched: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Work on the piece after it is printed before the product is done, such
+    # as a tray glued into the base drying for an hour: the planner prints
+    # such parts earlier.
+    finish_minutes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     product: Mapped["Product"] = relationship(back_populates="parts")
@@ -174,4 +188,5 @@ class ProductStockAdjustment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+from backend.app.models.base_sync import ProductSku  # noqa: E402
 from backend.app.models.library import LibraryFile  # noqa: E402

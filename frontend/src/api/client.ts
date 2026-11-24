@@ -4550,6 +4550,8 @@ export interface ProductPart {
   quantity: number;
   /** Printed on the same printer as the product's other matched parts. */
   matched: boolean;
+  /** Work after printing before the product is done (glue drying); printed earlier. */
+  finish_minutes: number;
 }
 
 /** Fork (products): pieces of one part. */
@@ -4586,8 +4588,14 @@ export interface Product {
   notes: string | null;
   parts: ProductPart[];
   plates: ProductPlate[];
+  /** Shop SKUs (Base) that are this product; units: products one item is. */
+  skus: { sku: string; units: number }[];
   open_orders: number;
   open_units: number;
+  /** GET /products/{id}/thumbnail answers: the uploaded picture, else the first plate's. */
+  has_thumbnail: boolean;
+  custom_thumbnail: boolean;
+  thumbnail_version: string | null;
   created_at: string | null;
 }
 
@@ -4638,15 +4646,20 @@ export interface ProductDetail extends Product {
 export interface ProductWrite {
   name: string;
   notes?: string | null;
-  parts: { id?: number | null; name: string; quantity: number; matched: boolean }[];
+  parts: { id?: number | null; name: string; quantity: number; matched: boolean; finish_minutes?: number }[];
   /** ``part`` is the index into ``parts``. */
   plates: { library_file_id: number; plate_id?: number | null; pieces: { part: number; pieces: number }[] }[];
+  /** Omitted leaves the product's SKUs as they are. */
+  skus?: { sku: string; units: number }[];
 }
 
 /** Fork (products): the plan after an order, a change or a replan. */
 export interface ProductPlanResult {
   product: ProductDetail;
+  /** Plates in the queue for the plan: new jobs plus waiting jobs it kept. */
   planned_jobs: number;
+  created: number;
+  kept: number;
   replaced: number;
   ready_at: Record<string, string>;
   finish_at: string | null;
@@ -4655,8 +4668,84 @@ export interface ProductPlanResult {
   skipped_plates: { plate_id: number; reason: string }[];
 }
 
+/** Fork (Base sync): orders read from Base (base.com), read-only. */
+export interface BaseSyncSettings {
+  enabled: boolean;
+  status_id: number | null;
+  cancel_status_id: number | null;
+  /** "source:id"; empty for every source. */
+  sources: string[];
+  poll_minutes: number;
+  auto_accept: boolean;
+  manual_start: boolean;
+  handling_days: number;
+  token_set: boolean;
+  last_run_at: string | null;
+  last_ok_at: string | null;
+  last_error: string | null;
+}
+
+export interface BaseSyncSettingsUpdate {
+  enabled?: boolean;
+  status_id?: number | null;
+  cancel_status_id?: number | null;
+  clear_cancel_status?: boolean;
+  sources?: string[];
+  poll_minutes?: number;
+  auto_accept?: boolean;
+  manual_start?: boolean;
+  handling_days?: number;
+  /** Write-only: omitted keeps it, "" clears it. */
+  api_token?: string;
+}
+
+export interface BaseConnectionInfo {
+  statuses: { id: number; name: string; color: string | null }[];
+  sources: { key: string; name: string }[];
+}
+
+export interface BaseOrderLine {
+  sku: string;
+  name: string;
+  quantity: number;
+  attributes: string;
+  mapping: 'product' | 'not_printed' | 'unmapped';
+  product_id: number | null;
+  product_name: string | null;
+  units: number;
+}
+
+export interface BaseOrder {
+  order_id: number;
+  number: string | null;
+  source: string | null;
+  source_name: string | null;
+  date_confirmed: string | null;
+  state: 'new' | 'accepted' | 'skipped' | 'cancelled';
+  in_status: boolean;
+  lines: BaseOrderLine[];
+  product_orders: { id: number; product_id: number; quantity: number; status: string }[];
+  ready: boolean;
+}
+
+export interface BaseSkus {
+  mapped: { sku: string; product_id: number | null; product_name: string | null; units: number }[];
+  unmapped: { sku: string; name: string; orders: number }[];
+}
+
+export interface BaseSyncResult {
+  seen: number;
+  new: number;
+  updated: number;
+  cancelled: number;
+  replanned: number[];
+  unmapped: number;
+}
+
 export interface ProductSettings {
   plate_cost_minutes: number;
+  /** "Shortest first" is on: the queue may not keep the plan's order. */
+  sjf_enabled?: boolean;
 }
 
 /** Fork (slot spools): a roll taken out of a slot with filament left on it. */
@@ -7786,8 +7875,53 @@ export const api = {
     productId: number,
     data: { part_id: number; printer_id?: number | null; delta: number; note?: string | null },
   ) => request<ProductPlanResult>(`/products/${productId}/stock`, { method: 'POST', body: JSON.stringify(data) }),
+  moveProductStock: (
+    productId: number,
+    data: { part_id: number; from_printer_id?: number | null; to_printer_id?: number | null; pieces: number; note?: string | null },
+  ) => request<ProductPlanResult>(`/products/${productId}/stock/move`, { method: 'POST', body: JSON.stringify(data) }),
+  getProductThumbnailUrl: (productId: number, version: string | null) =>
+    withMediaToken(`${API_BASE}/products/${productId}/thumbnail${version ? `?v=${encodeURIComponent(version)}` : ''}`),
+  uploadProductThumbnail: async (productId: number, image: Blob): Promise<ProductDetail> => {
+    const formData = new FormData();
+    formData.append('file', image, 'picture');
+    const headers: Record<string, string> = {};
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    const response = await fetch(`${API_BASE}/products/${productId}/thumbnail`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+  deleteProductThumbnail: (productId: number) =>
+    request<ProductDetail>(`/products/${productId}/thumbnail`, { method: 'DELETE' }),
+  // Fork (Base sync): orders from Base (base.com) become product orders.
+  getBaseSyncSettings: () => request<BaseSyncSettings>('/base-sync/settings'),
+  updateBaseSyncSettings: (data: BaseSyncSettingsUpdate) =>
+    request<BaseSyncSettings>('/base-sync/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  testBaseConnection: (apiToken?: string) =>
+    request<BaseConnectionInfo>('/base-sync/test', { method: 'POST', body: JSON.stringify({ api_token: apiToken || null }) }),
+  runBaseSync: () => request<BaseSyncResult>('/base-sync/sync', { method: 'POST' }),
+  getBaseOrders: (state?: string) =>
+    request<BaseOrder[]>(`/base-sync/orders${state ? `?state=${encodeURIComponent(state)}` : ''}`),
+  acceptBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/accept`, { method: 'POST' }),
+  skipBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/skip`, { method: 'POST' }),
+  getBaseSkus: () => request<BaseSkus>('/base-sync/skus'),
+  mapBaseSku: (sku: string, data: { product_id: number | null; units?: number }) =>
+    request<BaseSkus['mapped'][number]>(`/base-sync/skus/${encodeURIComponent(sku)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ product_id: data.product_id, units: data.units ?? 1 }),
+    }),
+  unmapBaseSku: (sku: string) =>
+    request<{ deleted: string }>(`/base-sync/skus/${encodeURIComponent(sku)}`, { method: 'DELETE' }),
   getProductSettings: () => request<ProductSettings>('/products/settings'),
-  updateProductSettings: (data: ProductSettings) =>
+  updateProductSettings: (data: { plate_cost_minutes: number }) =>
     request<ProductSettings>('/products/settings', { method: 'PUT', body: JSON.stringify(data) }),
   getRestorableSlotSpools: (material?: string, rgba?: string) => {
     const params = new URLSearchParams();

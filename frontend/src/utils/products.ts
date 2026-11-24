@@ -60,8 +60,11 @@ export function planSummary(result: ProductPlanResult): {
   values: Record<string, number>;
 } {
   if (result.planned_jobs === 0) return { key: 'products.toast.nothingToPrint', values: {} };
-  if (result.replaced > 0) {
-    return { key: 'products.toast.replanned', values: { n: result.planned_jobs, replaced: result.replaced } };
+  if (result.replaced > 0 || result.kept > 0) {
+    return {
+      key: 'products.toast.replanned',
+      values: { n: result.planned_jobs, kept: result.kept, replaced: result.replaced },
+    };
   }
   return { key: 'products.toast.planned', values: { n: result.planned_jobs } };
 }

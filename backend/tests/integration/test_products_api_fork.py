@@ -130,12 +130,12 @@ async def test_an_order_queues_lid_and_base_on_one_printer_and_the_tray_on_the_o
     assert result["finish_at"].endswith("Z") and "+" not in result["finish_at"]
 
 
-async def test_a_second_order_replaces_the_waiting_jobs(async_client: AsyncClient, db_session, box):
+async def test_a_second_order_keeps_the_first_boxs_jobs_and_adds_the_second(async_client: AsyncClient, db_session, box):
     connected = {box.a, box.b}
-    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    first = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
     result = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
-    assert result["replaced"] == 3
-    # Only the new plan's jobs are queued (SQLite may hand the old ids out again).
+    assert result["kept"] + result["created"] == result["planned_jobs"]
+    assert result["kept"] + result["replaced"] == first["planned_jobs"]
     items = await _queue(db_session)
     assert len(items) == result["planned_jobs"]
     # Each box's lid and base still come from one printer.
@@ -302,6 +302,296 @@ async def test_a_file_without_a_model_is_refused(async_client: AsyncClient, db_s
 
 
 async def test_the_plate_cost_setting_round_trips(async_client: AsyncClient):
-    assert (await async_client.get("/api/v1/products/settings")).json() == {"plate_cost_minutes": 15}
+    assert (await async_client.get("/api/v1/products/settings")).json()["plate_cost_minutes"] == 15
     response = await async_client.put("/api/v1/products/settings", json={"plate_cost_minutes": 40})
-    assert response.json() == {"plate_cost_minutes": 40}
+    assert response.json()["plate_cost_minutes"] == 40
+
+
+# --- replans keep what still fits ---------------------------------------------------------
+
+
+async def test_a_replan_keeps_waiting_jobs_that_still_fit_with_their_changes(
+    async_client: AsyncClient, db_session, box
+):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    items = await _queue(db_session)
+    lid = next(i for i in items if i.library_file_id == box.files[("lid", 1)])
+    lid.ams_mapping = "[2, -1]"  # changed by hand in the queue
+    await db_session.commit()
+    before = {(i.id, i.created_at) for i in items}
+
+    result = await _post(async_client, f"/api/v1/products/{box.id}/replan", None, connected)
+    assert (result["kept"], result["created"], result["replaced"]) == (3, 0, 0)
+    items = await _queue(db_session)
+    assert {(i.id, i.created_at) for i in items} == before
+    assert next(i for i in items if i.id == lid.id).ams_mapping == "[2, -1]"
+
+
+async def test_editing_the_product_keeps_its_plates_and_their_jobs(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    product = (await async_client.get(f"/api/v1/products/{box.id}")).json()
+    plate_ids = {p["id"] for p in product["plates"]}
+    body = {
+        "name": "Box v2",
+        "parts": [
+            {"id": p["id"], "name": p["name"], "quantity": p["quantity"], "matched": p["matched"]}
+            for p in product["parts"]
+        ],
+        "plates": [
+            {
+                "library_file_id": p["library_file_id"],
+                "pieces": [
+                    {
+                        "part_name": next(x["name"] for x in product["parts"] if x["id"] == pp["part_id"]),
+                        "pieces": pp["pieces"],
+                    }
+                    for pp in p["pieces"]
+                ],
+            }
+            for p in product["plates"]
+        ],
+    }
+    response = await async_client.put(f"/api/v1/products/{box.id}", json=body)
+    assert response.status_code == 200, response.text
+    assert {p["id"] for p in response.json()["plates"]} == plate_ids
+    result = await _post(async_client, f"/api/v1/products/{box.id}/replan", None, connected)
+    assert result["kept"] == 3 and result["replaced"] == 0
+
+
+# --- finishing time ---------------------------------------------------------------------------
+
+
+async def test_a_part_that_dries_after_printing_is_queued_before_the_lid(
+    async_client: AsyncClient, db_session, printer_factory
+):
+    printer = await printer_factory(name="Only", model="P1S")
+    lid = await _file(db_session, "lid_one", "P1S", 2 * H)
+    base = await _file(db_session, "base_one", "P1S", 2 * H)
+    body = {
+        "name": "Box",
+        "parts": [
+            {"name": "Lid", "matched": True},
+            {"name": "Base", "matched": True, "finish_minutes": 60},
+        ],
+        "plates": [
+            {"library_file_id": lid, "pieces": [{"part_name": "lid", "pieces": 1}]},
+            {"library_file_id": base, "pieces": [{"part_name": "Base", "pieces": 1}]},
+        ],
+    }
+    created = (await async_client.post("/api/v1/products/", json=body)).json()
+    assert [p["finish_minutes"] for p in created["parts"]] == [0, 60]
+    await _post(async_client, f"/api/v1/products/{created['id']}/orders", {"quantity": 1}, {printer.id})
+    assert [i.library_file_id for i in await _queue(db_session)] == [base, lid]
+
+
+# --- plates by API ------------------------------------------------------------------------------
+
+
+async def test_plates_are_added_by_part_name_and_taken_off(async_client: AsyncClient, db_session, box):
+    extra = await _file(db_session, "lid_x3", "P1S", int(5 * H), objects=3)
+    response = await async_client.post(
+        f"/api/v1/products/{box.id}/plates",
+        json={"plates": [{"library_file_id": extra, "pieces": [{"part_name": "LID", "pieces": 3}]}]},
+    )
+    assert response.status_code == 200, response.text
+    plate = next(p for p in response.json()["plates"] if p["library_file_id"] == extra)
+    assert plate["pieces"] == [{"part_id": box.parts["Lid"], "pieces": 3}]
+
+    # The same file again replaces its pieces instead of adding a second plate.
+    response = await async_client.post(
+        f"/api/v1/products/{box.id}/plates",
+        json={"plates": [{"library_file_id": extra, "pieces": [{"part_id": box.parts["Lid"], "pieces": 2}]}]},
+    )
+    plates = [p for p in response.json()["plates"] if p["library_file_id"] == extra]
+    assert len(plates) == 1 and plates[0]["pieces"][0]["pieces"] == 2
+
+    response = await async_client.delete(f"/api/v1/products/{box.id}/plates/{plate['id']}")
+    assert response.status_code == 200
+    assert all(p["library_file_id"] != extra for p in response.json()["plates"])
+
+    response = await async_client.post(
+        f"/api/v1/products/{box.id}/plates",
+        json={"plates": [{"library_file_id": extra, "pieces": [{"part_name": "Handle", "pieces": 1}]}]},
+    )
+    assert response.status_code == 400
+
+
+async def test_plates_are_suggested_from_a_folder_and_applied(async_client: AsyncClient, db_session):
+    from backend.app.models.library import LibraryFolder
+
+    root = LibraryFolder(name="9mm")
+    db_session.add(root)
+    await db_session.flush()
+    sub = LibraryFolder(name="H2S", parent_id=root.id)
+    db_session.add(sub)
+    await db_session.commit()
+
+    async def put(name, model, objects, folder):
+        f = LibraryFile(
+            filename=f"{name}.gcode.3mf",
+            file_path=f"/test/{name}.gcode.3mf",
+            file_size=1,
+            file_type="3mf",
+            folder_id=folder,
+            file_metadata={
+                "sliced_for_model": model,
+                "print_time_seconds": 3600,
+                "printable_objects": {str(i): name for i in range(objects)},
+            },
+        )
+        db_session.add(f)
+        await db_session.commit()
+        return f.id
+
+    lid2 = await put("9mm_gora_x2", "P1S", 2, root.id)
+    combo = await put("9mm_top_dol", "H2S", 2, sub.id)
+    unknown = await put("plate_7", "P1S", 1, root.id)
+    created = (
+        await async_client.post(
+            "/api/v1/products/",
+            json={"name": "9mm", "parts": [{"name": "Góra", "matched": True}, {"name": "Dół", "matched": True}]},
+        )
+    ).json()
+    parts = {p["name"]: p["id"] for p in created["parts"]}
+
+    response = await async_client.post(
+        f"/api/v1/products/{created['id']}/plates/suggest",
+        json={"folder_id": root.id, "keywords": {"Góra": ["top"]}},
+    )
+    assert response.status_code == 200, response.text
+    by_file = {s["file"]["library_file_id"]: s for s in response.json()["suggestions"]}
+    assert set(by_file) == {lid2, combo, unknown}
+    assert by_file[lid2]["pieces"] == [{"part_id": parts["Góra"], "pieces": 2}]
+    assert sorted((p["part_id"], p["pieces"]) for p in by_file[combo]["pieces"]) == [
+        (parts["Góra"], 1),
+        (parts["Dół"], 1),
+    ]
+    assert by_file[unknown]["pieces"] == [] and by_file[unknown]["found_by"] is None
+
+    response = await async_client.post(
+        f"/api/v1/products/{created['id']}/plates/suggest",
+        json={"folder_id": root.id, "keywords": {"Góra": ["top"]}, "apply": True},
+    )
+    assert response.json()["applied"] == 2
+    product = (await async_client.get(f"/api/v1/products/{created['id']}")).json()
+    assert {p["library_file_id"] for p in product["plates"]} == {lid2, combo}
+
+
+# --- thumbnail ---------------------------------------------------------------------------------
+
+
+def _png(color=(200, 30, 30), size=(800, 400)) -> bytes:
+    import io
+
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", size, color).save(out, format="PNG")
+    return out.getvalue()
+
+
+async def test_a_picture_is_uploaded_served_and_removed(async_client: AsyncClient, box, tmp_path, monkeypatch):
+    from backend.app.core.config import settings
+
+    monkeypatch.setattr(settings, "base_dir", tmp_path)
+    assert (await async_client.get(f"/api/v1/products/{box.id}/thumbnail")).status_code == 404
+
+    response = await async_client.post(
+        f"/api/v1/products/{box.id}/thumbnail", files={"file": ("box.png", _png(), "image/png")}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["has_thumbnail"] and body["custom_thumbnail"] and body["thumbnail_version"]
+
+    picture = await async_client.get(f"/api/v1/products/{box.id}/thumbnail")
+    assert picture.status_code == 200 and picture.headers["content-type"] == "image/png"
+    import io
+
+    from PIL import Image
+
+    assert max(Image.open(io.BytesIO(picture.content)).size) == 512
+
+    stored = list((tmp_path / "products" / "thumbnails").iterdir())
+    assert len(stored) == 1
+    response = await async_client.delete(f"/api/v1/products/{box.id}/thumbnail")
+    assert response.json()["custom_thumbnail"] is False
+    assert list((tmp_path / "products" / "thumbnails").iterdir()) == []
+
+
+async def test_a_non_image_is_refused(async_client: AsyncClient, box, tmp_path, monkeypatch):
+    from backend.app.core.config import settings
+
+    monkeypatch.setattr(settings, "base_dir", tmp_path)
+    response = await async_client.post(
+        f"/api/v1/products/{box.id}/thumbnail", files={"file": ("x.png", b"not an image", "image/png")}
+    )
+    assert response.status_code == 400
+
+
+async def test_the_picture_falls_back_to_a_plate_and_can_come_from_a_library_file(
+    async_client: AsyncClient, db_session, box, tmp_path, monkeypatch
+):
+    from backend.app.core.config import settings
+
+    monkeypatch.setattr(settings, "base_dir", tmp_path)
+    (tmp_path / "thumbs").mkdir()
+    (tmp_path / "thumbs" / "lid.png").write_bytes(_png((0, 200, 0), (64, 64)))
+    lid = await db_session.get(LibraryFile, box.files[("lid", 1)])
+    lid.thumbnail_path = "thumbs/lid.png"
+    await db_session.commit()
+
+    detail = (await async_client.get(f"/api/v1/products/{box.id}")).json()
+    assert detail["has_thumbnail"] and not detail["custom_thumbnail"]
+    assert (await async_client.get(f"/api/v1/products/{box.id}/thumbnail")).status_code == 200
+
+    response = await async_client.post(f"/api/v1/products/{box.id}/thumbnail/from-file/{lid.id}")
+    assert response.status_code == 200, response.text
+    assert response.json()["custom_thumbnail"] is True
+
+
+# --- moving pieces ---------------------------------------------------------------------------------
+
+
+async def test_moving_a_base_to_the_lids_printer_completes_the_box(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    for part, printer in (("Lid", box.a), ("Base", box.b), ("Tray", box.b)):
+        await _post(
+            async_client,
+            f"/api/v1/products/{box.id}/stock",
+            {"part_id": box.parts[part], "printer_id": printer, "delta": 1},
+            connected,
+        )
+    result = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    # Lid on A and base on B do not pair: the plan prints the missing ones.
+    assert result["planned_jobs"] > 0
+
+    result = await _post(
+        async_client,
+        f"/api/v1/products/{box.id}/stock/move",
+        {"part_id": box.parts["Base"], "from_printer_id": box.b, "to_printer_id": box.a, "pieces": 1},
+        connected,
+    )
+    assert result["planned_jobs"] == 0
+    [order] = result["product"]["orders"]
+    assert order["status"] == "done"
+
+    online, status = _live(connected)
+    with online, status:
+        response = await async_client.post(
+            f"/api/v1/products/{box.id}/stock/move",
+            json={"part_id": box.parts["Lid"], "from_printer_id": box.b, "to_printer_id": box.a, "pieces": 5},
+        )
+    assert response.status_code == 400
+
+
+async def test_the_settings_say_when_shortest_first_is_on(async_client: AsyncClient, db_session):
+    from backend.app.models.settings import Settings
+
+    db_session.add(Settings(key="queue_shortest_first", value="true"))
+    await db_session.commit()
+    assert (await async_client.get("/api/v1/products/settings")).json() == {
+        "plate_cost_minutes": 15,
+        "sjf_enabled": True,
+    }
