@@ -1933,7 +1933,7 @@ export default {
         brushAway: 'Niemand aanwezig',
         brushHere: 'Iemand aanwezig',
         brushErase: 'Wissen',
-        dragHint: 'Sleep over de uren, ook na middernacht door naar de volgende dag. Een tik markeert één uur.',
+        dragHint: 'Sleep over de uren, ook na middernacht door naar de volgende dag; een tik markeert één uur. Pak een markering om haar te verplaatsen, of een rand om haar langer of korter te maken.',
         today: 'Vandaag',
         legendWeekOn: 'Weekuren',
         legendWeekOff: 'Buiten de weekuren',

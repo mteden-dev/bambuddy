@@ -1916,7 +1916,7 @@ export default {
         brushAway: 'Niemand da',
         brushHere: 'Jemand da',
         brushErase: 'Löschen',
-        dragHint: 'Über die Stunden ziehen, auch über Mitternacht in den nächsten Tag. Ein Tippen markiert eine Stunde.',
+        dragHint: 'Über die Stunden ziehen, auch über Mitternacht in den nächsten Tag; ein Tippen markiert eine Stunde. Eine Markierung greifen, um sie zu verschieben, oder ein Ende, um sie zu verlängern oder zu kürzen.',
         today: 'Heute',
         legendWeekOn: 'Wochenzeiten',
         legendWeekOff: 'Außerhalb der Wochenzeiten',

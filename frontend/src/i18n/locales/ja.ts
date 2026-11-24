@@ -1915,7 +1915,7 @@ export default {
         brushAway: '不在',
         brushHere: '在席',
         brushErase: '消去',
-        dragHint: '時間をドラッグして指定します（深夜0時をまたいで翌日にも可）。タップで1時間を指定します。',
+        dragHint: '時間をドラッグして指定します（深夜0時をまたいで翌日にも可）。タップで1時間を指定します。指定をつかむと移動、端をつかむと長さを変えられます。',
         today: '今日',
         legendWeekOn: '週の時間',
         legendWeekOff: '週の時間外',

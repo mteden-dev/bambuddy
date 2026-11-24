@@ -1916,7 +1916,7 @@ export default {
         brushAway: '無人',
         brushHere: '有人',
         brushErase: '清除',
-        dragHint: '在小時上拖曳，也可以跨過午夜到隔天。輕觸標記一小時。',
+        dragHint: '在小時上拖曳，也可以跨過午夜到隔天；輕觸標記一小時。拖住標記可移動它，拖住邊緣可拉長或縮短。',
         today: '今天',
         legendWeekOn: '每週時間',
         legendWeekOff: '每週時間以外',

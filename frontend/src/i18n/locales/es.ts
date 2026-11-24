@@ -1916,7 +1916,7 @@ export default {
         brushAway: 'No hay nadie',
         brushHere: 'Hay alguien',
         brushErase: 'Borrar',
-        dragHint: 'Arrastra sobre las horas, también pasada la medianoche al día siguiente. Un toque marca una hora.',
+        dragHint: 'Arrastra sobre las horas, también pasada la medianoche al día siguiente; un toque marca una hora. Agarra una marca para moverla, o uno de sus bordes para alargarla o acortarla.',
         today: 'Hoy',
         legendWeekOn: 'Horario semanal',
         legendWeekOff: 'Fuera del horario semanal',

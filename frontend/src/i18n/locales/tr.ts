@@ -1916,7 +1916,7 @@ export default {
         brushAway: 'Kimse yok',
         brushHere: 'Biri var',
         brushErase: 'Temizle',
-        dragHint: 'Saatlerin üzerinde sürükleyin, gece yarısını geçip ertesi güne de. Bir dokunuş bir saati işaretler.',
+        dragHint: 'Saatlerin üzerinde sürükleyin, gece yarısını geçip ertesi güne de; bir dokunuş bir saati işaretler. Bir işareti taşımak için tutun, uzatmak ya da kısaltmak için kenarından çekin.',
         today: 'Bugün',
         legendWeekOn: 'Haftalık saatler',
         legendWeekOff: 'Haftalık saatler dışında',

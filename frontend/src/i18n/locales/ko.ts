@@ -1832,7 +1832,7 @@ export default {
         brushAway: '아무도 없음',
         brushHere: '누군가 있음',
         brushErase: '지우기',
-        dragHint: '시간을 드래그하세요. 자정을 넘겨 다음 날까지도 가능합니다. 탭하면 1시간이 표시됩니다.',
+        dragHint: '시간을 드래그하세요. 자정을 넘겨 다음 날까지도 가능하며, 탭하면 1시간이 표시됩니다. 표시를 잡으면 옮길 수 있고, 가장자리를 잡으면 늘이거나 줄일 수 있습니다.',
         today: '오늘',
         legendWeekOn: '주간 시간',
         legendWeekOff: '주간 시간 외',

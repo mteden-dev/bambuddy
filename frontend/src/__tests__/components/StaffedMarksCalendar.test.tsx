@@ -32,15 +32,16 @@ function renderCalendar(marks: QueueStaffedMark[] = [], readOnly = false) {
   return onChange;
 }
 
+const point = ([row, hour]: [number, number], pointerType = 'touch') => ({
+  pointerId: 1,
+  pointerType,
+  clientX: hour * HOUR_PX,
+  clientY: row * ROW_PX + ROW_PX / 2,
+});
+
 /** Drag over the grid from (row, hour) to (row, hour). */
 function drag(from: [number, number], to: [number, number]) {
   const grid = screen.getByTestId('staffed-calendar-grid');
-  const point = ([row, hour]: [number, number]) => ({
-    pointerId: 1,
-    pointerType: 'touch',
-    clientX: hour * HOUR_PX,
-    clientY: row * ROW_PX + ROW_PX / 2,
-  });
   fireEvent.pointerDown(grid, point(from));
   if (from[0] !== to[0] || from[1] !== to[1]) fireEvent.pointerMove(grid, point(to));
   fireEvent.pointerUp(grid, point(to));
@@ -102,13 +103,83 @@ describe('StaffedMarksCalendar', () => {
     expect(onChange).toHaveBeenCalledWith([away('25T23:00', '26T06:00')]);
   });
 
-  it('marks the hour tapped, with the brush chosen', () => {
+  it('marks an hour from the half hour tapped, with the brush chosen', () => {
     const onChange = renderCalendar();
 
     fireEvent.click(screen.getByTestId('staffed-brush-here'));
     drag([6, 12.4], [6, 12.4]);
 
-    expect(onChange).toHaveBeenCalledWith([{ start: '2026-11-30T12:00', end: '2026-11-30T13:00', kind: 'here' }]);
+    expect(onChange).toHaveBeenCalledWith([{ start: '2026-11-30T12:30', end: '2026-11-30T13:30', kind: 'here' }]);
+    // At the end of a day, the hour stays in that day.
+    drag([6, 23.9], [6, 23.9]);
+    expect(onChange).toHaveBeenLastCalledWith([{ start: '2026-11-30T23:00', end: '2026-12-01T00:00', kind: 'here' }]);
+  });
+
+  it('moves a mark grabbed, to the half hour, to another day too', () => {
+    const onChange = renderCalendar([away('24T10:00', '24T16:00')]);
+
+    drag([0, 13], [0, 15.2]);
+    expect(onChange).toHaveBeenLastCalledWith([away('24T12:00', '24T18:00')]);
+    drag([0, 13], [1, 13]);
+    expect(onChange).toHaveBeenLastCalledWith([away('25T10:00', '25T16:00')]);
+  });
+
+  it('stretches or shortens a mark by one of its ends', () => {
+    const onChange = renderCalendar([away('24T10:00', '24T16:00')]);
+
+    drag([0, 16], [0, 19.4]);
+    expect(onChange).toHaveBeenLastCalledWith([away('24T10:00', '24T19:30')]);
+    drag([0, 10], [0, 12]);
+    expect(onChange).toHaveBeenLastCalledWith([away('24T12:00', '24T16:00')]);
+    // Never shorter than half an hour.
+    drag([0, 16], [0, 4]);
+    expect(onChange).toHaveBeenLastCalledWith([away('24T10:00', '24T10:30')]);
+  });
+
+  it('shows where a mark goes while it is moved, and a moved mark wins over others', () => {
+    const onChange = renderCalendar([away('24T10:00', '24T12:00'), { ...away('24T14:00', '24T18:00'), kind: 'here' }]);
+    const grid = screen.getByTestId('staffed-calendar-grid');
+
+    fireEvent.pointerDown(grid, point([0, 11]));
+    fireEvent.pointerMove(grid, point([0, 15]));
+    // 24- or 12-hour, as the locale has it.
+    expect(screen.getByTestId('staffed-calendar-status')).toHaveTextContent(/14:00|02:00 PM/);
+    expect(screen.getByTestId('staffed-calendar-tip')).toHaveTextContent(/14:00|02:00 PM/);
+    fireEvent.pointerUp(grid, point([0, 15]));
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      away('24T14:00', '24T16:00'),
+      { ...away('24T16:00', '24T18:00'), kind: 'here' },
+    ]);
+  });
+
+  it('a tap on a mark brings it up in the list', () => {
+    const onChange = renderCalendar([away('24T10:00', '24T12:00'), away('26T10:00', '26T12:00')]);
+
+    drag([2, 11], [2, 11]);
+
+    expect(onChange).not.toHaveBeenCalled();
+    const rows = screen.getAllByTestId('staffed-mark-row');
+    expect(rows[1]).toHaveAttribute('data-picked', 'true');
+    expect(rows[0]).not.toHaveAttribute('data-picked');
+  });
+
+  it('says over the hours where the pointer is, to the half hour', () => {
+    renderCalendar([away('24T10:00', '24T16:00')]);
+    const grid = screen.getByTestId('staffed-calendar-grid');
+
+    fireEvent.pointerMove(grid, point([3, 10.4], 'mouse'));
+    expect(screen.getByTestId('staffed-calendar-tip')).toHaveTextContent(/^10:30( AM)?$/);
+    fireEvent.pointerMove(grid, point([3, 10.2], 'mouse'));
+    expect(screen.getByTestId('staffed-calendar-tip')).toHaveTextContent(/^10:00( AM)?$/);
+    // Over the end of a mark: the end, exactly.
+    fireEvent.pointerMove(grid, point([0, 16.3], 'mouse'));
+    expect(screen.getByTestId('staffed-calendar-tip')).toHaveTextContent(/16:00|04:00 PM/);
+    expect(grid.className).toContain('cursor-ew-resize');
+    fireEvent.pointerMove(grid, point([0, 13], 'mouse'));
+    expect(grid.className).toContain('cursor-grab');
+    fireEvent.pointerLeave(grid);
+    expect(screen.queryByTestId('staffed-calendar-tip')).toBeNull();
   });
 
   it('clears what is dragged over with the eraser', () => {

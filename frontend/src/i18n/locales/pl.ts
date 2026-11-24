@@ -1935,7 +1935,7 @@ export default {
         brushAway: 'Nikogo nie ma',
         brushHere: 'Ktoś jest',
         brushErase: 'Wyczyść',
-        dragHint: 'Przeciągnij po godzinach, także przez północ na kolejny dzień. Stuknięcie zaznacza jedną godzinę.',
+        dragHint: 'Przeciągnij po godzinach, także przez północ na kolejny dzień; stuknięcie zaznacza godzinę. Chwyć oznaczenie, żeby je przesunąć, albo jego brzeg, żeby je wydłużyć lub skrócić.',
         today: 'Dziś',
         legendWeekOn: 'Godziny z tygodnia',
         legendWeekOff: 'Poza godzinami z tygodnia',

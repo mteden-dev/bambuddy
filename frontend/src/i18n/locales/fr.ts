@@ -1916,7 +1916,7 @@ export default {
         brushAway: 'Personne',
         brushHere: 'Quelqu\'un',
         brushErase: 'Effacer',
-        dragHint: 'Faites glisser sur les heures, y compris après minuit sur le jour suivant. Un appui marque une heure.',
+        dragHint: 'Faites glisser sur les heures, y compris après minuit sur le jour suivant ; un appui marque une heure. Saisissez une marque pour la déplacer, ou l\'un de ses bords pour l\'allonger ou la raccourcir.',
         today: 'Aujourd\'hui',
         legendWeekOn: 'Heures de la semaine',
         legendWeekOff: 'Hors heures de la semaine',

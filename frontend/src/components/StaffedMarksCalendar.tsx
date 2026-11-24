@@ -21,14 +21,18 @@ import {
 
 // Two weeks: as far as the forecast looks ahead.
 const DAYS = 14;
-// A drag snaps to half hours; a tap marks the hour under the finger.
+// Everything snaps to the nearest half hour; a tap marks an hour from there.
 const SNAP = 30;
 const TAP = 60;
 const MAX_LENGTH = 31 * DAY_MIN;
 // Further than this from where it went down, the pointer is dragging, not tapping.
 const DRAG_PX = 5;
+// This close to a mark's end, the pointer grabs the end to stretch or shorten it.
+const EDGE_PX = { mouse: 6, touch: 10 };
 
 type Brush = QueueStaffedMarkKind | 'erase';
+// What the pointer has hold of in a mark: all of it, or one of its ends.
+type Part = 'move' | 'start' | 'end';
 
 const KIND_STYLE: Record<QueueStaffedMarkKind, { className: string; image?: string }> = {
   away: { className: '', image: AWAY_STRIPES },
@@ -36,22 +40,53 @@ const KIND_STYLE: Record<QueueStaffedMarkKind, { className: string; image?: stri
 };
 
 interface Drag {
+  // Painting with the brush, or moving a mark (or one of its ends).
+  mode: 'paint' | Part;
+  // The mark moved; -1 when painting.
+  index: number;
   anchor: number;
   current: number;
+  // The row the pointer went down in, and the one it is over.
+  anchorRow: number;
+  row: number;
   x: number;
   y: number;
   moved: boolean;
 }
 
-/** The stretch a drag (or a tap) covers. */
-function dragSpan(drag: Drag): Span {
+interface Hover {
+  at: number;
+  row: number;
+  index: number;
+  part: Part | null;
+}
+
+const snap = (min: number) => Math.round(min / SNAP) * SNAP;
+
+/** The stretch a drag (or a tap) paints. */
+function paintSpan(drag: Drag, rows: number[]): Span {
   if (!drag.moved) {
-    const from = Math.floor(drag.anchor / TAP) * TAP;
+    // An hour from the half hour tapped, kept in the row.
+    const from = Math.min(snap(drag.anchor), rows[drag.anchorRow] + DAY_MIN - TAP);
     return { from, to: from + TAP };
   }
-  const from = Math.round(Math.min(drag.anchor, drag.current) / SNAP) * SNAP;
-  const to = Math.round(Math.max(drag.anchor, drag.current) / SNAP) * SNAP;
+  const from = snap(Math.min(drag.anchor, drag.current));
+  const to = snap(Math.max(drag.anchor, drag.current));
   return { from, to: Math.max(to, from + SNAP) };
+}
+
+/** Where a mark moved or stretched by a drag goes. */
+function movedSpan(drag: Drag, span: Span): Span {
+  if (drag.mode === 'move') {
+    const delta = snap(drag.current - drag.anchor);
+    return { from: span.from + delta, to: span.to + delta };
+  }
+  if (drag.mode === 'start') {
+    const from = Math.max(span.to - MAX_LENGTH, Math.min(snap(drag.current), span.to - SNAP));
+    return { from, to: span.to };
+  }
+  const to = Math.min(span.from + MAX_LENGTH, Math.max(snap(drag.current), span.from + SNAP));
+  return { from: span.from, to };
 }
 
 const plausible = (value: string) => {
@@ -63,7 +98,9 @@ const plausible = (value: string) => {
  * Marks on given dates (fork, services/staffed_hours.py): the coming two
  * weeks, a row a day, in the farm's time zone. Dragging over the rows marks
  * the hours with the chosen brush, across midnight into the next row too;
- * the list below sets them to the minute.
+ * a mark grabbed is moved, by an end stretched or shortened. A popup over
+ * the hours says where the pointer is, to the half hour. The list below
+ * sets the marks to the minute.
  */
 export function StaffedMarksCalendar({
   marks,
@@ -96,6 +133,9 @@ export function StaffedMarksCalendar({
   const spans = useMemo(() => marksToSpans(marks), [marks]);
   const [brush, setBrush] = useState<Brush>('away');
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [hover, setHover] = useState<Hover | null>(null);
+  // The mark tapped: its row in the list is brought into view.
+  const [picked, setPicked] = useState<number | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
   const dayLabel = (min: number, options: Intl.DateTimeFormatOptions) =>
@@ -109,33 +149,128 @@ export function StaffedMarksCalendar({
     return `${start} → ${dayLabel(to, { weekday: 'short', day: 'numeric', month: 'numeric' })} ${timeLabel(to)}`;
   };
   const lengthLabel = ({ from, to }: Span) => formatDurationFromHours((to - from) / 60);
+  const change = (next: QueueStaffedMark[]) => {
+    setPicked(null);
+    onChange(next);
+  };
 
-  const pointToMin = (clientX: number, clientY: number): number => {
+  /** The row and the minute under the pointer. */
+  const pointAt = (clientX: number, clientY: number): { at: number; row: number; width: number } => {
     const rect = gridRef.current!.getBoundingClientRect();
     const row = Math.min(DAYS - 1, Math.max(0, Math.floor(((clientY - rect.top) / rect.height) * DAYS)));
     const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-    return rows[row] + fraction * DAY_MIN;
+    return { at: rows[row] + fraction * DAY_MIN, row, width: rect.width };
   };
+  /** The mark under the pointer and the part of it held: an end close by, or else the whole of it. */
+  const grab = (at: number, row: number, edge: number): { index: number; part: Part } | null => {
+    const rowStart = rows[row];
+    let body: { index: number; part: Part } | null = null;
+    for (let index = 0; index < spans.length; index++) {
+      const s = spans[index];
+      // A mark too short for its ends to tell apart from it is only moved.
+      if (s.to - s.from >= 3 * edge) {
+        if (Math.abs(at - s.from) <= edge && s.from >= rowStart && s.from < rowStart + DAY_MIN) return { index, part: 'start' };
+        if (Math.abs(at - s.to) <= edge && s.to > rowStart && s.to <= rowStart + DAY_MIN) return { index, part: 'end' };
+      }
+      if (body == null && s.from <= at && at < s.to) body = { index, part: 'move' };
+    }
+    return body;
+  };
+  const edgeMinutes = (pointerType: string, width: number) =>
+    ((pointerType === 'mouse' ? EDGE_PX.mouse : EDGE_PX.touch) / Math.max(width, 1)) * DAY_MIN;
+
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (readOnly || (e.pointerType === 'mouse' && e.button !== 0)) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture?.(e.pointerId);
-    const at = pointToMin(e.clientX, e.clientY);
-    setDrag({ anchor: at, current: at, x: e.clientX, y: e.clientY, moved: false });
+    const { at, row, width } = pointAt(e.clientX, e.clientY);
+    // The eraser always paints; any other brush takes hold of a mark it lands on.
+    const held = brush === 'erase' ? null : grab(at, row, edgeMinutes(e.pointerType, width));
+    setHover(null);
+    setDrag({
+      mode: held?.part ?? 'paint',
+      index: held?.index ?? -1,
+      anchor: at,
+      current: at,
+      anchorRow: row,
+      row,
+      x: e.clientX,
+      y: e.clientY,
+      moved: false,
+    });
   };
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!drag) return;
+    const { at, row, width } = pointAt(e.clientX, e.clientY);
+    if (!drag) {
+      if (readOnly || e.pointerType === 'touch') return;
+      const held = brush === 'erase' ? null : grab(at, row, edgeMinutes(e.pointerType, width));
+      setHover({ at, row, index: held?.index ?? -1, part: held?.part ?? null });
+      return;
+    }
     const moved = drag.moved || Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > DRAG_PX;
-    setDrag({ ...drag, current: pointToMin(e.clientX, e.clientY), moved });
+    setDrag({ ...drag, current: at, row, moved });
   };
   const onPointerUp = () => {
     if (!drag) return;
-    const { from, to } = dragSpan(drag);
     setDrag(null);
-    onChange(paintMarks(marks, from, to, brush === 'erase' ? null : brush));
+    if (drag.mode === 'paint') {
+      const { from, to } = paintSpan(drag, rows);
+      change(paintMarks(marks, from, to, brush === 'erase' ? null : brush));
+    } else if (drag.moved) {
+      const { from, to } = movedSpan(drag, spans[drag.index]);
+      change(editMark(marks, drag.index, { ...marks[drag.index], start: minToStamp(from), end: minToStamp(to) }));
+    } else {
+      // A tap on a mark: its row in the list, to set it to the minute.
+      setPicked(drag.index);
+    }
   };
 
-  const preview = drag ? dragSpan(drag) : null;
+  // While a mark is moved, the marks as they will be once it is let go.
+  const moving = drag && drag.mode !== 'paint' ? movedSpan(drag, spans[drag.index]) : null;
+  const shown = useMemo(
+    () =>
+      moving && drag
+        ? marksToSpans(editMark(marks, drag.index, { ...marks[drag.index], start: minToStamp(moving.from), end: minToStamp(moving.to) }))
+        : spans,
+    // moving is worked out from drag and spans.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [drag, marks, spans],
+  );
+  const preview = drag?.mode === 'paint' ? paintSpan(drag, rows) : null;
+  // What the status line reads: the stretch painted, or where the mark goes.
+  const status = preview ?? moving;
+  const statusKind: Brush = moving && drag ? spans[drag.index].kind : brush;
+
+  // The popup over the hours: the half hour under the pointer, or the end being moved.
+  const tip = (() => {
+    if (drag) {
+      if (drag.mode === 'paint') return { time: drag.moved ? snap(drag.current) : preview!.from, row: drag.row };
+      return { time: drag.mode === 'end' ? moving!.to : moving!.from, row: drag.row };
+    }
+    if (!hover) return null;
+    const s = spans[hover.index];
+    const time = hover.part === 'start' ? s.from : hover.part === 'end' ? s.to : snap(hover.at);
+    return { time, row: hover.row };
+  })();
+  const tipAt = tip
+    ? tip.time === rows[tip.row] + DAY_MIN
+      ? { pct: 100, label: '24:00' }
+      : { pct: ((tip.time - dayStart(tip.time)) / DAY_MIN) * 100, label: timeLabel(tip.time) }
+    : null;
+  const cursor = readOnly
+    ? ''
+    : drag
+      ? drag.mode === 'move'
+        ? 'cursor-grabbing'
+        : drag.mode === 'paint'
+          ? 'cursor-crosshair'
+          : 'cursor-ew-resize'
+      : hover?.part === 'move'
+        ? 'cursor-grab'
+        : hover?.part
+          ? 'cursor-ew-resize'
+          : 'cursor-crosshair';
+
   const upcoming = marks
     .map((mark, index) => ({ mark, index }))
     .filter(({ mark }) => stampToMin(mark.end) > nowMin);
@@ -174,19 +309,19 @@ export function StaffedMarksCalendar({
         </div>
       )}
 
-      {/* What a drag covers, while dragging; how to mark, otherwise. */}
-      <div className="h-4 text-[11px] flex items-center gap-1.5" aria-live="polite">
-        {preview ? (
+      {!readOnly && <p className="text-[11px] text-bambu-gray">{t('queue.timeline.staffed.dragHint')}</p>}
+
+      {/* What a drag covers, or where a moved mark goes. One line, so nothing shifts under the finger. */}
+      <div className="h-4 text-[11px] flex items-center gap-1.5 min-w-0" aria-live="polite" data-testid="staffed-calendar-status">
+        {status && (
           <>
             <span
-              className={`inline-block w-3 h-3 rounded-sm ${brush === 'erase' ? 'bg-white/30' : KIND_STYLE[brush].className}`}
-              style={brush === 'away' ? { backgroundImage: AWAY_STRIPES } : undefined}
+              className={`inline-block w-3 h-3 shrink-0 rounded-sm ${statusKind === 'erase' ? 'bg-white/30' : KIND_STYLE[statusKind].className}`}
+              style={statusKind === 'away' ? { backgroundImage: AWAY_STRIPES } : undefined}
             />
-            <span className="text-white tabular-nums">{rangeLabel(preview)}</span>
-            <span className="text-bambu-gray">· {lengthLabel(preview)}</span>
+            <span className="text-white tabular-nums truncate">{rangeLabel(status)}</span>
+            <span className="text-bambu-gray shrink-0">· {lengthLabel(status)}</span>
           </>
-        ) : (
-          <span className="text-bambu-gray">{readOnly ? '' : t('queue.timeline.staffed.dragHint')}</span>
         )}
       </div>
 
@@ -200,6 +335,22 @@ export function StaffedMarksCalendar({
               </span>
             ))}
             <span className="absolute right-0">24</span>
+            {/* Where the pointer is, to the half hour: over the hours, pointing down at the rows. */}
+            {tipAt && (
+              <>
+                <span
+                  className="pointer-events-none absolute bottom-[5px] z-10 -translate-x-1/2 whitespace-nowrap rounded bg-white px-1.5 py-0.5 text-[11px] font-medium leading-none text-gray-900 tabular-nums shadow"
+                  style={{ left: `clamp(1.5rem, ${tipAt.pct}%, calc(100% - 1.5rem))` }}
+                  data-testid="staffed-calendar-tip"
+                >
+                  {tipAt.label}
+                </span>
+                <span
+                  className="pointer-events-none absolute bottom-0 z-10 -translate-x-1/2 h-0 w-0 border-x-[5px] border-t-[5px] border-x-transparent border-t-white"
+                  style={{ left: `${tipAt.pct}%` }}
+                />
+              </>
+            )}
           </div>
         </div>
         <div className="flex">
@@ -215,14 +366,21 @@ export function StaffedMarksCalendar({
           </div>
           <div
             ref={gridRef}
-            className={`relative flex-1 ${readOnly ? '' : 'cursor-crosshair'}`}
+            className={`relative flex-1 ${cursor}`}
             style={{ touchAction: readOnly ? undefined : 'none' }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={() => setDrag(null)}
+            onPointerLeave={() => setHover(null)}
             data-testid="staffed-calendar-grid"
           >
+            {tipAt && (
+              <div
+                className="pointer-events-none absolute inset-y-0 z-10 w-px -translate-x-1/2 bg-white/60"
+                style={{ left: `${tipAt.pct}%` }}
+              />
+            )}
             {rows.map((row, i) => (
               <div key={row} className="relative h-7" data-testid={`staffed-calendar-day-${i}`}>
                 <div
@@ -241,15 +399,24 @@ export function StaffedMarksCalendar({
                       style={{ left: `${(h / 24) * 100}%` }}
                     />
                   ))}
-                  {clipSpans(spans, row, row + DAY_MIN).map((span) => (
-                    <div
-                      key={`${span.kind}-${span.from}`}
-                      className={`absolute inset-y-0 ${KIND_STYLE[span.kind].className}`}
-                      style={{ ...at(span, row), backgroundImage: KIND_STYLE[span.kind].image }}
-                      data-testid="staffed-mark"
-                      data-kind={span.kind}
-                    />
-                  ))}
+                  {shown.map((whole) =>
+                    clipSpans([whole], row, row + DAY_MIN).map((span) => {
+                      const held = moving != null && whole.from === moving.from && whole.to === moving.to;
+                      return (
+                        <div
+                          key={`${span.kind}-${span.from}`}
+                          className={`absolute inset-y-0 ${KIND_STYLE[span.kind].className} ${
+                            span.from === whole.from && !readOnly ? 'border-l-2 border-white/50' : ''
+                          } ${span.to === whole.to && !readOnly ? 'border-r-2 border-white/50' : ''} ${
+                            held ? 'ring-2 ring-inset ring-white/90' : ''
+                          }`}
+                          style={{ ...at(span, row), backgroundImage: KIND_STYLE[span.kind].image }}
+                          data-testid="staffed-mark"
+                          data-kind={span.kind}
+                        />
+                      );
+                    }),
+                  )}
                   {preview &&
                     clipSpans([preview], row, row + DAY_MIN).map((span) => (
                       <div
@@ -302,7 +469,7 @@ export function StaffedMarksCalendar({
             <button
               type="button"
               className="text-xs text-bambu-gray hover:text-red-300"
-              onClick={() => onChange(marks.filter((m) => stampToMin(m.end) <= nowMin))}
+              onClick={() => change(marks.filter((m) => stampToMin(m.end) <= nowMin))}
             >
               {t('queue.timeline.staffed.clearAll')}
             </button>
@@ -318,8 +485,9 @@ export function StaffedMarksCalendar({
               key={index}
               mark={mark}
               readOnly={readOnly}
+              picked={picked === index}
               lengthText={lengthLabel({ from: stampToMin(mark.start), to: stampToMin(mark.end) })}
-              onChange={(next) => onChange(next ? editMark(marks, index, next) : marks.filter((_, i) => i !== index))}
+              onChange={(next) => change(next ? editMark(marks, index, next) : marks.filter((_, i) => i !== index))}
               t={t}
             />
           ))
@@ -333,12 +501,15 @@ export function StaffedMarksCalendar({
 function MarkRow({
   mark,
   readOnly,
+  picked,
   lengthText,
   onChange,
   t,
 }: {
   mark: QueueStaffedMark;
   readOnly: boolean;
+  /** Tapped on the calendar: brought into view and outlined. */
+  picked: boolean;
   lengthText: string;
   /** The mark changed, or null: removed. */
   onChange: (mark: QueueStaffedMark | null) => void;
@@ -352,6 +523,10 @@ function MarkRow({
   }, [mark.start, mark.end]);
   const away = mark.kind === 'away';
   const Icon = away ? UserX : UserCheck;
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (picked) rowRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [picked]);
 
   const takeStart = (value: string) => {
     setStart(value);
@@ -372,7 +547,14 @@ function MarkRow({
     'min-w-0 flex-1 basis-40 px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm [color-scheme:dark]';
 
   return (
-    <div className="rounded-lg border border-bambu-dark-tertiary bg-bambu-dark/50 p-2 space-y-2" data-testid="staffed-mark-row">
+    <div
+      ref={rowRef}
+      className={`rounded-lg border bg-bambu-dark/50 p-2 space-y-2 transition-colors ${
+        picked ? 'border-white/60' : 'border-bambu-dark-tertiary'
+      }`}
+      data-testid="staffed-mark-row"
+      data-picked={picked || undefined}
+    >
       <div className="flex items-center gap-2">
         <button
           type="button"

@@ -1935,7 +1935,7 @@ export default {
         brushAway: 'Nobody there',
         brushHere: 'Someone there',
         brushErase: 'Clear',
-        dragHint: 'Drag across the hours, past midnight into the next day too. A tap marks one hour.',
+        dragHint: 'Drag across the hours, past midnight into the next day too; a tap marks an hour. Grab a mark to move it, or one of its ends to stretch or shorten it.',
         today: 'Today',
         legendWeekOn: 'Weekly hours',
         legendWeekOff: 'Outside the weekly hours',

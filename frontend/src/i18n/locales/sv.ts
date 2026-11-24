@@ -1933,7 +1933,7 @@ export default {
         brushAway: 'Ingen där',
         brushHere: 'Någon där',
         brushErase: 'Rensa',
-        dragHint: 'Dra över timmarna, även förbi midnatt in i nästa dag. Ett tryck markerar en timme.',
+        dragHint: 'Dra över timmarna, även förbi midnatt in i nästa dag; ett tryck markerar en timme. Ta tag i en markering för att flytta den, eller i en kant för att förlänga eller korta den.',
         today: 'Idag',
         legendWeekOn: 'Veckotider',
         legendWeekOff: 'Utanför veckotiderna',

@@ -1916,7 +1916,7 @@ export default {
         brushAway: 'Ninguém presente',
         brushHere: 'Alguém presente',
         brushErase: 'Limpar',
-        dragHint: 'Arraste pelas horas, inclusive passando da meia-noite para o dia seguinte. Um toque marca uma hora.',
+        dragHint: 'Arraste pelas horas, inclusive passando da meia-noite para o dia seguinte; um toque marca uma hora. Segure uma marcação para movê-la, ou uma das bordas para aumentá-la ou encurtá-la.',
         today: 'Hoje',
         legendWeekOn: 'Horário semanal',
         legendWeekOff: 'Fora do horário semanal',

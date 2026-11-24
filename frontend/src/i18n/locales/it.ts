@@ -1916,7 +1916,7 @@ export default {
         brushAway: 'Nessuno',
         brushHere: 'Qualcuno',
         brushErase: 'Cancella',
-        dragHint: 'Trascina sulle ore, anche oltre la mezzanotte nel giorno dopo. Un tocco segna un\'ora.',
+        dragHint: 'Trascina sulle ore, anche oltre la mezzanotte nel giorno dopo; un tocco segna un\'ora. Afferra un segno per spostarlo, o un suo bordo per allungarlo o accorciarlo.',
         today: 'Oggi',
         legendWeekOn: 'Orari settimanali',
         legendWeekOff: 'Fuori dagli orari settimanali',
