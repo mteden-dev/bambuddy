@@ -8985,6 +8985,7 @@ export default {
       ready: 'готово {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} уже печатается на {{printer}}; эта печать останется на складе.',
       fromShelf: 'С полки',
+      partToPrint: '{{part}}: к печати {{n}}',
       willPrint: 'Напечатаем: {{list}}.',
       nothingToPrint: 'Нечего печатать.',
       shelfList: 'С полки: {{list}}.',

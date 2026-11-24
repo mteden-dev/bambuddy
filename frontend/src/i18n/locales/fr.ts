@@ -9366,6 +9366,7 @@ export default {
       ready: 'prêtes {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} s\'imprime déjà sur {{printer}} ; cette impression reste en stock.',
       fromShelf: 'Du rayon',
+      partToPrint: '{{part}} : {{n}} à imprimer',
       willPrint: 'À imprimer : {{list}}.',
       nothingToPrint: 'Rien à imprimer.',
       shelfList: 'Du rayon : {{list}}.',

@@ -9363,6 +9363,7 @@ export default {
       ready: '完成 {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} 已在 {{printer}} 上列印；那份列印會留作庫存。',
       fromShelf: '架上已有',
+      partToPrint: '{{part}}：待列印 {{n}}',
       willPrint: '將列印：{{list}}。',
       nothingToPrint: '無需列印。',
       shelfList: '架上已有：{{list}}。',

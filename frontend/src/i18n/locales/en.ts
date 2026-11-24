@@ -9433,6 +9433,7 @@ export default {
       ready: 'ready {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} is printing on {{printer}} already; that print stays in stock.',
       fromShelf: 'From the shelf',
+      partToPrint: '{{part}}: {{n}} to print',
       willPrint: 'To print: {{list}}.',
       nothingToPrint: 'Nothing to print.',
       shelfList: 'From the shelf: {{list}}.',

@@ -9365,6 +9365,7 @@ export default {
       ready: 'pronti {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} è già in stampa su {{printer}}; quella stampa resta in magazzino.',
       fromShelf: 'Dallo scaffale',
+      partToPrint: '{{part}}: {{n}} da stampare',
       willPrint: 'Da stampare: {{list}}.',
       nothingToPrint: 'Niente da stampare.',
       shelfList: 'Dallo scaffale: {{list}}.',

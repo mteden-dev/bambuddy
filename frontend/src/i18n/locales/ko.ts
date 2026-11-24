@@ -9003,6 +9003,7 @@ export default {
       ready: '완료 {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}}은(는) 이미 {{printer}}에서 인쇄 중입니다. 그 인쇄물은 재고로 남습니다.',
       fromShelf: '선반에서',
+      partToPrint: '{{part}}: 인쇄 {{n}}',
       willPrint: '인쇄: {{list}}.',
       nothingToPrint: '인쇄할 것이 없습니다.',
       shelfList: '선반에서: {{list}}.',

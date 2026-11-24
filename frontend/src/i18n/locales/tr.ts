@@ -9307,6 +9307,7 @@ export default {
       ready: 'hazır {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} zaten {{printer}} yazıcısında basılıyor; o baskı stokta kalır.',
       fromShelf: 'Raftan',
+      partToPrint: '{{part}}: yazdırılacak {{n}}',
       willPrint: 'Basılacak: {{list}}.',
       nothingToPrint: 'Basılacak bir şey yok.',
       shelfList: 'Raftan: {{list}}.',

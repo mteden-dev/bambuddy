@@ -9388,6 +9388,7 @@ export default {
       ready: 'listas {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} ya se imprime en {{printer}}; esa impresión queda en stock.',
       fromShelf: 'De la estantería',
+      partToPrint: '{{part}}: {{n}} por imprimir',
       willPrint: 'Se imprimirá: {{list}}.',
       nothingToPrint: 'Nada que imprimir.',
       shelfList: 'De la estantería: {{list}}.',

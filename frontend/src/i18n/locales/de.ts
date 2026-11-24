@@ -9380,6 +9380,7 @@ export default {
       ready: 'fertig {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} wird schon auf {{printer}} gedruckt; dieser Druck bleibt im Bestand.',
       fromShelf: 'Aus dem Regal',
+      partToPrint: '{{part}}: {{n}} zu drucken',
       willPrint: 'Gedruckt wird: {{list}}.',
       nothingToPrint: 'Nichts zu drucken.',
       shelfList: 'Aus dem Regal: {{list}}.',

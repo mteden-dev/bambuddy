@@ -9431,6 +9431,7 @@ export default {
       ready: 'klaar {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} wordt al geprint op {{printer}}; die print blijft op voorraad.',
       fromShelf: 'Van de plank',
+      partToPrint: '{{part}}: {{n}} te printen',
       willPrint: 'Te printen: {{list}}.',
       nothingToPrint: 'Niets te printen.',
       shelfList: 'Van de plank: {{list}}.',

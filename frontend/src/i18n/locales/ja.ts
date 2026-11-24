@@ -9379,6 +9379,7 @@ export default {
       ready: '完成 {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}}はすでに{{printer}}で印刷中です。その印刷は在庫になります。',
       fromShelf: '棚から',
+      partToPrint: '{{part}}: 印刷 {{n}}',
       willPrint: '印刷：{{list}}。',
       nothingToPrint: '印刷するものはありません。',
       shelfList: '棚から：{{list}}。',

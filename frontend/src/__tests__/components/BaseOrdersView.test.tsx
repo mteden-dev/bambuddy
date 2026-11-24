@@ -248,7 +248,14 @@ describe('BaseOrdersView', () => {
     render(<BaseOrdersView hasPermission={allowAll} />);
     await user.click(await screen.findByRole('button', { name: 'Parts' }));
     const base = await screen.findByRole('radiogroup', { name: 'Extra Base of 9mm 100 Black on hand' });
+    // The shelf count is the opposite of printing: its picked 0 is not the green "print" fill.
+    expect(within(base).getByRole('radio', { name: '0' })).not.toHaveClass('bg-bambu-green');
+    expect(screen.getByText('Base: 2 to print')).toBeInTheDocument();
     await user.click(within(base).getByRole('radio', { name: '1' }));
+    expect(within(base).getByRole('radio', { name: '1' })).toHaveClass('bg-sky-600');
+    // Each part says what is left to print.
+    expect(screen.getByText('Base: 1 to print')).toBeInTheDocument();
+    expect(screen.getByText('Lid: 2 to print')).toBeInTheDocument();
     // Saved by itself, without sending anything to print.
     await waitFor(() =>
       expect(drafts).toEqual([
@@ -256,7 +263,9 @@ describe('BaseOrdersView', () => {
       ]),
     );
     expect(accepted).toEqual([]);
-    expect(screen.getByText('To print: Lid 2, Base 1. From the shelf: Base 1.')).toBeInTheDocument();
+    expect(screen.getByText('To print: Lid 2, Base 1.')).toHaveTextContent(
+      'To print: Lid 2, Base 1. From the shelf: Base 1.',
+    );
   });
 
   it('a draft shows on the row and "Print the rest" sends it', async () => {

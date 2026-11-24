@@ -8,8 +8,13 @@ interface PieceStepperProps {
   min?: number;
   /** Names the control for screen readers and tests. */
   label: string;
-  /** Picked values above zero show red (bad pieces). */
-  tone?: 'default' | 'danger';
+  /**
+   * default: the picked value is green (pieces to print or keep).
+   * danger: picked values above zero show red (bad pieces).
+   * shelf: a count that takes pieces out of printing; a picked 0 stays
+   * neutral and values above zero show sky, so it never reads as "print".
+   */
+  tone?: 'default' | 'danger' | 'shelf';
   disabled?: boolean;
 }
 
@@ -27,8 +32,11 @@ const cell =
 export function PieceStepper({ value, onChange, max, min = 0, label, tone = 'default', disabled }: PieceStepperProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const clamp = (n: number) => Math.max(min, Math.min(max, n));
-  const picked = (n: number) =>
-    tone === 'danger' && n > 0 ? 'bg-red-600 text-white' : 'bg-bambu-green text-white';
+  const picked = (n: number) => {
+    if (tone === 'danger' && n > 0) return 'bg-red-600 text-white';
+    if (tone === 'shelf') return n > 0 ? 'bg-sky-600 text-white' : 'bg-bambu-dark-tertiary text-white';
+    return 'bg-bambu-green text-white';
+  };
 
   if (max - min + 1 <= SEGMENTS_UP_TO + 1) {
     const values = Array.from({ length: max - min + 1 }, (_, i) => min + i);
@@ -88,7 +96,7 @@ export function PieceStepper({ value, onChange, max, min = 0, label, tone = 'def
           }
         }}
         className={`w-12 text-center bg-bambu-dark text-white text-sm border-x border-bambu-dark-tertiary focus:outline-none focus:bg-bambu-dark-tertiary ${
-          tone === 'danger' && value > 0 ? 'text-red-400' : ''
+          tone === 'danger' && value > 0 ? 'text-red-400' : tone === 'shelf' && value > 0 ? 'text-sky-700 dark:text-sky-300' : ''
         }`}
       />
       <button

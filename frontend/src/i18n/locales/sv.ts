@@ -9462,6 +9462,7 @@ errors: {
       ready: 'klara {{ready}}/{{needed}}',
       alreadyPrinting: '{{part}} skrivs redan ut på {{printer}}; den utskriften blir kvar i lager.',
       fromShelf: 'Från hyllan',
+      partToPrint: '{{part}}: {{n}} att skriva ut',
       willPrint: 'Skrivs ut: {{list}}.',
       nothingToPrint: 'Inget att skriva ut.',
       shelfList: 'Från hyllan: {{list}}.',

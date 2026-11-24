@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ImageOff, Info, Loader2 } from 'lucide-react';
+import { ArrowRight, Check, ImageOff, Info, Loader2, Package, Printer } from 'lucide-react';
 import { api } from '../../api/client';
 import type { BaseOrder, BaseOrderAcceptProduct, ProductDetail } from '../../api/client';
 import { Button } from '../Button';
@@ -13,6 +13,8 @@ import { wantedUnits } from '../../utils/baseOrders';
 const TOUCH = 'pointer-coarse:min-h-11!';
 // A change is saved this long after the last tap.
 const SAVE_AFTER_MS = 400;
+// Pieces taken from the shelf: the opposite of printing, so never green.
+const SHELF_TEXT = 'text-sky-700 dark:text-sky-300';
 
 interface Choice {
   units: number;
@@ -227,6 +229,7 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
         <span className="text-white font-medium flex-1 min-w-[8rem]">{name}</span>
         {choice && (
           <span className="flex items-center gap-2 text-sm text-bambu-gray">
+            <Printer aria-hidden="true" className="w-4 h-4 text-bambu-green" />
             {t('baseSync.parts.toPrint')}
             <PieceStepper
               label={t('baseSync.acceptModal.toPrintLabel', { name })}
@@ -268,6 +271,8 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
         <ul className="mt-3 space-y-1">
           {product.parts.map((part) => {
             const needed = choice.units * part.quantity;
+            const have = Math.min(choice.have[part.id] ?? 0, needed);
+            const toPrint = needed - have;
             const ready = progress?.parts.find((p) => p.part_id === part.id);
             const busy = accepted ? printingOn(part.id) : undefined;
             return (
@@ -281,21 +286,35 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
                       {t('baseSync.parts.ready', { ready: ready.ready, needed: ready.needed })}
                     </span>
                   )}
-                  {busy && (choice.have[part.id] ?? 0) > 0 && (
+                  {busy && have > 0 && (
                     <span className="block text-amber-600 dark:text-amber-300">
                       {t('baseSync.parts.alreadyPrinting', { part: part.name, printer: busy })}
                     </span>
                   )}
                 </span>
-                <span className="flex items-center gap-2 text-xs text-bambu-gray">
-                  {t('baseSync.parts.fromShelf')}
+                <span className="flex items-center gap-2 shrink-0 text-xs">
+                  <span className={`flex items-center gap-1 ${have > 0 ? SHELF_TEXT : 'text-bambu-gray'}`}>
+                    <Package aria-hidden="true" className="w-3.5 h-3.5" />
+                    {t('baseSync.parts.fromShelf')}
+                  </span>
                   <PieceStepper
                     label={t('baseSync.acceptModal.haveLabel', { part: part.name, name })}
                     max={needed}
-                    value={Math.min(choice.have[part.id] ?? 0, needed)}
+                    value={have}
+                    tone="shelf"
                     disabled={!canAct}
                     onChange={(pieces) => change({ ...choice, have: { ...choice.have, [part.id]: pieces } })}
                   />
+                  <ArrowRight aria-hidden="true" className="w-3 h-3 text-bambu-gray" />
+                  <span
+                    className={`flex items-center justify-end gap-1 w-10 text-sm tabular-nums ${
+                      toPrint > 0 ? 'text-bambu-green font-medium' : 'text-bambu-gray'
+                    }`}
+                  >
+                    <Printer aria-hidden="true" className="w-3.5 h-3.5" />
+                    <span aria-hidden="true">{toPrint}</span>
+                    <span className="sr-only">{t('baseSync.parts.partToPrint', { part: part.name, n: toPrint })}</span>
+                  </span>
                 </span>
               </li>
             );
@@ -305,14 +324,21 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
       {summary && choice && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
           <span className="text-bambu-gray-light flex-1 min-w-0">
-            {choice.units === 0
-              ? t('baseSync.parts.nothing')
-              : [
-                  summary.toMake.length ? t('baseSync.parts.willPrint', { list: summary.toMake.join(', ') }) : t('baseSync.parts.nothingToPrint'),
-                  summary.fromShelf.length ? t('baseSync.parts.shelfList', { list: summary.fromShelf.join(', ') }) : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
+            {choice.units === 0 ? (
+              t('baseSync.parts.nothing')
+            ) : (
+              <>
+                {summary.toMake.length
+                  ? t('baseSync.parts.willPrint', { list: summary.toMake.join(', ') })
+                  : t('baseSync.parts.nothingToPrint')}
+                {summary.fromShelf.length > 0 && (
+                  <span className={SHELF_TEXT}>
+                    {' '}
+                    {t('baseSync.parts.shelfList', { list: summary.fromShelf.join(', ') })}
+                  </span>
+                )}
+              </>
+            )}
           </span>
           {save.isPending ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin text-bambu-gray" />
