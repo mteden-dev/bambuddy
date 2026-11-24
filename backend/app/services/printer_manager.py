@@ -529,6 +529,12 @@ class PrinterManager:
             self._schedule_async(self._broadcast_status_change(printer_id))
             if changed:
                 self._schedule_async(self._emit_plate_clear_change(printer_id, awaiting))
+                # Fork: when plates get cleared, for the queue forecast to learn from.
+                from datetime import datetime, timezone
+
+                from backend.app.services.plate_clears import record_gate_change
+
+                self._schedule_async(record_gate_change(printer_id, awaiting, datetime.now(timezone.utc)))
 
     async def _emit_plate_clear_change(self, printer_id: int, awaiting: bool) -> None:
         """Relay a plate-clear gate transition to MQTT and notifications (#2525).

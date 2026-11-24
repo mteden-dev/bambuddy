@@ -692,6 +692,7 @@ async def init_db():
         orca_base_cache,
         pending_upload,
         pipeline_run,
+        plate_clears,
         print_batch,
         print_log,
         print_queue,

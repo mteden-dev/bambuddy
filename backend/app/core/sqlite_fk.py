@@ -100,6 +100,7 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         # given the id.
         ("custom_queue_reservations", "printer_id"),
         ("custom_slot_reload_prompts", "printer_id"),  # fork: slot spools
+        ("custom_plate_clears", "printer_id"),  # fork: plate clears
         # A printer given a deleted one's id would never be told about the
         # faults that printer was notified about (#3486).
         ("hms_notified_faults", "printer_id"),

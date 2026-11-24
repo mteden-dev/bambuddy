@@ -70,6 +70,8 @@ jobs:
             backend/tests/integration/test_queue_plan_api.py \
             backend/tests/unit/test_staffed_hours_fork.py \
             backend/tests/integration/test_staffed_hours_api.py \
+            backend/tests/unit/test_plate_clears_fork.py \
+            backend/tests/integration/test_plate_clears_api_fork.py \
             backend/tests/unit/test_slot_spools_fork.py \
             backend/tests/integration/test_slot_spools_api_fork.py \
             backend/tests/unit/services/test_filament_deficit.py \

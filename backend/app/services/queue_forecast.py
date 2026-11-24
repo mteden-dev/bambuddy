@@ -268,6 +268,9 @@ class PlateWait:
     printer_id: int
     start: datetime
     end: datetime
+    # Why until then (PlateTurnaround.explain), or ``waiting``/``away`` for a
+    # plate waiting now: as usual, or for longer than usual.
+    reason: str = "clear"
 
 
 @dataclass
@@ -396,6 +399,7 @@ def _forecast_variants(item: PrintQueueItem) -> tuple[ForecastVariant, ...]:
 async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) -> ForecastInputs:
     """The printers' live state and the pending jobs, as the forecast sees them."""
     # Imported here: the scheduler module pulls in much of the app at import time.
+    from backend.app.services.plate_clears import load_last_clear, load_learned, load_waiting_since
     from backend.app.services.print_scheduler import _order_printers, scheduler
     from backend.app.services.printer_manager import printer_manager
     from backend.app.services.printer_tags import TagRouting
@@ -412,11 +416,22 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
     printers = _order_printers(printers, order, last_finished)
     wakeable = await scheduler._wakeable_printer_ids(db)
     sjf_enabled = await scheduler._get_bool_setting(db, "queue_shortest_first")
-    turnaround = PlateTurnaround.build(
-        await read_staffed_hours(db),
-        await scheduler._get_bool_setting(db, "require_plate_clear", default=False),
-        now,
-    )
+    hours = await read_staffed_hours(db)
+    waits_for_plate = await scheduler._get_bool_setting(db, "require_plate_clear", default=False)
+    if waits_for_plate and hours.learn:
+        learned, learned_samples = await load_learned(db, hours.zone(), now)
+        awaiting_ids = [p.id for p in printers if printer_manager.is_awaiting_plate_clear(p.id)]
+        turnaround = PlateTurnaround.build(
+            hours,
+            waits_for_plate,
+            now,
+            learned=learned,
+            learned_samples=learned_samples,
+            waiting_since=await load_waiting_since(db, awaiting_ids, now),
+            last_clear=await load_last_clear(db),
+        )
+    else:
+        turnaround = PlateTurnaround.build(hours, waits_for_plate, now)
     plate_waits: list[PlateWait] = []
 
     rows = (
@@ -457,12 +472,18 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
             else:
                 free_at = now + timedelta(seconds=DEFAULT_DURATION_S)
         awaiting_plate = printer_manager.is_awaiting_plate_clear(printer.id)
-        if running is not None or busy or awaiting_plate:
-            # Its plate has to be cleared first: after the print, or now.
+        if running is not None or busy:
+            # Its plate has to be cleared after the print.
             plate_from = free_at
-            free_at = turnaround.ready_after(plate_from)
+            free_at, reason = turnaround.explain(plate_from)
             if free_at > plate_from:
-                plate_waits.append(PlateWait(printer.id, plate_from, free_at))
+                plate_waits.append(PlateWait(printer.id, plate_from, free_at, reason))
+        elif awaiting_plate:
+            # Standing with a finished plate now, since the print ended.
+            plate_from, free_at, reason = turnaround.waiting_plate(printer.id)
+            free_at = max(free_at, now)
+            if free_at > plate_from:
+                plate_waits.append(PlateWait(printer.id, plate_from, free_at, reason))
         available = connected or printer.id in wakeable
         forecast_printers.append(
             ForecastPrinter(
@@ -561,8 +582,9 @@ async def build_queue_forecast(db: AsyncSession, now: datetime | None = None) ->
     plate_waits = list(inputs.plate_waits)
     if ready_after is not None:
         for p in placements:
-            if (ready := ready_after(p.end)) > p.end:
-                plate_waits.append(PlateWait(p.printer_id, p.end, ready))
+            ready, reason = inputs.turnaround.explain(p.end)
+            if ready > p.end:
+                plate_waits.append(PlateWait(p.printer_id, p.end, ready, reason))
 
     refusals: dict[int, dict[int, Refusal]] = {}
     reserve_refusals: dict[int, dict[int, Refusal]] = {}

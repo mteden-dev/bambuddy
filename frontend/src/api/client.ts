@@ -3189,7 +3189,7 @@ export interface QueueForecast {
   /** item id -> the job's alternatives (#671), each with its file and print time. */
   variants?: Record<string, QueueForecastVariant[]>;
   /** Printers standing with a finished plate until someone clears it: now, and after each forecast print. */
-  plate_waits?: Array<{ printer_id: number; start: string; end: string }>;
+  plate_waits?: QueueForecastPlateWait[];
   /** When someone is there to clear plates; null on servers without staffed hours. */
   staffed?: {
     enabled: boolean;
@@ -3198,7 +3198,29 @@ export interface QueueForecast {
     clear_minutes: number;
     /** Plate-clear confirmation is on: a printer waits for it after each print. */
     waits_for_plate: boolean;
+    /** The forecast goes by how long plates actually wait and by what is going on now. */
+    learn?: boolean;
+    learned_samples?: number;
+    /** The usual wait in minutes for each of the 168 hours from `start` on; the week repeats. */
+    typical?: { start: string; minutes: number[] } | null;
+    /** Nobody seems to be there until then: a plate finished before it waits for it. */
+    away_until?: string | null;
+    /** Someone cleared a plate a moment ago: a print ending before then is cleared at once. */
+    present_until?: string | null;
   } | null;
+}
+
+/**
+ * A printer standing with a finished plate. `reason`: clear (only the clearing),
+ * unstaffed (outside the staffed hours), typical (how long plates usually wait
+ * then), and for a plate waiting now, waiting (as usual) or away (far longer
+ * than usual: nobody seems to be there).
+ */
+export interface QueueForecastPlateWait {
+  printer_id: number;
+  start: string;
+  end: string;
+  reason?: 'clear' | 'unstaffed' | 'typical' | 'waiting' | 'away';
 }
 
 /** When someone is at the farm to clear plates (fork): wall-clock hours in `timezone`, Monday first. */
@@ -3208,6 +3230,19 @@ export interface QueueStaffedHours {
   /** null is a day nobody is there; an end at or before the start runs past midnight. */
   days: Array<{ start: string; end: string } | null>;
   clear_minutes: number;
+  /** Also go by how long plates actually wait, and by what is going on now. */
+  learn: boolean;
+}
+
+/** The staffed hours, and what the forecast learned from the plates of the last eight weeks. */
+export interface QueueStaffedHoursView extends QueueStaffedHours {
+  learned?: {
+    samples: number;
+    /** How many it wants before it goes by them. */
+    needed: number;
+    /** The usual wait in minutes per hour of the week in `timezone`, Monday 00:00 first. */
+    typical_minutes: number[] | null;
+  } | null;
 }
 
 /** The timeline's plan (fork): each printer's queued jobs in order, and the jobs to hold there. */
@@ -7051,9 +7086,9 @@ export const api = {
     request<QueuePlanResult>('/queue/plan', { method: 'POST', body: JSON.stringify(plan) }),
   releaseQueueReservation: (id: number) =>
     request<{ released: boolean }>(`/queue/${id}/reservation`, { method: 'DELETE' }),
-  getStaffedHours: () => request<QueueStaffedHours>('/queue/staffed-hours'),
+  getStaffedHours: () => request<QueueStaffedHoursView>('/queue/staffed-hours'),
   updateStaffedHours: (hours: QueueStaffedHours) =>
-    request<QueueStaffedHours>('/queue/staffed-hours', { method: 'PUT', body: JSON.stringify(hours) }),
+    request<QueueStaffedHoursView>('/queue/staffed-hours', { method: 'PUT', body: JSON.stringify(hours) }),
   addToQueue: (data: PrintQueueItemCreate) =>
     request<PrintQueueItem>('/queue/', {
       method: 'POST',

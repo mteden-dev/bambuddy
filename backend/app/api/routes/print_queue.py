@@ -64,6 +64,7 @@ from backend.app.schemas.queue_forecast import (
     QueuePlanRequest,
     QueuePlanResponse,
     QueueStaffedHours,
+    QueueStaffedHoursView,
 )
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.filament_requirements import overrides_for_plate
@@ -915,24 +916,46 @@ async def queue_forecast(
             if visible(item_id)
         },
         plate_waits=[
-            {"printer_id": w.printer_id, "start": w.start, "end": w.end}
+            {"printer_id": w.printer_id, "start": w.start, "end": w.end, "reason": w.reason}
             for w in forecast.plate_waits
             if printer_scope.allows(w.printer_id)
         ],
-        staffed=(
-            {
-                "enabled": forecast.turnaround.hours.enabled,
-                "windows": [{"start": a, "end": b} for a, b in forecast.turnaround.windows],
-                "clear_minutes": forecast.turnaround.hours.clear_minutes,
-                "waits_for_plate": forecast.turnaround.waits_for_plate,
-            }
-            if forecast.turnaround is not None
-            else None
-        ),
+        staffed=_forecast_staffed(forecast.turnaround) if forecast.turnaround is not None else None,
     )
 
 
-@router.get("/staffed-hours", response_model=QueueStaffedHours)
+def _forecast_staffed(turnaround) -> dict:
+    """The forecast's rule for when a finished plate gets cleared, for the timeline's plan."""
+    typical = turnaround.typical_week()
+    return {
+        "enabled": turnaround.hours.enabled,
+        "windows": [{"start": a, "end": b} for a, b in turnaround.windows],
+        "clear_minutes": turnaround.hours.clear_minutes,
+        "waits_for_plate": turnaround.waits_for_plate,
+        "learn": turnaround.waits_for_plate and turnaround.hours.learn,
+        "learned_samples": turnaround.learned_samples,
+        "typical": {"start": typical[0], "minutes": typical[1]} if typical else None,
+        "away_until": turnaround.away_until,
+        "present_until": turnaround.present_until,
+    }
+
+
+async def _staffed_hours_view(db: AsyncSession, hours) -> dict:
+    """The staffed hours, and what the forecast learned of how long plates wait."""
+    from backend.app.services.plate_clears import MIN_SAMPLES, load_learned
+
+    learned, samples = await load_learned(db, hours.zone(), datetime.now(timezone.utc))
+    return {
+        **hours.to_json(),
+        "learned": {
+            "samples": samples,
+            "needed": MIN_SAMPLES,
+            "typical_minutes": learned.typical_minutes if learned is not None else None,
+        },
+    }
+
+
+@router.get("/staffed-hours", response_model=QueueStaffedHoursView)
 async def get_staffed_hours(
     db: AsyncSession = Depends(get_db, scope="function"),
     _: tuple[User | ApiKeyActor | None, bool] = Depends(
@@ -940,10 +963,10 @@ async def get_staffed_hours(
     ),
 ):
     """When someone is there to clear finished plates, for the timeline's forecast (fork)."""
-    return (await read_staffed_hours(db)).to_json()
+    return await _staffed_hours_view(db, await read_staffed_hours(db))
 
 
-@router.put("/staffed-hours", response_model=QueueStaffedHours)
+@router.put("/staffed-hours", response_model=QueueStaffedHoursView)
 async def put_staffed_hours(
     data: QueueStaffedHours,
     db: AsyncSession = Depends(get_db, scope="function"),
@@ -953,7 +976,7 @@ async def put_staffed_hours(
     hours = parse_staffed_hours(data.model_dump())
     await write_staffed_hours(db, hours)
     await db.commit()
-    return hours.to_json()
+    return await _staffed_hours_view(db, hours)
 
 
 def _forecast_variant(variant: ForecastVariant) -> dict:

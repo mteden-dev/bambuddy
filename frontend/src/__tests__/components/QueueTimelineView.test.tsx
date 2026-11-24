@@ -14,7 +14,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QueueTimelineView } from '../../components/QueueTimelineView';
 import { api } from '../../api/client';
-import type { PrintQueueItem, Printer, QueueForecast } from '../../api/client';
+import type { PrintQueueItem, Printer, QueueForecast, QueueStaffedHoursView } from '../../api/client';
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -317,7 +317,7 @@ describe('QueueTimelineView', () => {
     it('edits the staffed hours', async () => {
       vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: staffed() }));
       const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
-      vi.mocked(api.getStaffedHours).mockResolvedValue({ enabled: false, timezone: 'UTC', days: week, clear_minutes: 0 });
+      vi.mocked(api.getStaffedHours).mockResolvedValue({ enabled: false, timezone: 'UTC', days: week, clear_minutes: 0 } as QueueStaffedHoursView);
       vi.mocked(api.updateStaffedHours).mockImplementation(async (hours) => hours);
       renderTimeline({ canEditStaffedHours: true });
 
@@ -335,6 +335,8 @@ describe('QueueTimelineView', () => {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         days: [...week.slice(0, 6), null],
         clear_minutes: 5,
+        // Learning is on unless turned off.
+        learn: true,
       });
       expect(screen.queryByTestId('staffed-hours-dialog')).toBeNull();
     });
@@ -342,7 +344,7 @@ describe('QueueTimelineView', () => {
     it('is read-only without the right, and says when it changes nothing', async () => {
       vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: staffed(false) }));
       const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
-      vi.mocked(api.getStaffedHours).mockResolvedValue({ enabled: true, timezone: 'Europe/Warsaw', days: week, clear_minutes: 5 });
+      vi.mocked(api.getStaffedHours).mockResolvedValue({ enabled: true, timezone: 'Europe/Warsaw', days: week, clear_minutes: 5, learn: true });
       renderTimeline();
       await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
 
@@ -352,6 +354,129 @@ describe('QueueTimelineView', () => {
       expect(await within(dialog).findByTestId('staffed-no-plate-clear')).toBeInTheDocument();
       expect(within(dialog).getByRole('checkbox', { name: 'queue.timeline.staffed.enabled' })).toBeDisabled();
       expect(within(dialog).queryByRole('button', { name: 'common.save' })).toBeNull();
+    });
+
+    describe('learned from how long plates wait', () => {
+      const learnedRule = (over: Record<string, unknown> = {}) => ({
+        enabled: false,
+        windows: [],
+        clear_minutes: 5,
+        waits_for_plate: true,
+        learn: true,
+        learned_samples: 40,
+        typical: { start: new Date(Math.floor(Date.now() / HOUR) * HOUR).toISOString(), minutes: Array(168).fill(120) },
+        away_until: null,
+        present_until: null,
+        ...over,
+      });
+
+      it('says why a plate waits, and when nobody seems to be there', async () => {
+        vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+          staffed: learnedRule({ away_until: iso(2) }),
+          plate_waits: [
+            { printer_id: 1, start: iso(-1.5), end: iso(2), reason: 'away' },
+            { printer_id: 2, start: iso(1), end: iso(3), reason: 'typical' },
+          ],
+        }));
+        renderTimeline();
+
+        const typical = await within(lane(2)).findByTestId('plate-wait-2');
+        expect(typical).toHaveAttribute('data-reason', 'typical');
+        expect(typical.getAttribute('title')).toContain('queue.timeline.plateWaitTypical');
+        const away = within(lane(1)).getByTestId('plate-wait-1');
+        expect(away).toHaveAttribute('data-reason', 'away');
+        expect(away.getAttribute('title')).toContain('queue.timeline.plateWaitAway ');
+        expect(away).toHaveTextContent('queue.timeline.plateAway');
+        expect(screen.getByTestId('timeline-away')).toHaveTextContent('queue.timeline.away');
+      });
+
+      it('lays out a plan with the usual wait, and with nobody there', async () => {
+        vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: learnedRule() }));
+        const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+          const el = this as HTMLElement;
+          const laneEl = el.closest('[data-lane]') as HTMLElement | null;
+          const index = (laneEl ? Number(laneEl.dataset.lane) : 2) - 1;
+          const isLane = el.hasAttribute('data-lane');
+          const top = index * 56 + (isLane ? 0 : 8);
+          const height = isLane ? 56 : 40;
+          const width = isLane ? 800 : 100;
+          const left = el.hasAttribute('data-bar-item') ? (parseFloat(el.style.left) / 100) * 800 : 0;
+          return { x: left, y: top, top, left, right: left + width, bottom: top + height, width, height, toJSON: () => ({}) } as DOMRect;
+        });
+        try {
+          renderTimeline({ onApplyPlan: vi.fn() });
+          const later = await within(lane(2)).findByTitle((title) => title.startsWith('Later cup'));
+
+          // Later cup goes first on printer 2 and ends an hour from now;
+          // plates usually wait two hours then, so Any tray starts at three.
+          const fromX = later.getBoundingClientRect().left + 10;
+          fireEvent.mouseDown(later, { button: 0, clientX: fromX, clientY: 76 });
+          act(() => {
+            fireEvent.mouseMove(document, { clientX: fromX + 10, clientY: 76 });
+          });
+          act(() => {
+            fireEvent.mouseMove(document, { clientX: 0, clientY: 76 });
+          });
+          act(() => {
+            fireEvent.mouseUp(document);
+          });
+
+          expect(leftOf(bar('Any tray'))).toBeCloseTo(pctOf(Date.now() + 3 * HOUR), 0);
+          const wait = within(lane(2)).getAllByTestId('plate-wait-2')[0];
+          expect(wait).toHaveAttribute('data-reason', 'typical');
+        } finally {
+          rectSpy.mockRestore();
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+      });
+
+      it('shows what it learned and turns learning off', async () => {
+        vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: learnedRule({ away_until: iso(2) }) }));
+        const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
+        vi.mocked(api.getStaffedHours).mockResolvedValue({
+          enabled: false,
+          timezone: 'Europe/Warsaw',
+          days: week,
+          clear_minutes: 5,
+          learn: true,
+          learned: { samples: 40, needed: 10, typical_minutes: Array.from({ length: 168 }, (_, i) => (i % 24 < 7 ? 480 : 20)) },
+        });
+        vi.mocked(api.updateStaffedHours).mockImplementation(async (hours) => hours);
+        renderTimeline({ canEditStaffedHours: true });
+
+        fireEvent.click(await screen.findByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
+        const dialog = await screen.findByTestId('staffed-hours-dialog');
+        const heatmap = await within(dialog).findByTestId('staffed-heatmap');
+        expect(heatmap.querySelectorAll('[title]').length).toBe(168);
+        expect(within(dialog).getByTestId('staffed-now')).toHaveTextContent('queue.timeline.staffed.nowAway');
+
+        fireEvent.click(within(dialog).getByRole('checkbox', { name: /queue\.timeline\.staffed\.learn/ }));
+        expect(within(dialog).queryByTestId('staffed-heatmap')).toBeNull();
+        await act(async () => {
+          fireEvent.click(within(dialog).getByRole('button', { name: 'common.save' }));
+        });
+
+        expect(api.updateStaffedHours).toHaveBeenCalledWith(expect.objectContaining({ learn: false }));
+      });
+
+      it('says when there is too little to learn from yet', async () => {
+        vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: learnedRule({ typical: null }) }));
+        const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
+        vi.mocked(api.getStaffedHours).mockResolvedValue({
+          enabled: false,
+          timezone: 'Europe/Warsaw',
+          days: week,
+          clear_minutes: 5,
+          learn: true,
+          learned: { samples: 3, needed: 10, typical_minutes: null },
+        });
+        renderTimeline();
+
+        fireEvent.click(await screen.findByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
+        const dialog = await screen.findByTestId('staffed-hours-dialog');
+
+        expect(await within(dialog).findByTestId('staffed-too-few')).toHaveTextContent('"count":3');
+      });
     });
   });
 

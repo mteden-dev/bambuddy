@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarClock, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { api, type QueueStaffedHours } from '../api/client';
+import { api, type QueueStaffedHours, type QueueStaffedHoursView } from '../api/client';
+import { formatDuration } from '../utils/date';
 import { Button } from './Button';
 
 /** The browser's time zone, for hours entered here. */
@@ -17,6 +18,20 @@ function browserZone(): string {
 
 const DEFAULT_DAY = { start: '07:00', end: '22:00' };
 
+// The usual wait of a plate finished in that hour, as a shade: quick to long.
+function waitShade(minutes: number): string {
+  if (minutes <= 15) return 'bg-bambu-green/70';
+  if (minutes <= 60) return 'bg-bambu-green/30';
+  if (minutes <= 240) return 'bg-amber-500/50';
+  return 'bg-red-500/50';
+}
+const SHADE_SCALE: Array<[string, string]> = [
+  ['quick', 'bg-bambu-green/70'],
+  ['hour', 'bg-bambu-green/30'],
+  ['hours', 'bg-amber-500/50'],
+  ['long', 'bg-red-500/50'],
+];
+
 /**
  * When someone is at the farm to clear finished plates (fork,
  * services/staffed_hours.py). With plate-clear confirmation on, the timeline
@@ -26,25 +41,41 @@ const DEFAULT_DAY = { start: '07:00', end: '22:00' };
 export function StaffedHoursDialog({
   canEdit,
   waitsForPlate,
+  awayUntil = null,
+  present = false,
   onClose,
   t,
 }: {
   canEdit: boolean;
   /** Plate-clear confirmation is on, so the hours change the forecast. */
   waitsForPlate: boolean;
+  /** The forecast takes it nobody is there until then (formatted), from a plate waiting far longer than usual. */
+  awayUntil?: string | null;
+  /** Someone cleared a plate a moment ago. */
+  present?: boolean;
   onClose: () => void;
   t: (key: string, options?: Record<string, unknown>) => string;
 }) {
   const { i18n } = useTranslation();
   const queryClient = useQueryClient();
-  const { data: stored, isLoading } = useQuery({ queryKey: ['queue', 'staffed-hours'], queryFn: api.getStaffedHours });
+  const { data: stored, isLoading } = useQuery<QueueStaffedHoursView>({
+    queryKey: ['queue', 'staffed-hours'],
+    queryFn: api.getStaffedHours,
+  });
   const [hours, setHours] = useState<QueueStaffedHours | null>(null);
   useEffect(() => {
     if (stored && !hours) {
       // Never set up: hours are entered in this browser's time zone.
-      setHours(!stored.enabled && stored.timezone === 'UTC' ? { ...stored, timezone: browserZone() } : stored);
+      setHours({
+        enabled: stored.enabled,
+        timezone: !stored.enabled && stored.timezone === 'UTC' ? browserZone() : stored.timezone,
+        days: stored.days,
+        clear_minutes: stored.clear_minutes,
+        learn: stored.learn ?? true,
+      });
     }
   }, [stored, hours]);
+  const learned = stored?.learned ?? null;
 
   const save = useMutation({
     mutationFn: (value: QueueStaffedHours) => api.updateStaffedHours(value),
@@ -65,6 +96,9 @@ export function StaffedHoursDialog({
   // 1 January 2024 was a Monday.
   const dayNames = Array.from({ length: 7 }, (_, i) =>
     new Date(2024, 0, 1 + i).toLocaleDateString(i18n.language, { weekday: 'long' }),
+  );
+  const shortDayNames = Array.from({ length: 7 }, (_, i) =>
+    new Date(2024, 0, 1 + i).toLocaleDateString(i18n.language, { weekday: 'short' }),
   );
   const setDay = (index: number, value: QueueStaffedHours['days'][number]) =>
     setHours((h) => (h ? { ...h, days: h.days.map((d, i) => (i === index ? value : d)) } : h));
@@ -178,6 +212,84 @@ export function StaffedHoursDialog({
                 className="w-20 px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
               />
             </label>
+
+            <div className="space-y-2 pt-3 border-t border-bambu-dark-tertiary" data-testid="staffed-learn">
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-sm text-white">
+                  {t('queue.timeline.staffed.learn')}
+                  <span className="block text-xs text-bambu-gray">{t('queue.timeline.staffed.learnHelp')}</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={hours.learn}
+                  disabled={readOnly}
+                  onChange={(e) => setHours({ ...hours, learn: e.target.checked })}
+                  className="w-4 h-4 accent-bambu-green shrink-0"
+                />
+              </label>
+              {hours.learn && waitsForPlate && (awayUntil || present) && (
+                <p
+                  className={`text-xs rounded-lg px-3 py-2 border ${
+                    awayUntil ? 'border-amber-400/40 bg-amber-500/10 text-amber-200' : 'border-bambu-green/40 bg-bambu-green/10 text-bambu-green'
+                  }`}
+                  data-testid="staffed-now"
+                >
+                  {awayUntil
+                    ? t('queue.timeline.staffed.nowAway', { time: awayUntil })
+                    : t('queue.timeline.staffed.nowPresent')}
+                </p>
+              )}
+              {hours.learn && learned && (
+                learned.typical_minutes ? (
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-bambu-gray">
+                      {t('queue.timeline.staffed.learnedFrom', { count: learned.samples })}
+                    </p>
+                    <div
+                      className="grid gap-px text-[9px] text-bambu-gray"
+                      style={{ gridTemplateColumns: 'auto repeat(24, minmax(0, 1fr))' }}
+                      data-testid="staffed-heatmap"
+                    >
+                      <span />
+                      {Array.from({ length: 24 }, (_, h) => (
+                        <span key={h} className="text-center leading-3">{h % 6 === 0 ? h : ''}</span>
+                      ))}
+                      {shortDayNames.map((day, d) => (
+                        <div key={day} className="contents">
+                          <span className="pr-1 leading-4 capitalize">{day}</span>
+                          {Array.from({ length: 24 }, (_, h) => {
+                            const minutes = learned.typical_minutes![d * 24 + h];
+                            return (
+                              <span
+                                key={h}
+                                className={`h-4 rounded-[2px] ${waitShade(minutes)}`}
+                                title={t('queue.timeline.staffed.heatmapCell', {
+                                  day: dayNames[d],
+                                  hour: `${String(h).padStart(2, '0')}:00`,
+                                  duration: formatDuration(minutes * 60),
+                                })}
+                              />
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-bambu-gray">
+                      {SHADE_SCALE.map(([key, shade]) => (
+                        <span key={key} className="flex items-center gap-1">
+                          <span className={`inline-block w-3 h-3 rounded-[2px] ${shade}`} />
+                          {t(`queue.timeline.staffed.scale.${key}`)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-bambu-gray" data-testid="staffed-too-few">
+                    {t('queue.timeline.staffed.learnedTooFew', { count: learned.samples, needed: learned.needed })}
+                  </p>
+                )
+              )}
+            </div>
 
             <div className="text-xs text-bambu-gray flex flex-wrap items-center gap-2">
               {t('queue.timeline.staffed.timezone', { zone: hours.timezone })}

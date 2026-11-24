@@ -3,8 +3,11 @@ and services/queue_plan."""
 
 import re
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 
 
 class QueueForecastVariant(BaseModel):
@@ -59,11 +62,26 @@ class QueueForecastPlateWait(BaseModel):
     printer_id: int
     start: datetime
     end: datetime
+    # Why until then: clear (only the clearing), unstaffed (outside the staffed
+    # hours), typical (how long plates usually wait then), and for a plate
+    # waiting now, waiting (as usual) or away (far longer than usual: nobody
+    # seems to be there).
+    reason: str = "clear"
 
 
 class QueueForecastWindow(BaseModel):
     start: datetime
     end: datetime
+
+
+class QueueForecastTypical(BaseModel):
+    """How long a plate usually waits, in minutes, for each hour from ``start`` on.
+
+    168 values, one per hour from the current one (UTC); the week repeats.
+    """
+
+    start: datetime
+    minutes: list[int]
 
 
 class QueueForecastStaffed(BaseModel):
@@ -75,6 +93,14 @@ class QueueForecastStaffed(BaseModel):
     clear_minutes: int
     # Plate-clear confirmation is on, so a printer waits for it after each print.
     waits_for_plate: bool
+    # What the forecast learned (services/plate_clears.py), when it goes by it.
+    learn: bool = False
+    learned_samples: int = 0
+    typical: QueueForecastTypical | None = None
+    # Nobody seems to be there until then: a plate finished before it waits for it.
+    away_until: datetime | None = None
+    # Someone cleared a plate a moment ago: a print ending before then is cleared at once.
+    present_until: datetime | None = None
 
 
 class QueueForecastReservation(BaseModel):
@@ -116,8 +142,13 @@ class QueueStaffedDay(BaseModel):
         return value
 
 
-class QueueStaffedHours(BaseModel):
+class QueueStaffedHours(IgnoresNullForRequiredColumns):
     """GET/PUT /queue/staffed-hours (fork)."""
+
+    # Written as JSON into one settings row, so there are no columns to tell
+    # which fields can't be null: none can, and a null counts as not sent
+    # (a day of ``days`` may still be null, nobody there).
+    __orm_table__ = "settings"
 
     enabled: bool = False
     # IANA time zone the hours are wall-clock times in, e.g. "Europe/Warsaw".
@@ -125,6 +156,30 @@ class QueueStaffedHours(BaseModel):
     # Monday first; null is a day nobody is there. An end at or before the start runs past midnight.
     days: list[QueueStaffedDay | None] = Field(min_length=7, max_length=7)
     clear_minutes: int = Field(default=0, ge=0, le=240)
+    # Also go by how long plates actually wait, and by what is going on now.
+    learn: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_null_for_required_columns(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        return {key: value for key, value in data.items() if not (value is None and key in cls.model_fields)}
+
+
+class QueueStaffedLearned(BaseModel):
+    """What the forecast learned from the plates of the last eight weeks."""
+
+    samples: int
+    # How many it wants before it goes by them.
+    needed: int
+    # The usual wait in minutes per hour of the week in ``timezone``, Monday
+    # 00:00 first; null until there are enough.
+    typical_minutes: list[int] | None = None
+
+
+class QueueStaffedHoursView(QueueStaffedHours):
+    learned: QueueStaffedLearned | None = None
 
 
 class QueuePlanLane(BaseModel):

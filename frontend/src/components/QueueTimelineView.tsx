@@ -31,6 +31,7 @@ import {
   Printer as PrinterIcon,
   Shuffle,
   Undo2,
+  UserX,
   X,
   ZoomIn,
   ZoomOut,
@@ -41,6 +42,7 @@ import type {
   PrintQueueItem,
   Printer,
   QueueForecast,
+  QueueForecastPlateWait,
   QueueForecastRefusal,
   QueueForecastVariant,
   QueuePlan,
@@ -98,6 +100,13 @@ const PINCH_ZOOM_RATIO = 1.3;
 const MIN_BAR_PX = 32;
 // Lane height for the bar row + label.
 const LANE_BAR_HEIGHT_PX = 40;
+// Why a finished plate waits until then (GET /queue/forecast plate_waits).
+type PlateWaitReason = NonNullable<QueueForecastPlateWait['reason']>;
+interface PlateWaitSpan {
+  start: number;
+  end: number;
+  reason: PlateWaitReason;
+}
 // A printer standing with a finished plate: hatched, behind the bars.
 const PLATE_WAIT_PATTERN =
   'repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(156,163,175,0.18) 4px, rgba(156,163,175,0.18) 6px)';
@@ -653,25 +662,52 @@ export function QueueTimelineView({
       : []),
     [staffed],
   );
-  // When a printer whose print ends at `endMs` can start the next one: once
-  // someone is there and has cleared the plate, as the forecast has it.
-  const readyAfter = (endMs: number): number => {
-    if (!staffed?.waits_for_plate) return endMs;
-    let t = endMs;
-    const shift = staffedWindows.find(([, closes]) => closes > t);
-    if (shift) t = Math.max(t, shift[0]);
-    return t + staffed.clear_minutes * 60_000;
+  // What the forecast learned of how long plates wait (fork, services/plate_clears.py).
+  const typical = staffed?.typical ?? null;
+  const typicalStartMs = parseUTCDate(typical?.start)?.getTime() ?? null;
+  const awayUntilMs = parseUTCDate(staffed?.away_until)?.getTime() ?? null;
+  const presentUntilMs = parseUTCDate(staffed?.present_until)?.getTime() ?? null;
+  const generatedMs = parseUTCDate(forecast?.generated_at)?.getTime() ?? nowMs;
+  // When a printer whose print ends at `endMs` can start the next one, and why
+  // then, as the forecast has it (PlateTurnaround.explain).
+  const explainWait = (endMs: number): { at: number; reason: PlateWaitReason } => {
+    if (!staffed?.waits_for_plate) return { at: endMs, reason: 'clear' };
+    const clear = staffed.clear_minutes * 60_000;
+    // Someone cleared a plate a moment ago: they clear this one too.
+    if (presentUntilMs != null && generatedMs <= endMs && endMs < presentUntilMs) {
+      return { at: endMs + clear, reason: 'clear' };
+    }
+    let opens = endMs;
+    const shift = staffedWindows.find(([, closes]) => closes > endMs);
+    if (shift) opens = Math.max(endMs, shift[0]);
+    let at = opens + clear;
+    let reason: PlateWaitReason = opens > endMs ? 'unstaffed' : 'clear';
+    if (typical && typicalStartMs != null && typical.minutes.length > 0) {
+      const n = typical.minutes.length;
+      const hour = ((Math.floor((endMs - typicalStartMs) / 3_600_000) % n) + n) % n;
+      const usual = endMs + typical.minutes[hour] * 60_000;
+      if (usual > at) {
+        at = usual;
+        reason = 'typical';
+      }
+    }
+    // Nobody seems to be there: whoever comes next clears it.
+    if (awayUntilMs != null && endMs < awayUntilMs && awayUntilMs > at) {
+      at = awayUntilMs;
+      reason = 'away';
+    }
+    return { at, reason };
   };
 
   // Queued jobs on each lane: where the forecast has them, or where the plan
   // does; and the stretches a printer stands with a finished plate.
   const { queuedByPrinter, plateWaitsByPrinter } = useMemo(() => {
     const map = new Map<number, ScheduleEvent[]>();
-    const waits = new Map<number, Array<{ start: number; end: number }>>();
-    const addWait = (printerId: number, start: number, end: number) => {
+    const waits = new Map<number, PlateWaitSpan[]>();
+    const addWait = (printerId: number, start: number, end: number, reason: PlateWaitReason) => {
       if (end <= start) return;
       if (!waits.has(printerId)) waits.set(printerId, []);
-      waits.get(printerId)!.push({ start, end });
+      waits.get(printerId)!.push({ start, end, reason });
     };
     if (planLanes && draft) {
       // Before its first job: the plate it has now, as forecast.
@@ -679,7 +715,7 @@ export function QueueTimelineView({
         const end = parseUTCDate(w.end)?.getTime();
         const free = parseUTCDate(lanePrinterState.get(w.printer_id)?.free_at)?.getTime();
         if (end != null && free != null && end === free) {
-          addWait(w.printer_id, parseUTCDate(w.start)?.getTime() ?? end, end);
+          addWait(w.printer_id, parseUTCDate(w.start)?.getTime() ?? end, end, w.reason ?? 'clear');
         }
       }
       // Back to back from when the printer is free, as the forecast replays them.
@@ -708,8 +744,9 @@ export function QueueTimelineView({
               && (moved || (reservation?.active === true && reservation.printer_id === printer.id)),
           });
           const end = t + duration;
-          t = readyAfter(end);
-          addWait(printer.id, end, t);
+          const next = explainWait(end);
+          t = next.at;
+          addWait(printer.id, end, t, next.reason);
         }
       }
       return { queuedByPrinter: map, plateWaitsByPrinter: waits };
@@ -717,7 +754,7 @@ export function QueueTimelineView({
     for (const w of forecast?.plate_waits ?? []) {
       const start = parseUTCDate(w.start)?.getTime();
       const end = parseUTCDate(w.end)?.getTime();
-      if (start != null && end != null) addWait(w.printer_id, start, end);
+      if (start != null && end != null) addWait(w.printer_id, start, end, w.reason ?? 'clear');
     }
     for (const placement of forecast?.placements ?? []) {
       const item = itemsById.get(placement.item_id);
@@ -737,7 +774,7 @@ export function QueueTimelineView({
       });
     }
     return { queuedByPrinter: map, plateWaitsByPrinter: waits };
-    // variantOn and readyAfter read forecast and staffedWindows, which are listed.
+    // variantOn and explainWait read forecast and staffedWindows, which are listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planLanes, draft, printers, lanePrinterState, nowMs, itemsById, forecast, staffedWindows]);
 
@@ -756,6 +793,25 @@ export function QueueTimelineView({
     return gaps;
   }, [staffed, staffedWindows, rangeStartMs, rangeEndMs]);
   const [staffedOpen, setStaffedOpen] = useState(false);
+  const shortTime = (ms: number) =>
+    new Date(ms).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  // What a plate wait's tooltip says: until when, and why.
+  const plateWaitText = (w: PlateWaitSpan): string => {
+    const time = shortTime(w.end);
+    const waited = formatDuration(Math.max(0, generatedMs - w.start) / 1000);
+    switch (w.reason) {
+      case 'typical':
+        return t('queue.timeline.plateWaitTypical', { duration: formatDuration((w.end - w.start) / 1000), time });
+      case 'waiting':
+        return t('queue.timeline.plateWaitWaiting', { duration: waited, time });
+      case 'away':
+        return w.start < generatedMs
+          ? t('queue.timeline.plateWaitAway', { duration: waited, time })
+          : t('queue.timeline.plateWaitAwayLater', { time });
+      default:
+        return t('queue.timeline.plateWait', { time });
+    }
+  };
 
   const eventsByPrinter = useMemo(() => {
     const map = new Map<number, ScheduleEvent[]>();
@@ -1083,6 +1139,16 @@ export function QueueTimelineView({
             {t('queue.timeline.staffed.button')}
           </Button>
         </div>
+        {awayUntilMs != null && awayUntilMs > nowMs && (
+          <span
+            className="text-xs text-amber-300 flex items-center gap-1.5"
+            data-testid="timeline-away"
+            title={t('queue.timeline.awayHelp')}
+          >
+            <UserX className="w-3.5 h-3.5" />
+            {t('queue.timeline.away', { time: shortTime(awayUntilMs) })}
+          </span>
+        )}
         {allDoneBy && (
           <span className="text-xs text-bambu-gray flex items-center gap-1.5">
             <Clock className="w-3.5 h-3.5" />
@@ -1312,13 +1378,16 @@ export function QueueTimelineView({
                         const startMs = Math.max(rangeStartMs, w.start);
                         const endMs = Math.min(rangeEndMs, w.end);
                         if (endMs <= startMs) return null;
-                        const until = new Date(w.end).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+                        const away = w.reason === 'away';
                         return (
                           <div
                             key={`plate-${w.start}`}
-                            className="absolute rounded-md border border-dashed border-bambu-gray/40 flex items-center px-1.5 overflow-hidden text-[10px] text-bambu-gray"
+                            className={`absolute rounded-md border border-dashed flex items-center px-1.5 overflow-hidden text-[10px] ${
+                              away ? 'border-amber-400/50 text-amber-200/90' : 'border-bambu-gray/40 text-bambu-gray'
+                            }`}
                             data-testid={`plate-wait-${printer.id}`}
-                            title={t('queue.timeline.plateWait', { time: until })}
+                            data-reason={w.reason}
+                            title={plateWaitText(w)}
                             style={{
                               left: `${((startMs - rangeStartMs) / rangeMs) * 100}%`,
                               width: `${((endMs - startMs) / rangeMs) * 100}%`,
@@ -1327,7 +1396,9 @@ export function QueueTimelineView({
                               backgroundImage: PLATE_WAIT_PATTERN,
                             }}
                           >
-                            <span className="truncate">{t('queue.timeline.legend.plateWait')}</span>
+                            <span className="truncate">
+                              {away ? t('queue.timeline.plateAway') : t('queue.timeline.legend.plateWait')}
+                            </span>
                           </div>
                         );
                       })}
@@ -1424,6 +1495,8 @@ export function QueueTimelineView({
         <StaffedHoursDialog
           canEdit={canEditStaffedHours}
           waitsForPlate={staffed?.waits_for_plate ?? false}
+          awayUntil={awayUntilMs != null && awayUntilMs > nowMs ? shortTime(awayUntilMs) : null}
+          present={presentUntilMs != null && presentUntilMs > nowMs}
           onClose={() => setStaffedOpen(false)}
           t={t}
         />

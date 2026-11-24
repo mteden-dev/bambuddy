@@ -45,7 +45,25 @@ async def test_staffed_hours_round_trip(async_client: AsyncClient):
     response = await async_client.put("/api/v1/queue/staffed-hours", json=body)
 
     assert response.status_code == 200, response.text
-    assert (await async_client.get("/api/v1/queue/staffed-hours")).json() == body
+    stored = (await async_client.get("/api/v1/queue/staffed-hours")).json()
+    learned = stored.pop("learned")
+    assert stored == {**body, "learn": True}
+    # Nothing to learn from yet.
+    assert learned == {"samples": 0, "needed": 10, "typical_minutes": None}
+
+
+async def test_a_null_counts_as_not_sent(async_client: AsyncClient):
+    week = [{"start": "07:00", "end": "22:00"}] * 6 + [None]
+    body = {"enabled": None, "timezone": None, "days": week, "clear_minutes": None, "learn": None}
+
+    response = await async_client.put("/api/v1/queue/staffed-hours", json=body)
+
+    assert response.status_code == 200, response.text
+    stored = response.json()
+    assert (stored["enabled"], stored["timezone"], stored["clear_minutes"], stored["learn"]) == (False, "UTC", 0, True)
+    # A day may still be null: nobody is there.
+    assert stored["days"][6] is None
+    assert (await async_client.put("/api/v1/queue/staffed-hours", json={"days": None})).status_code == 422
 
 
 async def test_staffed_hours_are_checked(async_client: AsyncClient):

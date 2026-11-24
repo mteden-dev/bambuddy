@@ -81,9 +81,19 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     (np. wydruk kończący się o 3:00 czeka do rana); dotyczy też drukarek, które teraz drukują
     albo czekają na zdjęcie płyty, oraz kolejności z „Zastosuj”. Na osi godziny bez obsady są
     zacieniowane, a czekanie na zdjęcie płyty to kreskowany odcinek. Scheduler się nie zmienia
-    (i tak czeka na potwierdzenie); bez potwierdzania godziny nie zmieniają prognozy. Na
-    telefonie oś przewija się w poziomie. Bez zmian w bazie poza jednym wierszem ustawień
-    (`queue_staffed_hours`),
+    (i tak czeka na potwierdzenie); bez potwierdzania godziny nie zmieniają prognozy. **Nauka z
+    historii** (domyślnie włączona, przełącznik w tym samym oknie, `services/plate_clears.py`),
+    bo nikt nie oznacza przerw: każde zdjęcie płyty trafia do tabeli `custom_plate_clears`
+    (koniec wydruku, zdjęcie płyty, czy coś czekało w kolejce, czy zdjął człowiek; zapis z
+    `printer_manager.set_awaiting_plate_clear`), a przed jej powstaniem prognoza bierze
+    historię wydruków (koniec wydruku → start następnego zadania, które już czekało). Z 8 tygodni
+    liczy typowy czas oczekiwania płyty na każdą godzinę tygodnia i wydłuża nim kreskowany
+    odcinek. Na żywo: płyta czekająca dużo dłużej niż zwykle o tej porze (min. 30 min) znaczy, że
+    nikogo nie ma, więc wszystkie płyty czekają do przewidywanego powrotu (napis „Chyba nikogo
+    nie ma” na osi); płyta zdjęta przed chwilą znaczy, że ktoś jest, więc wydruk kończący się w
+    ciągu 30 min dostaje tylko czas zdjęcia. W oknie godzin obsady jest mapa typowych czasów
+    7 × 24. Na telefonie oś przewija się w poziomie. Bez zmian w bazie poza jednym wierszem
+    ustawień (`queue_staffed_hours`) i tabelą `custom_plate_clears`,
   - **szpule slotów** (licznik filamentu bez numerów, tagów i QR): rolka w slocie AMS bez
     przypisanej szpuli świeci się na karcie drukarki („NOWY”). „Nowa szpula…” w karcie slotu
     otwiera okno konfiguracji slotu (preset, profil K, kolor) z wyborem ilości: **pełna 1 kg**,
@@ -114,10 +124,11 @@ wrócić na oficjalny obraz tej samej lub nowszej wersji. Poprawki dokładają d
 bazy wiersze w tabeli ustawień (`hidden_filament_presets`,
 `hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
 `slicer_inbox_manual_start`, `printer_tags`, `filament_check_per_slot`,
-`filament_check_margin_pct`, `queue_staffed_hours`), które oficjalna wersja po prostu pomija, i trzy własne tabele
+`filament_check_margin_pct`, `queue_staffed_hours`), które oficjalna wersja po prostu pomija, i cztery własne tabele
 zakładane przez `create_all` bez migracji: `custom_queue_item_tags` (tagi ustawione zadaniu w
-oknie druku), `custom_queue_reservations` (rezerwacje z planu osi czasu) i
-`custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”). Oficjalny obraz ich nie zna i
+oknie druku), `custom_queue_reservations` (rezerwacje z planu osi czasu),
+`custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”) i `custom_plate_clears`
+(momenty zdjęcia płyty, do nauki prognozy). Oficjalny obraz ich nie zna i
 nie czyta, więc powrót działa jak dotąd (zarezerwowane zadania wracają do „Dowolna”); wiersz
 zadania usuniętego w tym czasie jest pomijany. Dwa ustawienia kontroli filamentu fork zapisuje
 przy starcie, jeśli ich nie ma (każdy slot osobno, 5 %); bez nich kontrola działa jak w
