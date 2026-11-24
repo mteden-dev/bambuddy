@@ -6150,6 +6150,14 @@ async def _run_migrations(conn):
         conn, f"ALTER TABLE smart_plugs ADD COLUMN mqtt_energy_total_multiplier {float_type} NOT NULL DEFAULT '1.0'"
     )
 
+    # Fork (Base sync): an order's ship-by deadline from the marketplace, its
+    # product orders' due date. Nullable, no backfill: the next read fills it in.
+    # create_all() made the table first.
+    await _safe_execute(
+        conn,
+        f"ALTER TABLE custom_base_orders ADD COLUMN ship_by {'DATETIME' if is_sqlite() else 'TIMESTAMP'}",
+    )
+
     await _backfill_archive_run_photos(conn)
     await _migrate_h3c_queue_tray_ids(conn)
 

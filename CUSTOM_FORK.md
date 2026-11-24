@@ -152,15 +152,16 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     kolejce, stan części z korektą i braki, których nie ma w kolejce (np. ręcznie usunięte
     zadanie). Zamówienia mają pola `external_source`/`external_ref` na przyszłe zamówienia ze
     sklepu. **Zamówienia z Base** (base.com, zakładka „Zamówienia z Base” na stronie Produkty,
-    `services/base_sync.py`): co kilka minut Bambuddy czyta zamówienia z wybranego statusu
-    (np. „Przyjęte do realizacji”) i wybranych źródeł, potwierdzone od ustawionej daty (domyślnie
+    `services/base_sync.py`): co kilka minut Bambuddy czyta zamówienia z wybranych statusów
+    (np. „Przyjęte do realizacji” i „DZIŚ / Jutro / Pojutrze / 3+ Dni”) i wybranych źródeł, potwierdzone od ustawionej daty (domyślnie
     od chwili konfiguracji, żeby nie wpadły zamówienia zrobione wcześniej), tylko do odczytu, bez danych kupującego
     (numer, źródło, data i pozycje). Pozycje łączy z produktami po SKU (produkt może mieć kilka
     SKU i zestawy, np. 3 sztuki na SKU; SKU „nie drukujemy” jest pomijane; nieprzypisane są
     wypisane do przypisania jednym kliknięciem). Nowe zamówienie czeka na „Drukuj” (albo od razu
     idzie do produkcji, jeśli tak ustawiono), potem daje zamówienia produktów i przelicza plan;
-    póki jest w statusie, zmiany pozycji w Base idą za nim; przestawione w Base zachowuje druki,
-    a anulowane anuluje otwarte. Token Base jest zapisywany tylko do zapisu. Całość jest dostępna przez API, także zdjęcie i płyty hurtem z folderu (zgadywane z
+    póki jest w tych statusach, zmiany pozycji w Base idą za nim; przestawione w Base zachowuje
+    druki, a anulowane anuluje otwarte. Termin to termin wysyłki z platformy (Allegro), czytany z
+    danych transakcji w Base raz na zamówienie; bez niego dni robocze od potwierdzenia. Token Base jest zapisywany tylko do zapisu. Całość jest dostępna przez API, także zdjęcie i płyty hurtem z folderu (zgadywane z
     nazw plików, z dodatkowymi słowami na część): [PRODUCTS_API.md](PRODUCTS_API.md). Logika:
     `services/products.py`, API `/products`; zadania śledzi odświeżanie batchy w
     `services/print_batch.py`,
@@ -184,7 +185,8 @@ oficjalna wersja po prostu pomija, i własne tabele zakładane przez `create_all
 `custom_plate_clears` (momenty zdjęcia płyty, do nauki prognozy) oraz tabele produktów
 `custom_products`, `custom_product_parts`, `custom_product_plates`, `custom_product_plate_parts`,
 `custom_product_orders`, `custom_product_jobs`, `custom_product_stock`, `custom_product_skus` i
-`custom_base_orders`. Oficjalny obraz ich nie
+`custom_base_orders` (kolumna dodana później, `custom_base_orders.ship_by`, ma swoje
+`ALTER TABLE` na końcu migracji w `core/database.py`). Oficjalny obraz ich nie
 zna i nie czyta, więc powrót działa jak dotąd (zarezerwowane zadania wracają do „Dowolna”, zadania
 planera zostają zwykłymi zadaniami kolejki); wiersz zadania usuniętego w tym czasie jest pomijany. Dwa ustawienia kontroli filamentu fork zapisuje
 przy starcie, jeśli ich nie ma (każdy slot osobno, 5 %); bez nich kontrola działa jak w

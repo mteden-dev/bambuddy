@@ -13,7 +13,7 @@ import type { BaseOrder, BaseSyncSettings } from '../../api/client';
 
 const SETTINGS: BaseSyncSettings = {
   enabled: true,
-  status_id: 100001,
+  status_ids: [100001],
   cancel_status_id: 100002,
   sources: [],
   poll_minutes: 5,
@@ -33,6 +33,7 @@ const ORDER: BaseOrder = {
   source: 'allegro',
   source_name: 'Allegro Shop A',
   date_confirmed: '2026-11-24T09:00:00Z',
+  ship_by: '2026-11-25T22:59:59Z',
   state: 'new',
   in_status: true,
   lines: [
@@ -81,6 +82,8 @@ beforeEach(() => {
       HttpResponse.json({
         statuses: [
           { id: 100001, name: 'Przyjęte do realizacji', color: null },
+          { id: 100011, name: 'DZIŚ', color: '#ff0000' },
+          { id: 100012, name: 'Jutro', color: null },
           { id: 100002, name: 'Anulowane', color: null },
         ],
         sources: [{ key: 'allegro:1111', name: 'Allegro Shop A' }],
@@ -106,7 +109,7 @@ const allowAll = () => true;
 
 describe('BaseOrdersView', () => {
   it('asks to connect Base when it is not set up', async () => {
-    settings = { ...SETTINGS, token_set: false, status_id: null, enabled: false };
+    settings = { ...SETTINGS, token_set: false, status_ids: [], enabled: false };
     render(<BaseOrdersView hasPermission={allowAll} />);
     expect(await screen.findByRole('button', { name: 'Connect Base' })).toBeInTheDocument();
   });
@@ -116,6 +119,7 @@ describe('BaseOrdersView', () => {
     render(<BaseOrdersView hasPermission={allowAll} />);
     expect(await screen.findByText('#1243')).toBeInTheDocument();
     expect(screen.getByText('Allegro Shop A')).toBeInTheDocument();
+    expect(screen.getByText(/^ship by /)).toBeInTheDocument();
     // The line's product badge (the unmapped panel's product list has the name too).
     expect(screen.getAllByText('9mm 100 Black').some((el) => el.tagName === 'SPAN')).toBe(true);
     expect(screen.getAllByText('no product').length).toBeGreaterThan(0);
@@ -143,24 +147,40 @@ describe('BaseOrdersView', () => {
     const user = userEvent.setup();
     render(<BaseOrdersView hasPermission={allowAll} />);
     await user.click(await screen.findByRole('button', { name: 'Base settings' }));
-    const status = await screen.findByLabelText('Take orders from status');
-    expect((status as HTMLSelectElement).value).toBe('100001');
+    expect(await screen.findByRole('checkbox', { name: 'Przyjęte do realizacji' })).toBeChecked();
+    await user.click(screen.getByRole('checkbox', { name: 'DZIŚ' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Jutro' }));
     await user.click(screen.getByLabelText(/Send new orders to production at once/));
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0]).toMatchObject({ status_id: 100001, cancel_status_id: 100002, auto_accept: true, enabled: true });
+    expect(saved[0]).toMatchObject({
+      status_ids: [100001, 100011, 100012],
+      cancel_status_id: 100002,
+      auto_accept: true,
+      enabled: true,
+    });
     expect(saved[0]).not.toHaveProperty('api_token');
     // No date stored and none entered: every order Base returns.
     expect(saved[0]).toMatchObject({ clear_since: true });
   });
 
-  it('starts a new setup from now on', async () => {
-    settings = { ...SETTINGS, status_id: null, cancel_status_id: null, enabled: false };
+  it('leaves out a status that is unticked', async () => {
+    settings = { ...SETTINGS, status_ids: [100001, 100011] };
     const user = userEvent.setup();
     render(<BaseOrdersView hasPermission={allowAll} />);
     await user.click(await screen.findByRole('button', { name: 'Base settings' }));
-    const status = await screen.findByLabelText('Take orders from status');
-    await user.selectOptions(status, '100001');
+    await user.click(await screen.findByRole('checkbox', { name: 'Przyjęte do realizacji' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toMatchObject({ status_ids: [100011] });
+  });
+
+  it('starts a new setup from now on', async () => {
+    settings = { ...SETTINGS, status_ids: [], cancel_status_id: null, enabled: false };
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Base settings' }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Przyjęte do realizacji' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toHaveLength(1));
     const body = saved[0] as { since?: string; clear_since?: boolean };

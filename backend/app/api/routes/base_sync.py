@@ -44,7 +44,8 @@ class BaseSettingsIn(IgnoresNullForRequiredColumns):
     __orm_table__ = "settings"
 
     enabled: bool | None = None
-    status_id: int | None = None
+    # Statuses orders are taken from, e.g. "accepted" and the "ship today / tomorrow" ones.
+    status_ids: list[int] | None = Field(None, max_length=50)
     cancel_status_id: int | None = None
     clear_cancel_status: bool = False
     sources: list[str] | None = Field(None, max_length=100)
@@ -61,7 +62,7 @@ class BaseSettingsIn(IgnoresNullForRequiredColumns):
 
 class BaseSettingsOut(BaseModel):
     enabled: bool
-    status_id: int | None
+    status_ids: list[int]
     cancel_status_id: int | None
     sources: list[str]
     poll_minutes: int
@@ -99,17 +100,22 @@ async def put_settings(
 ):
     """Change the sync's settings; the token is write-only (``token_set`` says if one is stored).
 
-    Setting the status for the first time without a date sets ``since`` to now:
-    orders already in the status before are not taken. ``clear_since`` takes
-    every order Base returns instead (its last 3 months).
+    Choosing statuses for the first time without a date sets ``since`` to now:
+    orders already in them before are not taken. ``clear_since`` takes every
+    order Base returns instead (its last 3 months). A change to
+    ``handling_days`` sets the due dates of accepted orders without a ship-by
+    deadline again.
     """
     config = await svc.read_config(db)
-    first_setup = config.status_id is None
+    first_setup = not config.status_ids
+    handling_days = config.handling_days
     sent = data.model_fields_set
-    for name in ("enabled", "status_id", "poll_minutes", "auto_accept", "manual_start", "handling_days"):
+    for name in ("enabled", "poll_minutes", "auto_accept", "manual_start", "handling_days"):
         value = getattr(data, name)
         if name in sent and value is not None:
             setattr(config, name, value)
+    if "status_ids" in sent and data.status_ids is not None:
+        config.status_ids = list(dict.fromkeys(data.status_ids))
     if data.clear_cancel_status:
         config.cancel_status_id = None
     elif "cancel_status_id" in sent and data.cancel_status_id is not None:
@@ -120,11 +126,14 @@ async def put_settings(
         config.since = None
     elif "since" in sent and data.since is not None:
         config.since = data.since
-    elif first_setup and config.status_id is not None and config.since is None:
+    elif first_setup and config.status_ids and config.since is None:
         config.since = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
     await svc.write_config(db, config)
     if "api_token" in sent and data.api_token is not None:
         await svc.write_token(db, data.api_token)
+    if config.handling_days != handling_days:
+        await db.flush()
+        await _replan(db, await svc.refresh_accepted(db, refresh_due=True))
     await db.commit()
     return await _settings_out(db)
 
@@ -202,6 +211,8 @@ class BaseOrderOut(BaseModel):
     source: str | None
     source_name: str | None
     date_confirmed: UTCDatetime = None
+    # The marketplace's ship-by deadline: the product orders' due date.
+    ship_by: UTCDatetime = None
     state: str
     in_status: bool
     lines: list[OrderLineOut]
@@ -260,6 +271,7 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                 source=row.source,
                 source_name=row.source_name,
                 date_confirmed=row.date_confirmed,
+                ship_by=row.ship_by,
                 state=row.state,
                 in_status=row.in_status,
                 lines=lines,

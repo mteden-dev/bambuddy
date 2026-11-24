@@ -8,7 +8,7 @@ import { Card } from '../Card';
 import { Button } from '../Button';
 import { useToast } from '../../contexts/ToastContext';
 import { useUiSettings } from '../../hooks/useUiSettings';
-import { formatDateTime } from '../../utils/date';
+import { formatDateOnly, formatDateTime } from '../../utils/date';
 import type { TimeFormat } from '../../utils/date';
 import { BaseSettingsModal } from './BaseSettingsModal';
 
@@ -40,7 +40,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
   const [showSettings, setShowSettings] = useState(false);
 
   const { data: settings } = useQuery({ queryKey: ['base-sync', 'settings'], queryFn: api.getBaseSyncSettings });
-  const configured = !!settings?.token_set && settings.status_id != null;
+  const configured = !!settings?.token_set && settings.status_ids.length > 0;
   const { data: orders, isLoading } = useQuery({
     queryKey: ['base-sync', 'orders', filter],
     queryFn: () => api.getBaseOrders(filter === 'all' ? undefined : filter),
@@ -189,6 +189,13 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                     <span className="text-xs text-bambu-gray">{order.source_name ?? order.source}</span>
                     {order.date_confirmed && (
                       <span className="text-xs text-bambu-gray">{formatDateTime(order.date_confirmed, timeFormat)}</span>
+                    )}
+                    {order.ship_by && (
+                      <span className="text-xs text-bambu-gray-light">
+                        {t('baseSync.shipBy', {
+                          date: formatDateOnly(order.ship_by, { weekday: 'short', day: 'numeric', month: 'short' }),
+                        })}
+                      </span>
                     )}
                     <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-dark-tertiary text-bambu-gray-light">
                       {t(`baseSync.state.${order.state}`)}

@@ -4,8 +4,8 @@ Fork-only tables, created by ``create_all`` like any model: the official image
 has no model for them and never reads them. See services/base_sync.py.
 
 Nothing about the buyer is stored: an order keeps its Base id, its number in
-the shop or marketplace, where it came from, when it was confirmed and its
-product lines (SKU, name, quantity).
+the shop or marketplace, where it came from, its status, when it was confirmed,
+when it must ship and its product lines (SKU, name, quantity).
 """
 
 from datetime import datetime
@@ -53,11 +53,15 @@ class BaseOrder(Base):
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The marketplace's ship-by deadline (getOrderTransactionData's ship_date_to,
+    # e.g. Allegro's), the due date of its product orders; None when it has none
+    # (a shop order) or it was not read yet.
+    ship_by: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     date_confirmed: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # [{"sku": ..., "name": ..., "quantity": n, "attributes": ...}]
     items: Mapped[list] = mapped_column(JSON, default=list)
     state: Mapped[str] = mapped_column(String(20), default="new")
-    # The last sync found it in the status orders are taken from.
+    # The last sync found it in one of the statuses orders are taken from.
     in_status: Mapped[bool] = mapped_column(Boolean, default=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

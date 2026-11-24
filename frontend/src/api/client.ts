@@ -4671,7 +4671,8 @@ export interface ProductPlanResult {
 /** Fork (Base sync): orders read from Base (base.com), read-only. */
 export interface BaseSyncSettings {
   enabled: boolean;
-  status_id: number | null;
+  /** Statuses orders are taken from. */
+  status_ids: number[];
   cancel_status_id: number | null;
   /** "source:id"; empty for every source. */
   sources: string[];
@@ -4689,7 +4690,7 @@ export interface BaseSyncSettings {
 
 export interface BaseSyncSettingsUpdate {
   enabled?: boolean;
-  status_id?: number | null;
+  status_ids?: number[];
   cancel_status_id?: number | null;
   clear_cancel_status?: boolean;
   sources?: string[];
@@ -4725,6 +4726,8 @@ export interface BaseOrder {
   source: string | null;
   source_name: string | null;
   date_confirmed: string | null;
+  /** The marketplace's ship-by deadline (UTC): the product orders' due date. */
+  ship_by: string | null;
   state: 'new' | 'accepted' | 'skipped' | 'cancelled';
   in_status: boolean;
   lines: BaseOrderLine[];

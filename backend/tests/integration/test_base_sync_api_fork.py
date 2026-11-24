@@ -5,6 +5,7 @@ See services/base_sync.py. Base's API is faked: no request leaves the test.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -22,6 +23,8 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 H = 3600
 TAKE, CANCELLED = 100001, 100002
+# "Ship today" and "ship tomorrow": an automation moves accepted orders there within seconds.
+TODAY, TOMORROW = 100011, 100012
 
 
 def _order(order_id: int, lines: list[tuple[str, int]], status: int = TAKE, confirmed: int = 1795111511) -> dict:
@@ -35,6 +38,7 @@ def _order(order_id: int, lines: list[tuple[str, int]], status: int = TAKE, conf
         "order_status_id": status,
         "date_confirmed": confirmed,
         "date_add": confirmed - 60,
+        "date_in_status": confirmed + 5,
         "email": "buyer@example.com",
         "phone": "+48000000000",
         "delivery_fullname": "Jan Kowalski",
@@ -47,11 +51,17 @@ def _order(order_id: int, lines: list[tuple[str, int]], status: int = TAKE, conf
     }
 
 
+def _ts(when: datetime) -> int:
+    return int(when.replace(tzinfo=timezone.utc).timestamp())
+
+
 class FakeBase:
-    """Answers getOrders by status, getOrderSources and getOrderStatusList."""
+    """Answers getOrders by status, getOrderTransactionData, getOrderSources and getOrderStatusList."""
 
     def __init__(self):
         self.orders: list[dict] = []
+        # order id -> its marketplace ship-by deadline (naive UTC); a shop order has none.
+        self.ship_by: dict[int, datetime] = {}
         self.calls: list[tuple[str, dict]] = []
 
     async def handle(self, method: str, parameters: dict | None = None) -> dict:
@@ -63,6 +73,14 @@ class FakeBase:
             if since:
                 found = [o for o in found if o["date_confirmed"] >= since]
             return {"status": "SUCCESS", "orders": found}
+        if method == "getOrderTransactionData":
+            ship_by = self.ship_by.get(parameters["order_id"])
+            return {
+                "status": "SUCCESS",
+                "currency": "PLN",
+                "ship_date_from": str(_ts(ship_by) - 86399) if ship_by else "",
+                "ship_date_to": str(_ts(ship_by)) if ship_by else "",
+            }
         if method == "getOrderSources":
             return {"status": "SUCCESS", "sources": {"allegro": {"1111": "Allegro Shop A"}, "shop": {"2222": "Sklep"}}}
         if method == "getOrderStatusList":
@@ -82,6 +100,7 @@ def fake_base(monkeypatch):
 
     monkeypatch.setattr(base_sync.BaseClient, "call", call)
     base_sync.state.last_error = None
+    base_sync._ship_checked.clear()
     yield fake
 
 
@@ -129,7 +148,7 @@ async def shop(async_client: AsyncClient, db_session, printer_factory, fake_base
         "/api/v1/base-sync/settings",
         json={
             "api_token": "secret-token",
-            "status_id": TAKE,
+            "status_ids": [TAKE],
             "cancel_status_id": CANCELLED,
             "enabled": True,
             "clear_since": True,
@@ -156,7 +175,7 @@ async def test_the_token_is_write_only(async_client: AsyncClient, shop):
     body = (await async_client.get("/api/v1/base-sync/settings")).json()
     assert body["token_set"] is True
     assert "secret-token" not in str(body)
-    assert body["status_id"] == TAKE and body["enabled"] is True
+    assert body["status_ids"] == [TAKE] and body["enabled"] is True
 
 
 async def test_the_connection_test_lists_statuses_and_sources(async_client: AsyncClient, shop):
@@ -308,9 +327,7 @@ async def test_parse_order_drops_buyer_data():
 
 
 async def test_setting_up_takes_orders_from_now_on(async_client: AsyncClient, db_session, printer_factory, fake_base):
-    from datetime import datetime, timezone
-
-    response = await async_client.put("/api/v1/base-sync/settings", json={"api_token": "t", "status_id": TAKE})
+    response = await async_client.put("/api/v1/base-sync/settings", json={"api_token": "t", "status_ids": [TAKE]})
     since = response.json()["since"]
     assert since is not None
     when = datetime.fromisoformat(since.replace("Z", "+00:00"))
@@ -339,3 +356,82 @@ async def test_a_date_can_be_set_or_cleared(async_client: AsyncClient, shop):
     await async_client.put("/api/v1/base-sync/settings", json={"since": "2026-11-01T00:00:00Z"})
     response = await async_client.put("/api/v1/base-sync/settings", json={"poll_minutes": 10})
     assert response.json()["since"] == "2026-11-01T00:00:00Z"
+
+
+async def test_orders_are_taken_from_every_chosen_status_and_due_when_they_must_ship(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    await async_client.put(
+        "/api/v1/base-sync/settings", json={"status_ids": [TAKE, TODAY, TOMORROW], "auto_accept": True}
+    )
+    wednesday, thursday = datetime(2026, 11, 25, 22, 59, 59), datetime(2026, 11, 26, 22, 59, 59)
+    fake_base.orders = [
+        _order(5101, [("SKU-BOX-100-B", 1)], status=TODAY),
+        _order(5102, [("SKU-BOX-100-B", 1)], status=TOMORROW),
+        _order(5104, [("SKU-BOX-100-B", 1)], status=TAKE),  # a shop order: no ship-by date
+    ]
+    fake_base.ship_by = {5101: wednesday, 5102: thursday}
+    result = await _sync(async_client, {shop.printer})
+    assert (result["seen"], result["new"]) == (3, 3)
+    assert sorted(p["status_id"] for m, p in fake_base.calls if m == "getOrders") == [TAKE, TODAY, TOMORROW]
+
+    due = {po.external_ref.split("/")[0]: po.due_date for po in await _product_orders(db_session)}
+    assert due == {"5101": wednesday, "5102": thursday, "5104": None}
+    listed = {o["order_id"]: o["ship_by"] for o in (await async_client.get("/api/v1/base-sync/orders")).json()}
+    assert listed[5101] == "2026-11-25T22:59:59Z" and listed[5104] is None
+
+    # Each order's transaction is read once, also the one that has no date.
+    await _sync(async_client, {shop.printer})
+    asked = [p["order_id"] for m, p in fake_base.calls if m == "getOrderTransactionData"]
+    assert sorted(asked) == [5101, 5102, 5104]
+
+    # Working days after confirmation for orders without a ship-by date; the others keep theirs.
+    online, status = _live({shop.printer})
+    with online, status:
+        await async_client.put("/api/v1/base-sync/settings", json={"handling_days": 2})
+    due = {po.external_ref.split("/")[0]: po.due_date for po in await _product_orders(db_session)}
+    assert due["5101"] == wednesday
+    assert due["5104"] is not None and due["5104"] > datetime.fromtimestamp(1795111511, tz=timezone.utc).replace(
+        tzinfo=None
+    )
+
+
+async def test_ship_dates_are_read_a_few_a_pass(async_client: AsyncClient, db_session, shop, fake_base, monkeypatch):
+    monkeypatch.setattr(base_sync, "SHIP_DATE_READS", 1)
+    await async_client.put("/api/v1/base-sync/settings", json={"status_ids": [TODAY], "auto_accept": True})
+    fake_base.orders = [
+        _order(5401, [("SKU-BOX-100-B", 1)], status=TODAY, confirmed=1795111511),
+        _order(5402, [("SKU-BOX-100-B", 1)], status=TODAY, confirmed=1795111600),
+    ]
+    fake_base.ship_by = {5401: datetime(2026, 11, 25, 22, 59, 59), 5402: datetime(2026, 11, 26, 22, 59, 59)}
+    await _sync(async_client, {shop.printer})
+    due = {po.external_ref.split("/")[0]: po.due_date for po in await _product_orders(db_session)}
+    assert due == {"5401": datetime(2026, 11, 25, 22, 59, 59), "5402": None}  # the oldest first
+    await _sync(async_client, {shop.printer})
+    due = {po.external_ref.split("/")[0]: po.due_date for po in await _product_orders(db_session)}
+    assert due["5402"] == datetime(2026, 11, 26, 22, 59, 59)
+
+
+async def test_a_due_date_set_by_hand_stays(async_client: AsyncClient, db_session, shop, fake_base):
+    await async_client.put("/api/v1/base-sync/settings", json={"status_ids": [TOMORROW], "auto_accept": True})
+    fake_base.orders = [_order(5201, [("SKU-BOX-100-B", 1)], status=TOMORROW)]
+    fake_base.ship_by = {5201: datetime(2026, 11, 26, 22, 59, 59)}
+    await _sync(async_client, {shop.printer})
+    [po] = await _product_orders(db_session)
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.patch(
+            f"/api/v1/products/orders/{po.id}", json={"due_date": "2026-12-10T12:00:00Z"}
+        )
+    assert response.status_code == 200, response.text
+    # Base moves it from "tomorrow" to "today" in the morning: the date set by hand stays.
+    fake_base.orders = [_order(5201, [("SKU-BOX-100-B", 1)], status=TODAY)]
+    await async_client.put("/api/v1/base-sync/settings", json={"status_ids": [TODAY, TOMORROW]})
+    await _sync(async_client, {shop.printer})
+    [po] = await _product_orders(db_session)
+    assert po.due_date == datetime(2026, 12, 10, 12, 0)
+
+
+async def test_a_setting_stored_with_one_status_reads_as_a_list():
+    assert base_sync.parse_config(f'{{"status_id": {TAKE}}}').status_ids == [TAKE]
+    assert base_sync.parse_config('{"status_ids": [1, "2", 1, null]}').status_ids == [1, 2]

@@ -143,10 +143,11 @@ Obie operacje przeliczają plan.
 
 ## Zamówienia z Base (base.com)
 
-Bambuddy może co kilka minut czytać zamówienia z jednego statusu w Base (np. „Przyjęte do
-realizacji”) i zamieniać ich pozycje na zamówienia produktów. **Tylko czyta**: niczego w Base nie
-zmienia i nie zapisuje danych kupującego (zostaje numer zamówienia, źródło, data potwierdzenia i
-pozycje: SKU, nazwa, ilość). Logika: `backend/app/services/base_sync.py`, trasy `/base-sync`.
+Bambuddy może co kilka minut czytać zamówienia z wybranych statusów w Base (np. „Przyjęte do
+realizacji” i statusy „DZIŚ / Jutro / Pojutrze / 3+ Dni”, do których automat przenosi je po kilku
+sekundach) i zamieniać ich pozycje na zamówienia produktów. **Tylko czyta**: niczego w Base nie
+zmienia i nie zapisuje danych kupującego (zostaje numer zamówienia, źródło, status i od kiedy w nim
+jest, data potwierdzenia i pozycje: SKU, nazwa, ilość). Logika: `backend/app/services/base_sync.py`, trasy `/base-sync`.
 
 - **SKU** łączy pozycję z Base z produktem: w produkcie pole `skus` (`[{"sku": "SKU-BOX-100-B",
   "units": 1}]`, `units` to liczba produktów w jednej sprzedanej sztuce, np. 3 dla zestawu) albo
@@ -156,14 +157,22 @@ pozycje: SKU, nazwa, ilość). Logika: `backend/app/services/base_sync.py`, tras
 - **Nowe zamówienie** czeka na zatwierdzenie (`POST /base-sync/orders/{order_id}/accept`, albo
   `/skip`), chyba że w ustawieniach jest `auto_accept`. Zatwierdzone zamówienie daje zamówienie
   produktu na każdy produkt (`external_source` `base`, `external_ref` `"<order_id>/<product_id>"`)
-  i przelicza plan. Dopóki zamówienie jest w statusie, zmiany pozycji w Base (ilość, nowa pozycja,
-  dopisane SKU) idą za nim. Zamówienie przestawione w Base dalej zachowuje swoje druki; to w
-  statusie anulowanych (`cancel_status_id`) anuluje otwarte zamówienia produktów.
+  i przelicza plan. Dopóki zamówienie jest w którymś z tych statusów, zmiany pozycji w Base (ilość,
+  nowa pozycja, dopisane SKU) idą za nim. Zamówienie przestawione w Base dalej (np. „W produkcji”)
+  zachowuje swoje druki; to w statusie anulowanych (`cancel_status_id`) anuluje otwarte zamówienia
+  produktów.
+- **Termin** to termin wysyłki z platformy: `ship_date_to` z `getOrderTransactionData` w Base
+  (dla Allegro koniec dnia, w którym trzeba wysłać). Bambuddy czyta go raz na zamówienie (do 40
+  zamówień na odczyt, reszta przy następnym) i pokazuje jako `ship_by` w `GET /base-sync/orders`;
+  poranne przenoszenie w Base („Pojutrze” → „Jutro” → „DZIŚ”) go nie zmienia, a termin wpisany
+  ręcznie w zamówieniu produktu zostaje. Zamówienia bez terminu wysyłki (np. ze sklepu) mają
+  termin `handling_days` dni roboczych od potwierdzenia.
 
 ```bash
-# token (tylko do zapisu), status do pobierania, status anulowanych, włączenie
+# token (tylko do zapisu), statusy do pobierania, status anulowanych, włączenie
 curl -s -X PUT "$BB/base-sync/settings" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
-  -d '{"api_token": "<token z Base>", "status_id": 100001, "cancel_status_id": 100002, "enabled": true}'
+  -d '{"api_token": "<token z Base>", "status_ids": [100001, 100011, 100012],
+       "cancel_status_id": 100002, "enabled": true}'
 
 curl -s -X POST "$BB/base-sync/test" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{}'  # statusy i źródła
 curl -s -X POST "$BB/base-sync/sync" -H "X-API-Key: $KEY"                    # odczyt teraz
@@ -173,13 +182,15 @@ curl -s -X PUT "$BB/base-sync/skus/SKU-STICKER-W" -H "X-API-Key: $KEY" -H 'Conte
   -d '{"product_id": null}'
 ```
 
-Ustawienia (`GET/PUT /base-sync/settings`): `enabled`, `status_id`, `cancel_status_id`, `sources`
+Ustawienia (`GET/PUT /base-sync/settings`): `enabled`, `status_ids` (statusy do pobierania),
+`cancel_status_id`, `sources`
 (lista `"źródło:id"`, np. `"allegro:1111"`; pusta = wszystkie), `poll_minutes` (od 2), `auto_accept`,
-`manual_start` (zadania czekają na ręczny start), `handling_days` (termin = potwierdzenie + tyle dni
-roboczych; 0 = bez terminu), `since` (tylko zamówienia potwierdzone od tej chwili, UTC; ustawiane
-samo na „teraz” przy pierwszym wyborze statusu, `clear_since: true` bierze wszystkie, czyli ostatnie
+`manual_start` (zadania czekają na ręczny start), `handling_days` (termin zamówień bez terminu
+wysyłki z platformy = potwierdzenie + tyle dni roboczych; 0 = bez terminu; zmiana przelicza ich
+terminy), `since` (tylko zamówienia
+potwierdzone od tej chwili, UTC; ustawiane samo na „teraz” przy pierwszym wyborze statusów, `clear_since: true` bierze wszystkie, czyli ostatnie
 3 miesiące, które zwraca Base), `api_token` (tylko zapis; odpowiedź ma `token_set`, `last_ok_at`,
-`last_error`). Każdy odczyt czyta znów zamówienia ze statusu (żeby widzieć zmiany), ale zamówienie
+`last_error`). Każdy odczyt czyta znów zamówienia z wybranych statusów (żeby widzieć zmiany), ale zamówienie
 jest zapisane pod numerem z Base, więc nigdy nie dubluje się ani ono, ani jego druki. Zmiana ustawień i test połączenia wymagają uprawnienia do ustawień (konto, nie klucz).
 
 ## Ustawienia

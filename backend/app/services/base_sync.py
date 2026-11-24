@@ -1,24 +1,32 @@
 """Orders from Base (base.com, formerly BaseLinker) become product orders (fork).
 
-Read-only: Bambuddy reads orders in one Base status ("Przyjęte do
-realizacji", say) and never writes to Base. Every few minutes the sync:
+Read-only: Bambuddy reads orders in the Base statuses chosen ("Przyjęte do
+realizacji", and the "ship today / tomorrow / ..." statuses an automation
+moves them on to within seconds) and never writes to Base. Every few minutes
+the sync:
 
-1. reads the orders in that status (``getOrders``, 100 a call, paged by
-   confirmation time), from the order sources chosen (all by default) and
-   confirmed since the date set (by default the moment the sync was set up);
-2. keeps each order's Base id, number, source, confirmation time and product
-   lines (SKU, name, quantity) in ``custom_base_orders`` -- nothing about the
-   buyer;
+1. reads the orders in each of those statuses (``getOrders``, 100 a call,
+   paged by confirmation time), from the order sources chosen (all by default)
+   and confirmed since the date set (by default the moment the sync was set up);
+2. keeps each order's Base id, number, source, status, confirmation time,
+   ship-by deadline and product lines (SKU, name, quantity) in
+   ``custom_base_orders`` -- nothing about the buyer;
 3. turns the lines into product orders through the SKU map
    (``custom_product_skus``): a SKU is a product (times ``units``), or a SKU
    nobody prints, or not mapped yet (listed for someone to map). A new order
    waits for someone to send it to production unless orders are accepted
    automatically; an accepted order's product orders follow its lines while
-   it stays in the status (a line added, a quantity changed, a SKU mapped);
+   it stays in those statuses (a line added, a quantity changed, a SKU mapped);
 4. cancels the open product orders of an order found in the cancelled status;
 5. replans every product whose orders changed (services/products.replan).
 
-An order that leaves the status (moved on by hand) keeps its product orders:
+Due dates: the marketplace's ship-by deadline (``getOrderTransactionData``'s
+``ship_date_to``; for Allegro the end of the dispatch day), read once per order
+-- at most ``SHIP_DATE_READS`` orders a pass, the rest the next pass. An order
+without one (a shop order) is due ``handling_days`` working days after
+confirmation (none for 0).
+
+An order that leaves the statuses (moved on by hand) keeps its product orders:
 moving it to "W produkcji" in Base must not stop its prints.
 
 The token is stored write-only, like the other secrets in settings.
@@ -51,6 +59,8 @@ PAGE_SIZE = 100
 MAX_PAGES = 20
 MIN_POLL_MINUTES = 2
 MAX_POLL_MINUTES = 24 * 60
+# getOrderTransactionData calls a pass (Base allows 100 calls a minute).
+SHIP_DATE_READS = 40
 REQUEST_TIMEOUT_S = 30
 
 
@@ -61,8 +71,9 @@ class BaseApiError(RuntimeError):
 @dataclass
 class BaseConfig:
     enabled: bool = False
-    # Orders are taken from this status.
-    status_id: int | None = None
+    # Orders are taken from these statuses ("accepted" and the "ship today /
+    # tomorrow / ..." ones an automation moves them on to).
+    status_ids: list[int] = field(default_factory=list)
     # Orders found here are cancelled in Bambuddy too.
     cancel_status_id: int | None = None
     # "source:id" (e.g. "allegro:1111"); empty for every source.
@@ -72,7 +83,8 @@ class BaseConfig:
     auto_accept: bool = False
     # Their queue jobs wait for someone to press Start.
     manual_start: bool = False
-    # Due date: confirmation + this many working days; 0 for none.
+    # Due date of orders without a ship-by deadline: confirmation + this many
+    # working days; 0 for none.
     handling_days: int = 0
     # Only orders confirmed at this moment or later (naive UTC); None for every
     # order Base returns (its last 3 months). Set when the sync is first set up,
@@ -82,7 +94,7 @@ class BaseConfig:
     def to_json(self) -> dict:
         return {
             "enabled": self.enabled,
-            "status_id": self.status_id,
+            "status_ids": self.status_ids,
             "cancel_status_id": self.cancel_status_id,
             "sources": self.sources,
             "poll_minutes": self.poll_minutes,
@@ -108,9 +120,14 @@ def parse_config(raw: str | None) -> BaseConfig:
             return None
 
     sources = data.get("sources") or []
+    raw_statuses = data.get("status_ids")
+    if not isinstance(raw_statuses, list):
+        # Stored before several statuses: one status_id.
+        raw_statuses = [data.get("status_id")]
+    status_ids = list(dict.fromkeys(s for s in (opt_int(v) for v in raw_statuses) if s is not None))
     return BaseConfig(
         enabled=bool(data.get("enabled")),
-        status_id=opt_int(data.get("status_id")),
+        status_ids=status_ids,
         cancel_status_id=opt_int(data.get("cancel_status_id")),
         sources=[str(s) for s in sources if isinstance(s, (str, int))] if isinstance(sources, list) else [],
         poll_minutes=max(MIN_POLL_MINUTES, min(MAX_POLL_MINUTES, opt_int(data.get("poll_minutes")) or 5)),
@@ -230,11 +247,7 @@ def parse_order(raw: dict) -> OrderData | None:
             )
         )
     number = raw.get("shop_order_id") or raw.get("external_order_id") or None
-    confirmed = raw.get("date_confirmed") or raw.get("date_add")
-    try:
-        when = datetime.fromtimestamp(int(confirmed), tz=timezone.utc).replace(tzinfo=None) if confirmed else None
-    except (TypeError, ValueError, OSError):
-        when = None
+    when = _timestamp(raw.get("date_confirmed") or raw.get("date_add"))
     try:
         source_id = int(raw["order_source_id"]) if raw.get("order_source_id") not in (None, "") else None
     except (TypeError, ValueError):
@@ -252,6 +265,14 @@ def parse_order(raw: dict) -> OrderData | None:
         date_confirmed=when,
         lines=tuple(lines),
     )
+
+
+def _timestamp(value) -> datetime | None:
+    """A Unix time from Base as naive UTC; None for none or nonsense."""
+    try:
+        return datetime.fromtimestamp(int(value), tz=timezone.utc).replace(tzinfo=None) if value else None
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
 
 
 async def fetch_orders(client: BaseClient, status_id: int, since: datetime | None = None) -> list[OrderData]:
@@ -277,6 +298,21 @@ async def fetch_orders(client: BaseClient, status_id: int, since: datetime | Non
             break
         parameters = {**parameters, "date_confirmed_from": latest + 1}
     return list(orders.values())
+
+
+async def fetch_in_statuses(client: BaseClient, status_ids: list[int], since: datetime | None) -> list[OrderData]:
+    """Every confirmed order in any of ``status_ids``; one moved on between two reads counts once."""
+    orders: dict[int, OrderData] = {}
+    for status_id in status_ids:
+        for order in await fetch_orders(client, status_id, since=since):
+            orders[order.order_id] = order
+    return list(orders.values())
+
+
+async def fetch_ship_by(client: BaseClient, order_id: int) -> datetime | None:
+    """An order's ship-by deadline from its marketplace transaction; None when it has none."""
+    body = await client.call("getOrderTransactionData", {"order_id": order_id})
+    return _timestamp(body.get("ship_date_to"))
 
 
 async def fetch_sources(client: BaseClient) -> dict[str, str]:
@@ -327,6 +363,11 @@ def wanted_products(lines: list[dict], skus: dict[str, SkuTarget]) -> dict[int, 
     return wanted
 
 
+def order_due(order: BaseOrder, config: BaseConfig) -> datetime | None:
+    """When an order's products are due (naive UTC): its ship-by deadline, else after confirmation."""
+    return order.ship_by or _due(order.date_confirmed, config.handling_days)
+
+
 def _due(confirmed: datetime | None, working_days: int) -> datetime | None:
     if not confirmed or working_days <= 0:
         return None
@@ -360,11 +401,21 @@ def _label(order: BaseOrder) -> str:
     return f"Base #{order.number or order.order_id} ({where})"
 
 
-async def reconcile(db: AsyncSession, order: BaseOrder, skus: dict[str, SkuTarget], config: BaseConfig) -> set[int]:
+async def reconcile(
+    db: AsyncSession,
+    order: BaseOrder,
+    skus: dict[str, SkuTarget],
+    config: BaseConfig,
+    *,
+    refresh_due: bool = False,
+) -> set[int]:
     """Make an accepted order's open product orders match its lines; returns the products changed.
 
     A product order that is done stays done. One whose line went away (or
     whose SKU was unmapped) is cancelled; a quantity change follows the line.
+    ``refresh_due`` (its ship-by deadline was just read, or ``handling_days``
+    changed) sets the open ones' due date again; otherwise a due date set by
+    hand stays.
     """
     from backend.app.models.products import Product
 
@@ -374,6 +425,7 @@ async def reconcile(db: AsyncSession, order: BaseOrder, skus: dict[str, SkuTarge
     changed: set[int] = set()
     current = {int(po.external_ref.split("/", 1)[1]): po for po in await product_orders_of(db, order.order_id)}
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    due = order_due(order, config)
     for product_id, quantity in wanted.items():
         po = current.get(product_id)
         if po is None:
@@ -381,7 +433,7 @@ async def reconcile(db: AsyncSession, order: BaseOrder, skus: dict[str, SkuTarge
                 ProductOrder(
                     product_id=product_id,
                     quantity=quantity,
-                    due_date=_due(order.date_confirmed, config.handling_days),
+                    due_date=due,
                     notes=_label(order),
                     status="open",
                     external_source=EXTERNAL_SOURCE,
@@ -394,10 +446,16 @@ async def reconcile(db: AsyncSession, order: BaseOrder, skus: dict[str, SkuTarge
             po.status = "open"
             po.completed_at = None
             po.quantity = quantity
+            if due is not None:
+                po.due_date = due
             changed.add(product_id)
-        elif po.status == "open" and po.quantity != quantity:
-            po.quantity = quantity
-            changed.add(product_id)
+        elif po.status == "open":
+            if po.quantity != quantity:
+                po.quantity = quantity
+                changed.add(product_id)
+            if refresh_due and due is not None and po.due_date != due:
+                po.due_date = due
+                changed.add(product_id)
     for product_id, po in current.items():
         if product_id not in wanted and po.status == "open":
             po.status = "cancelled"
@@ -464,6 +522,34 @@ def _source_key(order: OrderData) -> str:
     return f"{order.source}:{order.source_id or 0}"
 
 
+# Orders whose ship-by deadline was asked for since the start (one without one,
+# a shop order, is not asked again each pass; a restart asks once more).
+_ship_checked: set[int] = set()
+
+
+async def read_ship_dates(client: BaseClient, rows: list[BaseOrder]) -> set[int]:
+    """Read the ship-by deadline of orders that lack one; returns the order ids that got one.
+
+    At most ``SHIP_DATE_READS`` a pass, oldest first; the rest wait for the next pass.
+    """
+    waiting = [
+        r for r in rows if r.ship_by is None and r.state in ("new", "accepted") and r.order_id not in _ship_checked
+    ]
+    waiting.sort(key=lambda r: (r.date_confirmed or datetime.max, r.order_id))
+    dated = set()
+    for row in waiting[:SHIP_DATE_READS]:
+        try:
+            ship_by = await fetch_ship_by(client, row.order_id)
+        except BaseApiError as exc:
+            logger.warning("[BASE] No ship-by date for order %s: %s", row.order_id, exc)
+            ship_by = None
+        _ship_checked.add(row.order_id)
+        if ship_by is not None:
+            row.ship_by = ship_by
+            dated.add(row.order_id)
+    return dated
+
+
 async def replan_products(db: AsyncSession, product_ids: set[int], config: BaseConfig) -> list[int]:
     """Plan each product again, as the system (all printers). The caller commits."""
     from backend.app.services import products as product_service
@@ -478,15 +564,15 @@ async def replan_products(db: AsyncSession, product_ids: set[int], config: BaseC
 async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult:
     """One pass (see the module docstring). The caller commits."""
     config = await read_config(db)
-    if config.status_id is None:
-        raise BaseApiError("Choose the Base status orders are taken from")
+    if not config.status_ids:
+        raise BaseApiError("Choose the Base statuses orders are taken from")
     if client is None:
         token = await read_token(db)
         if not token:
             raise BaseApiError("Enter the Base API token")
         client = BaseClient(token)
 
-    fetched = await fetch_orders(client, config.status_id, since=config.since)
+    fetched = await fetch_in_statuses(client, config.status_ids, since=config.since)
     if config.sources:
         allowed = set(config.sources)
         fetched = [o for o in fetched if _source_key(o) in allowed]
@@ -498,6 +584,7 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
 
     tracked = {row.order_id: row for row in (await db.execute(select(BaseOrder))).scalars()}
     seen_ids = set()
+    seen_rows: list[BaseOrder] = []
     for data in fetched:
         seen_ids.add(data.order_id)
         items = [
@@ -525,8 +612,12 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
         row.items = items
         row.in_status = True
         row.last_seen_at = now
+        seen_rows.append(row)
+
+    dated = await read_ship_dates(client, seen_rows)
+    for row in seen_rows:
         if row.state == "accepted":
-            changed |= await reconcile(db, row, skus, config)
+            changed |= await reconcile(db, row, skus, config, refresh_due=row.order_id in dated)
 
     for order_id, row in tracked.items():
         # One confirmed before ``since`` is not asked for any more: not seen is no news.
@@ -567,8 +658,8 @@ async def skip(db: AsyncSession, order: BaseOrder) -> set[int]:
     return await cancel_orders_of(db, order)
 
 
-async def refresh_accepted(db: AsyncSession, sku: str | None = None) -> set[int]:
-    """Reconcile accepted orders still in the status (after the SKU map changed)."""
+async def refresh_accepted(db: AsyncSession, sku: str | None = None, *, refresh_due: bool = False) -> set[int]:
+    """Reconcile accepted orders still in the statuses (after the SKU map or the due settings changed)."""
     config = await read_config(db)
     skus = await sku_map(db)
     rows = (
@@ -577,7 +668,7 @@ async def refresh_accepted(db: AsyncSession, sku: str | None = None) -> set[int]
     changed: set[int] = set()
     for row in rows:
         if sku is None or any(str(line.get("sku") or "").casefold() == sku.casefold() for line in row.items or []):
-            changed |= await reconcile(db, row, skus, config)
+            changed |= await reconcile(db, row, skus, config, refresh_due=refresh_due)
     return changed
 
 
@@ -624,7 +715,7 @@ async def _loop() -> None:
             due = state.last_run_at is None or datetime.now(timezone.utc) - state.last_run_at >= timedelta(
                 minutes=config.poll_minutes
             )
-            if config.enabled and token and config.status_id is not None and due:
+            if config.enabled and token and config.status_ids and due:
                 try:
                     await run_once()
                 except Exception:  # recorded in state; the loop goes on

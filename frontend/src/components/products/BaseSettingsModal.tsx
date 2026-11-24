@@ -34,7 +34,7 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
     if (settings && draft === null) {
       setDraft({
         enabled: settings.enabled,
-        status_id: settings.status_id,
+        status_ids: settings.status_ids,
         cancel_status_id: settings.cancel_status_id,
         sources: settings.sources,
         poll_minutes: settings.poll_minutes,
@@ -44,7 +44,9 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
       });
       const stored = parseUTCDate(settings.since);
       // A new setup starts from now, so orders handled before do not turn up.
-      setSince(stored ? toDateTimeLocalValue(stored) : settings.status_id == null ? toDateTimeLocalValue(new Date()) : '');
+      setSince(
+        stored ? toDateTimeLocalValue(stored) : settings.status_ids.length === 0 ? toDateTimeLocalValue(new Date()) : '',
+      );
     }
   }, [settings, draft]);
 
@@ -102,6 +104,7 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
 
   const set = (patch: BaseSyncSettingsUpdate) => setDraft((current) => ({ ...(current ?? {}), ...patch }));
   const sources = draft?.sources ?? [];
+  const statusIds = draft?.status_ids ?? [];
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -148,21 +151,31 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
 
               {info && (
                 <>
-                  <label className="block">
-                    <span className="block text-sm text-bambu-gray mb-1">{t('baseSync.settings.status')}</span>
-                    <select
-                      className={inputClass}
-                      value={draft.status_id ?? ''}
-                      onChange={(e) => set({ status_id: e.target.value ? Number(e.target.value) : null })}
-                    >
-                      <option value="">{t('baseSync.settings.choose')}</option>
+                  <fieldset>
+                    <legend className="text-sm text-bambu-gray mb-1">{t('baseSync.settings.statuses')}</legend>
+                    <p className="text-xs text-bambu-gray mb-2">{t('baseSync.settings.statusesHint')}</p>
+                    <div className="grid gap-1.5 sm:grid-cols-2">
                       {info.statuses.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
+                        <label key={s.id} className="flex items-center gap-2 text-sm text-white min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={statusIds.includes(s.id)}
+                            onChange={(e) =>
+                              set({
+                                status_ids: e.target.checked
+                                  ? [...statusIds, s.id]
+                                  : statusIds.filter((id) => id !== s.id),
+                              })
+                            }
+                          />
+                          {s.color && (
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+                          )}
+                          <span className="truncate">{s.name}</span>
+                        </label>
                       ))}
-                    </select>
-                  </label>
+                    </div>
+                  </fieldset>
                   <label className="block">
                     <span className="block text-sm text-bambu-gray mb-1">{t('baseSync.settings.cancelStatus')}</span>
                     <select

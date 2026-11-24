@@ -17,7 +17,7 @@ beforeEach(() => {
     http.get('/api/v1/products/settings', () => HttpResponse.json({ plate_cost_minutes: 15, sjf_enabled: false })),
     http.get('/api/v1/base-sync/settings', () =>
       HttpResponse.json({
-        enabled: false, status_id: null, cancel_status_id: null, sources: [], poll_minutes: 5,
+        enabled: false, status_ids: [], cancel_status_id: null, sources: [], poll_minutes: 5,
         auto_accept: false, manual_start: false, handling_days: 0, since: null, token_set: false,
         last_run_at: null, last_ok_at: null, last_error: null,
       }),
