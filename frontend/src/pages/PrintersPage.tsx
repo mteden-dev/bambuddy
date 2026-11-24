@@ -2559,6 +2559,9 @@ function PrinterCard({
   const slotSpoolView = (amsId: number, slotId: number, tray: AMSTray | undefined, savedPresetId: string | undefined) => {
     const assignment = onGetAssignment?.(printer.id, amsId, slotId);
     const slotSpool = slotSpoolsEnabled && assignment?.spool?.data_origin === SLOT_SPOOL_ORIGIN ? assignment.spool : null;
+    // Any spool in the slot can have its amount corrected, a Bambu RFID roll the
+    // AMS reads as empty included (inventory:update is in slotSpoolsEnabled).
+    const adjustSpool = slotSpoolsEnabled ? assignment?.spool ?? null : null;
     const enabled = slotSpoolsEnabled && hasPermission('printers:control');
     const isBambuSpool = !!tray && isBambuLabSpool(tray);
     const state = slotSpoolState({
@@ -2575,7 +2578,7 @@ function PrinterCard({
       actions: (
         <SlotSpoolActions
           state={state}
-          slotSpool={slotSpool}
+          spool={adjustSpool}
           canLoad={canLoadSlotRoll({ enabled, tray, isBambuSpool })}
           busy={keepSameRoll.isPending}
           onSameRoll={() => keepSameRoll.mutate({ printerId: printer.id, amsId, trayId: slotId })}

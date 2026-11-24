@@ -38,7 +38,7 @@ const iconClass = 'w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)]';
 /** The slot card's actions for a lit, counted or loadable slot. */
 export function SlotSpoolActions({
   state,
-  slotSpool,
+  spool,
   canLoad = false,
   onNewRoll,
   onSameRoll,
@@ -46,8 +46,12 @@ export function SlotSpoolActions({
   busy,
 }: {
   state: SlotSpoolState;
-  /** The slot's slot spool, when it has one: offers "correct the amount". */
-  slotSpool?: InventorySpool | null;
+  /**
+   * The inventory spool assigned to the slot, of any kind: offers "correct the
+   * amount". A Bambu RFID roll needs it as much as a slot spool: the AMS can
+   * read a full roll as empty (a refill on an old tagged spool).
+   */
+  spool?: InventorySpool | null;
   /** A roll is in the slot and may be loaded by hand, lit or not: a swap the backend missed is never stuck. */
   canLoad?: boolean;
   onNewRoll: () => void;
@@ -56,7 +60,7 @@ export function SlotSpoolActions({
   busy?: boolean;
 }) {
   const { t } = useTranslation();
-  if (!state && !slotSpool && !canLoad) return null;
+  if (!state && !spool && !canLoad) return null;
   return (
     <>
       {state === 'check' && (
@@ -92,13 +96,13 @@ export function SlotSpoolActions({
           {t('slotSpool.actionNew')}
         </button>
       )}
-      {slotSpool && (
+      {spool && (
         <button
           type="button"
           className={actionClass}
           onClick={(e) => {
             e.stopPropagation();
-            onAdjust(slotSpool);
+            onAdjust(spool);
           }}
         >
           <Scale className={iconClass} />
@@ -109,7 +113,7 @@ export function SlotSpoolActions({
   );
 }
 
-/** Correct how much is left on a slot spool. */
+/** Correct how much is left on the slot's spool; the backend then locks the weight against AMS remain%. */
 export function SlotSpoolAdjustModal({ spool, onClose }: { spool: InventorySpool; onClose: () => void }) {
   const { t } = useTranslation();
   const { showToast } = useToast();

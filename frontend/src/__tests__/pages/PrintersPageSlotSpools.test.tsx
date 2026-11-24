@@ -121,6 +121,14 @@ const slotSpool = {
   data_origin: 'slot_quick',
 };
 
+const rfidSpool = {
+  ...slotSpool,
+  id: 78,
+  weight_used: 1000,
+  data_origin: null,
+  tray_uuid: 'A1B2C3D4E5F60718293A4B5C6D7E8F90',
+};
+
 function setup({ spoolman = false, prompt = true, spool = slotSpool } = {}) {
   const sent: { method: string; path: string }[] = [];
   server.use(
@@ -145,6 +153,20 @@ function setup({ spoolman = false, prompt = true, spool = slotSpool } = {}) {
           fingerprint_color: 'FF0000FF',
           fingerprint_type: 'PLA',
           spool,
+          configured: true,
+          created_at: '2024-01-01T00:00:00Z',
+        },
+        {
+          // The RFID roll's inventory spool, read as empty by the AMS.
+          id: 2,
+          spool_id: 78,
+          printer_id: PRINTER_ID,
+          printer_name: 'AMS X1C',
+          ams_id: 0,
+          tray_id: 2,
+          fingerprint_color: 'FF0000FF',
+          fingerprint_type: 'PLA',
+          spool: rfidSpool,
           configured: true,
           created_at: '2024-01-01T00:00:00Z',
         },
@@ -247,12 +269,18 @@ describe('printer card slot spools', () => {
     await waitFor(() => expect(screen.getAllByTestId('slot-spool-badge-new')).toHaveLength(2));
   });
 
-  it('offers no new roll on a Bambu RFID roll', async () => {
+  it('offers no new roll on a Bambu RFID roll, but lets its amount be corrected', async () => {
+    // The AMS can read a full RFID roll as empty (a refill on an old tagged
+    // spool); the inventory spool behind it is what the card and the check use.
+    const user = userEvent.setup();
     setup();
     const all = await slots();
-    // The slot's menu is open: it offers to re-read the tag, not a new roll.
     await hover(all[2], 'Re-read RFID');
     expect(screen.queryByRole('button', { name: 'New roll…' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Correct the amount left' }));
+
+    expect(await screen.findByLabelText('Grams on the roll')).toHaveValue(0);
   });
 
   it('lights nothing in Spoolman mode', async () => {

@@ -111,6 +111,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     Zużyta szpula slotu (≤ 5 g) z rolką w slocie też świeci jako „NOWY”, a „Nowa szpula…” jest
     w karcie każdego slotu z rolką (poza RFID Bambu), świecącego czy nie: podmiany w czasie
     restartu backendu (Redeploy) albo zbyt szybkiej, by AMS zgłosił pusty slot, serwer nie widzi.
+    „Popraw pozostałą ilość” jest przy każdej szpuli magazynu przypisanej do slotu, także rolce
+    Bambu z RFID, którą AMS potrafi zgłosić jako pustą (refill na starej szpuli z tagiem); po
+    poprawce waga jest zablokowana przed synchronizacją z remain% AMS (`weight_locked`).
     Kontrola braków dostała dwa ustawienia (Ustawienia → Kontrola filamentu): **każdy slot
     osobno** (nie liczy szpul, na które przełączyłby AMS Filament Backup, bo przełączenie zostawia
     ślad na wydruku; sam backup na drukarce zostaje) i **zapas** w procentach ponad gramy z pliku
