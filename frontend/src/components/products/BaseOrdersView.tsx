@@ -20,9 +20,9 @@ import { OrderRow } from './OrderRow';
 // Bigger tap targets on a touch screen (an iPad at a printer), whatever its width.
 const TOUCH = 'pointer-coarse:min-h-11!';
 
-type Filter = 'new' | 'accepted' | 'skipped' | 'cancelled' | 'all';
+type Filter = 'new' | 'accepted' | 'ready' | 'skipped' | 'cancelled' | 'all';
 type SourceFilter = 'all' | 'allegro' | 'shop';
-const FILTERS: Filter[] = ['new', 'accepted', 'skipped', 'cancelled', 'all'];
+const FILTERS: Filter[] = ['new', 'accepted', 'ready', 'skipped', 'cancelled', 'all'];
 const SOURCES: SourceFilter[] = ['all', 'allegro', 'shop'];
 
 interface BaseOrdersViewProps {
@@ -165,7 +165,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       const message = t(
         action === 'accept'
           ? sent.ready
-            ? 'baseSync.toast.readyToPack'
+            ? 'baseSync.toast.ready'
             : 'baseSync.toast.accepted'
           : action === 'withdraw'
             ? 'baseSync.toast.withdrawn'
@@ -455,8 +455,8 @@ function EmptyState(props: {
   } else if (filter === 'new') {
     text = t('baseSync.empty.new');
     if (canSync) action = { label: t('baseSync.syncNow'), run: onSync };
-  } else if (filter === 'accepted') {
-    text = t('baseSync.empty.accepted');
+  } else if (filter === 'accepted' || filter === 'ready') {
+    text = t(`baseSync.empty.${filter}`);
   }
   return (
     <div className="text-center py-10 text-sm text-bambu-gray">

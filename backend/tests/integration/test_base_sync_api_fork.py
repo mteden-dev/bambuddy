@@ -615,6 +615,13 @@ async def test_an_order_held_back_in_full_is_ready_to_pack(async_client: AsyncCl
     assert (body["state"], body["held"], body["ready"]) == ("accepted", {str(shop.product_id): 1}, True)
     assert await _product_orders(db_session) == []
 
+    # Ready orders are listed apart from the ones in production.
+    ready = (await async_client.get("/api/v1/base-sync/orders?state=ready")).json()
+    in_production = (await async_client.get("/api/v1/base-sync/orders?state=accepted")).json()
+    assert ([o["order_id"] for o in ready], in_production) == ([5811], [])
+    counts = (await async_client.get("/api/v1/base-sync/orders/counts")).json()
+    assert (counts["ready"], counts["accepted"]) == ({"allegro": 1, "shop": 0}, {"allegro": 0, "shop": 0})
+
 
 async def test_an_order_with_every_part_on_hand_is_ready_to_pack(
     async_client: AsyncClient, db_session, shop, fake_base
@@ -649,6 +656,19 @@ async def test_an_order_with_every_part_on_hand_is_ready_to_pack(
     assert (body["state"], body["ready"]) == ("accepted", True)
     [po] = await _product_orders(db_session)
     assert po.status == "done"
+
+
+async def test_an_order_still_printing_stays_in_production(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5813, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    online, status = _live({shop.printer})
+    with online, status:
+        await async_client.post("/api/v1/base-sync/orders/5813/accept")
+    in_production = (await async_client.get("/api/v1/base-sync/orders?state=accepted")).json()
+    assert [(o["order_id"], o["ready"]) for o in in_production] == [(5813, False)]
+    assert (await async_client.get("/api/v1/base-sync/orders?state=ready")).json() == []
+    counts = (await async_client.get("/api/v1/base-sync/orders/counts")).json()
+    assert (counts["accepted"]["allegro"], counts["ready"]["allegro"]) == (1, 0)
 
 
 async def test_order_counts_by_state_and_source(async_client: AsyncClient, db_session, shop, fake_base):

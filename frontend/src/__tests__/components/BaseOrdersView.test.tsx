@@ -341,7 +341,19 @@ describe('BaseOrdersView', () => {
     expect(screen.getByText('Have everything – nothing to print')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Mark as ready' }));
     await waitFor(() => expect(accepted).toEqual([{ id: 5001, body: null }]));
-    expect(await screen.findByText('The order is ready to pack.')).toBeInTheDocument();
+    expect(await screen.findByText('The order is ready.')).toBeInTheDocument();
+  });
+
+  it('ready orders have their own tab, apart from production', async () => {
+    orders = [{ ...ORDER, state: 'accepted', ready: true, held: { '4': 2 } }];
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: /^Ready/ }));
+    await waitFor(() => expect(listUrls.some((u) => u.includes('state=ready'))).toBe(true));
+    // Ready, not "to pack"; a product had in full is not a warning.
+    expect(await screen.findByText('Ready', { selector: 'span' })).toBeInTheDocument();
+    expect(screen.getByText('have it ready')).toBeInTheDocument();
+    expect(screen.queryByText(/to pack/)).not.toBeInTheDocument();
   });
 
   it('an order in production shows its parts and changes apply at once', async () => {

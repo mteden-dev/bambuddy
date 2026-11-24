@@ -287,23 +287,13 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
         ).scalars()
     }
     names = {pid: p.name for pid, p in products.items()}
-    refs: dict[int, list[ProductOrderRef]] = {}
-    product_orders: dict[int, list[ProductOrder]] = {}
-    if rows:
-        found = (
-            await db.execute(select(ProductOrder).where(ProductOrder.external_source == svc.EXTERNAL_SOURCE))
-        ).scalars()
-        wanted = {row.order_id for row in rows}
-        for po in found:
-            try:
-                order_id = int((po.external_ref or "").split("/", 1)[0])
-            except ValueError:
-                continue
-            if order_id in wanted:
-                refs.setdefault(order_id, []).append(
-                    ProductOrderRef(id=po.id, product_id=po.product_id, quantity=po.quantity, status=po.status)
-                )
-                product_orders.setdefault(order_id, []).append(po)
+    product_orders = await _product_orders_by_order(db, {row.order_id for row in rows})
+    refs = {
+        order_id: [
+            ProductOrderRef(id=po.id, product_id=po.product_id, quantity=po.quantity, status=po.status) for po in found
+        ]
+        for order_id, found in product_orders.items()
+    }
     progress = await _progress(
         db, [po for row in rows if row.state == "accepted" for po in product_orders.get(row.order_id, [])]
     )
@@ -397,10 +387,47 @@ def _nothing_to_print(
     return True
 
 
-def _ready(row: BaseOrder, wanted: dict[int, int], live: list[ProductOrderRef]) -> bool:
-    """An accepted order can be packed: every product printed for it is done, the rest held back.
+async def _product_orders_by_order(db: AsyncSession, order_ids: set[int]) -> dict[int, list[ProductOrder]]:
+    """Base order id -> its product orders (every status)."""
+    result: dict[int, list[ProductOrder]] = {}
+    if not order_ids:
+        return result
+    found = (
+        await db.execute(select(ProductOrder).where(ProductOrder.external_source == svc.EXTERNAL_SOURCE))
+    ).scalars()
+    for po in found:
+        try:
+            order_id = int((po.external_ref or "").split("/", 1)[0])
+        except ValueError:
+            continue
+        if order_id in order_ids:
+            result.setdefault(order_id, []).append(po)
+    return result
+
+
+async def _ready_orders(db: AsyncSession, rows: list[BaseOrder]) -> set[int]:
+    """The ids of the accepted orders among ``rows`` that are ready (see ``_ready``)."""
+    accepted = [row for row in rows if row.state == "accepted"]
+    if not accepted:
+        return set()
+    skus = await svc.sku_map(db)
+    wanted_ids = {t.product_id for t in skus.values() if t.product_id is not None}
+    existing = set((await db.execute(select(Product.id).where(Product.id.in_(wanted_ids)))).scalars())
+    product_orders = await _product_orders_by_order(db, {row.order_id for row in accepted})
+    ready = set()
+    for row in accepted:
+        wanted = {pid: n for pid, n in svc.wanted_products(row.items or [], skus).items() if pid in existing}
+        live = [po for po in product_orders.get(row.order_id, []) if po.status != "cancelled"]
+        if _ready(row, wanted, live):
+            ready.add(row.order_id)
+    return ready
+
+
+def _ready(row: BaseOrder, wanted: dict[int, int], live: list) -> bool:
+    """An accepted order is ready: every product printed for it is done, the rest held back.
 
     Holding back every product leaves it no product order, and it is ready all the same.
+    Ready orders are listed apart from the ones in production (``state=ready``).
     """
     if row.state != "accepted" or not (live or wanted):
         return False
@@ -462,13 +489,23 @@ async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, P
 
 @router.get("/orders/counts")
 async def order_counts(db: AsyncSession = Depends(get_db, scope="function"), _=ReadAccess) -> dict:
-    """How many orders each state has, from Allegro and from the rest (for the filters)."""
-    counts = {state: {"allegro": 0, "shop": 0} for state in ("new", "accepted", "skipped", "cancelled")}
+    """How many orders each state has, from Allegro and from the rest (for the filters).
+
+    Accepted orders that are ready count under ``ready``, not ``accepted``.
+    """
+    counts = {state: {"allegro": 0, "shop": 0} for state in ("new", "accepted", "ready", "skipped", "cancelled")}
     rows = await db.execute(
         select(BaseOrder.state, BaseOrder.source, func.count()).group_by(BaseOrder.state, BaseOrder.source)
     )
     for state, source, n in rows.all():
         counts.setdefault(state, {"allegro": 0, "shop": 0})["allegro" if source == "allegro" else "shop"] += n
+    accepted = list((await db.execute(select(BaseOrder).where(BaseOrder.state == "accepted"))).scalars())
+    ready = await _ready_orders(db, accepted)
+    for row in accepted:
+        if row.order_id in ready:
+            kind = "allegro" if row.source == "allegro" else "shop"
+            counts["accepted"][kind] -= 1
+            counts["ready"][kind] += 1
     return counts
 
 
@@ -479,14 +516,19 @@ async def list_orders(
     db: AsyncSession = Depends(get_db, scope="function"),
     _=ReadAccess,
 ):
-    """Orders the sync found; ``state`` filters (new, accepted, skipped, cancelled), ``source``
+    """Orders the sync found; ``state`` filters (new, accepted, ready, skipped, cancelled), ``source``
     too (``allegro``: every Allegro account; ``shop``: every other source).
+
+    ``accepted`` is the orders in production; ``ready`` the accepted ones that
+    are ready (printed, or held back in full), which ``accepted`` leaves out.
 
     Waiting and accepted ones come in the order they are to be made: by ship-by
     deadline (today and tomorrow first, then the day after, then later), then
-    the ones without one (a shop's) oldest first. The rest newest first.
+    the ones without one (a shop's) oldest first. Ready ones the same while
+    they are in the Base statuses, then the ones moved on, newest first. The
+    rest newest first.
     """
-    if state in ("new", "accepted"):
+    if state in ("new", "accepted", "ready"):
         query = select(BaseOrder).order_by(
             BaseOrder.ship_by.asc().nulls_last(),
             BaseOrder.date_confirmed.asc().nulls_last(),
@@ -495,13 +537,26 @@ async def list_orders(
     else:
         query = select(BaseOrder).order_by(BaseOrder.date_confirmed.desc().nulls_last(), BaseOrder.order_id.desc())
     if state:
-        query = query.where(BaseOrder.state == state)
+        query = query.where(BaseOrder.state == ("accepted" if state == "ready" else state))
     if source == "allegro":
         query = query.where(BaseOrder.source == "allegro")
     elif source == "shop":
         query = query.where(or_(BaseOrder.source.is_(None), BaseOrder.source != "allegro"))
-    rows = list((await db.execute(query.limit(300))).scalars())
-    return await _orders_out(db, rows)
+    if state not in ("accepted", "ready"):
+        rows = list((await db.execute(query.limit(300))).scalars())
+        return await _orders_out(db, rows)
+    # Which accepted ones are ready is worked out here, so the limit comes after.
+    rows = list((await db.execute(query)).scalars())
+    ready = await _ready_orders(db, rows)
+    rows = [row for row in rows if (row.order_id in ready) == (state == "ready")]
+    if state == "ready":
+        moved_on = sorted(
+            (row for row in rows if not row.in_status),
+            key=lambda row: (row.date_confirmed or datetime.min, row.order_id),
+            reverse=True,
+        )
+        rows = [row for row in rows if row.in_status] + moved_on
+    return await _orders_out(db, rows[:300])
 
 
 async def _get_order(db: AsyncSession, order_id: int) -> BaseOrder:

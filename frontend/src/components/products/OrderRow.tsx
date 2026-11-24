@@ -144,8 +144,9 @@ function Line({ order, line, index }: { order: BaseOrder; line: BaseOrderLine; i
             <span className="px-1.5 rounded bg-bambu-dark-tertiary text-bambu-gray">{t('baseSync.mapping.not_printed')}</span>
           )}
           {held > 0 && firstOfProduct && (
-            <span className="text-amber-600 dark:text-amber-300">
-              {t('baseSync.heldBack', { print: total - held, total })}
+            // All of it on hand is nothing to warn about; printing only some is.
+            <span className={held >= total ? 'text-sky-700 dark:text-sky-300' : 'text-amber-600 dark:text-amber-300'}>
+              {held >= total ? t('baseSync.heldAll') : t('baseSync.heldBack', { print: total - held, total })}
             </span>
           )}
         </div>
@@ -163,7 +164,7 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded bg-bambu-green/15 text-bambu-green">
         <PackageCheck className="w-3.5 h-3.5" />
-        {t('baseSync.readyToPack')}
+        {t('baseSync.readyBadge')}
       </span>
     );
   }
@@ -269,7 +270,7 @@ export function OrderRow(props: OrderRowProps) {
               </span>
               {showState && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-dark-tertiary text-bambu-gray-light shrink-0">
-                  {t(`baseSync.state.${order.state}`)}
+                  {t(order.ready ? 'baseSync.state.ready' : `baseSync.state.${order.state}`)}
                 </span>
               )}
             </div>
