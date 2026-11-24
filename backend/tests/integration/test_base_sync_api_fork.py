@@ -39,6 +39,7 @@ def _order(order_id: int, lines: list[tuple[str, int]], status: int = TAKE, conf
         "date_confirmed": confirmed,
         "date_add": confirmed - 60,
         "date_in_status": confirmed + 5,
+        "user_login": f"nick_{order_id}",
         "email": "buyer@example.com",
         "phone": "+48000000000",
         "delivery_fullname": "Jan Kowalski",
@@ -523,13 +524,78 @@ async def test_sending_an_order_can_be_taken_back(async_client: AsyncClient, db_
     assert sum(deltas) == 0
 
 
-async def test_waiting_orders_come_by_ship_by_date(async_client: AsyncClient, db_session, shop, fake_base):
+def _shop_order(order_id: int, confirmed: int) -> dict:
+    order = _order(order_id, [("SKU-BOX-100-B", 1)], confirmed=confirmed)
+    return {**order, "order_source": "shop", "order_source_id": 2222, "shop_order_id": order_id - 4000}
+
+
+async def test_waiting_orders_come_in_the_order_they_are_made(async_client: AsyncClient, db_session, shop, fake_base):
     fake_base.orders = [
         _order(5701, [("SKU-BOX-100-B", 1)], confirmed=1795111511),
         _order(5702, [("SKU-BOX-100-B", 1)], confirmed=1795111600),
-        _order(5703, [("SKU-BOX-100-B", 1)], confirmed=1795111700),  # a shop order, no date
+        _shop_order(5704, confirmed=1795111800),  # shop orders: no ship-by date
+        _shop_order(5703, confirmed=1795111700),
     ]
     fake_base.ship_by = {5701: datetime(2026, 11, 27, 22, 59, 59), 5702: datetime(2026, 11, 25, 22, 59, 59)}
     await _sync(async_client, {shop.printer})
-    listed = [o["order_id"] for o in (await async_client.get("/api/v1/base-sync/orders?state=new")).json()]
-    assert listed == [5702, 5701, 5703]
+    listed = (await async_client.get("/api/v1/base-sync/orders?state=new")).json()
+    # Allegro by ship-by date, then the shop's oldest first.
+    assert [o["order_id"] for o in listed] == [5702, 5701, 5703, 5704]
+    # Allegro orders are labelled with the buyer's nick, the shop's with their number.
+    assert {o["order_id"]: o["label"] for o in listed} == {
+        5701: "nick_5701",
+        5702: "nick_5702",
+        5703: "#1703",
+        5704: "#1704",
+    }
+    allegro = (await async_client.get("/api/v1/base-sync/orders?state=new&source=allegro")).json()
+    assert [o["order_id"] for o in allegro] == [5702, 5701]
+    shop_only = (await async_client.get("/api/v1/base-sync/orders?state=new&source=shop")).json()
+    assert [o["order_id"] for o in shop_only] == [5703, 5704]
+
+
+async def test_a_waiting_order_keeps_a_draft_until_it_is_sent(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5801, [("SKU-BOX-100-B", 2)])]
+    await _sync(async_client, {shop.printer})
+    product = (await async_client.get(f"/api/v1/products/{shop.product_id}")).json()
+    base = next(p["id"] for p in product["parts"] if p["name"] == "Base")
+
+    # "I have a base already": saved on the waiting order, nothing in stock or the queue yet.
+    response = await async_client.post(
+        "/api/v1/base-sync/orders/5801/draft",
+        json={"products": [{"product_id": shop.product_id, "units": 2, "have": [{"part_id": base, "pieces": 1}]}]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["state"], body["draft"]) == ("new", {"held": {}, "on_hand": {str(base): 1}})
+    assert list((await db_session.execute(select(ProductStockAdjustment))).scalars()) == []
+    assert await _product_orders(db_session) == []
+
+    # Sent as it stands: the draft is applied (the base goes into stock) and cleared.
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5801/accept")
+    body = response.json()
+    assert (body["state"], body["draft"], body["on_hand"]) == ("accepted", None, {str(base): 1})
+    [po] = await _product_orders(db_session)
+    assert po.quantity == 2
+    # In production it shows how far its parts are, the base on hand counted.
+    [progress] = body["progress"]
+    parts = {p["name"]: p for p in progress["parts"]}
+    assert (parts["Base"]["ready"], parts["Base"]["needed"], parts["Base"]["on_hand"]) == (1, 2, 1)
+    assert parts["Lid"]["ready"] == 0
+    assert body["source_kind"] == "allegro"
+
+    # An accepted order keeps no draft.
+    response = await async_client.post(
+        "/api/v1/base-sync/orders/5801/draft", json={"products": [{"product_id": shop.product_id, "units": 1}]}
+    )
+    assert response.status_code == 409
+
+
+async def test_order_counts_by_state_and_source(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5901, [("SKU-BOX-100-B", 1)]), _shop_order(5902, confirmed=1795111800)]
+    await _sync(async_client, {shop.printer})
+    counts = (await async_client.get("/api/v1/base-sync/orders/counts")).json()
+    assert counts["new"] == {"allegro": 1, "shop": 1}
+    assert counts["accepted"] == {"allegro": 0, "shop": 0}

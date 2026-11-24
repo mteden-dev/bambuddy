@@ -726,3 +726,29 @@ async def test_a_check_can_be_taken_back_and_goes_to_the_archive(
     await _post(async_client, f"/api/v1/products/jobs/{lid['id']}/check", {}, connected)
     db_session.expire_all()
     assert (await db_session.get(PrintLogEntry, run_id)).user_verdict == "good"
+
+
+async def test_jobs_are_labelled_with_the_orders_they_print_for(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    first = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1, "notes": "first"}, connected)
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1, "notes": "second"}, connected)
+    first_id = next(o["id"] for o in first["product"]["orders"] if o["notes"] == "first")
+    tags = (await async_client.get("/api/v1/products/order-tags")).json()
+    items = await _queue(db_session)
+    labelled = {item.id: [t["label"] for t in tags["items"].get(str(item.id), {}).get("orders", [])] for item in items}
+    # Every job prints for one of the two orders; each order gets a lid, a base and a tray.
+    assert all(labels for labels in labelled.values())
+    assert sorted(label for labels in labelled.values() for label in labels).count("first") >= 3
+    assert {t["product_order_id"] for v in tags["items"].values() for t in v["orders"]} >= {first_id}
+    assert not any(v["for_stock"] for v in tags["items"].values())
+
+    # A job printing now labels its printer.
+    item = items[0]
+    item.status = "printing"
+    item.printer_id = item.printer_id or (await db_session.get(QueueReservation, item.id)).printer_id
+    await db_session.commit()
+    online, status = _live(connected)
+    with online, status:
+        await async_client.get(f"/api/v1/products/{box.id}")
+    tags = (await async_client.get("/api/v1/products/order-tags")).json()
+    assert tags["printers"][str(item.printer_id)]["orders"][0]["label"] in ("first", "second")

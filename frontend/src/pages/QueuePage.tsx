@@ -91,6 +91,7 @@ import { compareQueueOrder } from '../utils/queueOrder';
 import { BatchOrdersView } from '../components/BatchOrdersView';
 import { ThumbnailHoverPreview } from '../components/ThumbnailHoverPreview';
 import { QueueItemTagChips } from '../components/QueueItemTagChips';
+import { OrderLabelChip } from '../components/OrderLabelChip';
 import { buildLoadedFilaments, type LoadedFilament } from '../hooks/useFilamentMapping';
 import { hasGcodeSnippets, useUiSettings } from '../hooks/useUiSettings';
 
@@ -870,6 +871,8 @@ function SortableQueueItem({
                   : (item.printer_name || `${t('common.printer')} #${item.printer_id}`)}
               </span>
             </span>
+            {/* Fork: the order(s) a product job prints for */}
+            <OrderLabelChip itemId={item.id} />
             {/* Fork: printer tags the job asks for */}
             <QueueItemTagChips item={item} />
             {item.print_time_seconds && (

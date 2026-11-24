@@ -431,16 +431,9 @@ def _product_out(product: Product, counts: tuple[int, int] = (0, 0)) -> dict:
         "open_units": counts[1],
         "has_thumbnail": svc.has_thumbnail(product),
         "custom_thumbnail": bool(product.thumbnail_path),
-        "thumbnail_version": _thumbnail_version(product),
+        "thumbnail_version": svc.thumbnail_version(product),
         "created_at": product.created_at,
     }
-
-
-def _thumbnail_version(product: Product) -> str | None:
-    if product.thumbnail_path:
-        return product.thumbnail_path.rsplit("/", 1)[-1].removesuffix(".png")
-    first = next((p for p in product.plates if svc.plate_usable(p) and p.library_file.thumbnail_path), None)
-    return f"plate-{first.library_file_id}" if first is not None else None
 
 
 def _order_out(order: ProductOrder, **extra) -> OrderOut:
@@ -776,6 +769,57 @@ async def plate_file_info(
         raise HTTPException(404, "Library file not found")
     _assert_can_queue_library_file(library_file, actor)
     return _file_info(library_file)
+
+
+# --- which orders a job prints for -----------------------------------------------------------
+
+
+class OrderTagOut(BaseModel):
+    product_order_id: int
+    # An Allegro nick, else the shop's order number (or the order's notes).
+    label: str
+    # Shown on hover: the Base order id and where it came from.
+    title: str
+    base_order_id: int | None = None
+    # "allegro" or "shop" for an order from Base; None for one entered by hand.
+    source_kind: str | None = None
+    ship_by: UTCDatetime = None
+    due: UTCDatetime = None
+
+
+class JobOrdersOut(BaseModel):
+    orders: list[OrderTagOut]
+    # Its pieces go to no open order: it prints for stock.
+    for_stock: bool = False
+
+
+class OrderTagsOut(BaseModel):
+    # queue job id -> the orders it prints for (waiting and printing jobs).
+    items: dict[int, JobOrdersOut]
+    # printer id -> the orders of what it prints now.
+    printers: dict[int, JobOrdersOut]
+
+
+@router.get("/order-tags", response_model=OrderTagsOut)
+async def order_tags(db: AsyncSession = Depends(get_db, scope="function"), _=ReadAccess):
+    """Which orders the planner's waiting and printing jobs print for, to label them in the queue,
+    on the timeline and on the printer cards. Stock goes to the orders first, then the jobs in the
+    order they print, soonest due first; one plate may serve several orders.
+    """
+    items, printers = await svc.order_tags(db)
+
+    def out(entry) -> JobOrdersOut:
+        return JobOrdersOut(
+            orders=[
+                OrderTagOut(**{**t.__dict__, "ship_by": _utc(t.ship_by), "due": _utc(t.due)}) for t in entry.orders
+            ],
+            for_stock=entry.for_stock,
+        )
+
+    return OrderTagsOut(
+        items={k: out(v) for k, v in items.items()},
+        printers={k: out(v) for k, v in printers.items()},
+    )
 
 
 # --- checking finished pieces ------------------------------------------------------------

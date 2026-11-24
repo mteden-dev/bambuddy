@@ -21,6 +21,7 @@ import { formatDuration, parseUTCDate } from '../utils/date';
 import { queueJobModels, queueJobName, queueJobPrintTime, queueJobThumbnailUrl } from '../utils/queueJobDisplay';
 import { Button } from './Button';
 import { QueueItemTagChips } from './QueueItemTagChips';
+import { OrderLabelChip } from './OrderLabelChip';
 
 /** Where a job is sent: one printer, or back to any printer of a model. */
 export type QueuePinTarget = { printer_id: number } | { target_model: string };
@@ -205,6 +206,10 @@ export function QueueJobDetails({
             )}
             <div className="mt-2">
               <QueueItemTagChips item={item} />
+            </div>
+            {/* Fork: the orders a product job prints for */}
+            <div className="mt-2">
+              <OrderLabelChip itemId={item.id} variant="list" />
             </div>
           </div>
         </div>

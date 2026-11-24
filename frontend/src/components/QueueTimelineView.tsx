@@ -53,6 +53,8 @@ import { queueJobModels, queueJobName, queueJobPrintTime, queueJobThumbnailUrl }
 import { Button } from './Button';
 import { QueueJobDetails, type QueuePinTarget } from './QueueJobDetails';
 import { StaffedHoursDialog } from './StaffedHoursDialog';
+import { useJobOrders } from '../hooks/useJobOrders';
+import { jobOrdersText, urgentFirst } from '../utils/baseOrders';
 
 /** Gantt-style rolling timeline. One horizontal swimlane per printer. A
  *  print that is running is drawn from the printer's live status; every
@@ -245,8 +247,17 @@ function TimelineBar({
   const isPrinting = ev.type === 'printing';
   const printTime = queueJobPrintTime(ev.item, ev.variant);
   const models = queueJobModels(ev.item);
+  // Fork (products): the order(s) a product job prints for.
+  const { data: jobOrders } = useJobOrders();
+  const orders = jobOrders?.items[String(ev.item.id)];
+  const orderText = jobOrdersText(orders, t('products.orderLabel.forStock'));
   const tooltipParts = [
     displayName,
+    urgentFirst(orders).length
+      ? t('products.orderLabel.forTooltip', {
+          list: urgentFirst(orders).map((o) => `${o.label} (${o.title})`).join(', '),
+        })
+      : null,
     `${formatTooltipTime(ev.estimatedStart)} → ${formatTooltipTime(ev.estimatedEnd)}`,
     printTime ? formatDuration(printTime) : null,
     isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null,
@@ -278,7 +289,7 @@ function TimelineBar({
         height: LANE_BAR_HEIGHT_PX,
       }}
     >
-      <BarContent ev={ev} t={t} />
+      <BarContent ev={ev} t={t} orderText={orderText} />
     </button>
   );
 }
@@ -296,12 +307,13 @@ function barClasses(ev: ScheduleEvent): string {
   return batched ? 'bg-cyan-500/20 border border-cyan-400/50' : 'bg-bambu-green/20 border border-bambu-green/50';
 }
 
-function BarContent({ ev, t }: { ev: ScheduleEvent; t: QueueTimelineViewProps['t'] }) {
+function BarContent({ ev, t, orderText = null }: { ev: ScheduleEvent; t: QueueTimelineViewProps['t']; orderText?: string | null }) {
   const thumbnailUrl = queueJobThumbnailUrl(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
   const printTime = queueJobPrintTime(ev.item, ev.variant);
   const manual = !isPrinting && ev.item.manual_start;
   const second = [
+    orderText,
     manual ? t('queue.timeline.manualStart') : null,
     anyModelLabel(ev, t),
     printTime ? formatDuration(printTime) : null,

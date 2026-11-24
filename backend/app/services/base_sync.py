@@ -9,8 +9,10 @@ the sync:
    paged by confirmation time), from the order sources chosen (all by default)
    and confirmed since the date set (by default the moment the sync was set up);
 2. keeps each order's Base id, number, source, status, confirmation time,
-   ship-by deadline and product lines (SKU, name, quantity) in
-   ``custom_base_orders`` -- nothing about the buyer;
+   ship-by deadline, product lines (SKU, name, quantity) and the buyer's
+   marketplace login (Allegro's is a nick, the short name prints are labelled
+   with) in ``custom_base_orders`` -- nothing else about the buyer: no name,
+   address, phone or email;
 3. turns the lines into product orders through the SKU map
    (``custom_product_skus``): a SKU is a product (times ``units``), or a SKU
    nobody prints, or not mapped yet (listed for someone to map). A new order
@@ -214,7 +216,7 @@ class OrderLine:
 
 @dataclass(frozen=True)
 class OrderData:
-    """What the sync keeps of a Base order: no buyer data."""
+    """What the sync keeps of a Base order: of the buyer only the marketplace login."""
 
     order_id: int
     number: str | None
@@ -223,10 +225,12 @@ class OrderData:
     status_id: int | None
     date_confirmed: datetime | None
     lines: tuple[OrderLine, ...]
+    # The buyer's login on the marketplace (an Allegro nick); a label, nothing more.
+    buyer_login: str | None = None
 
 
 def parse_order(raw: dict) -> OrderData | None:
-    """The fields Bambuddy keeps; buyer, address, phone and email are dropped here."""
+    """The fields Bambuddy keeps; the buyer's name, address, phone and email are dropped here."""
     try:
         order_id = int(raw["order_id"])
     except (KeyError, TypeError, ValueError):
@@ -268,7 +272,17 @@ def parse_order(raw: dict) -> OrderData | None:
         status_id=status_id,
         date_confirmed=when,
         lines=tuple(lines),
+        buyer_login=str(raw.get("user_login") or "").strip()[:100] or None,
     )
+
+
+def order_label(order: BaseOrder) -> str:
+    """The short name a print is labelled with: an Allegro nick, else the shop's order number."""
+    if order.source == "allegro" and order.buyer_login:
+        return order.buyer_login
+    if order.number and len(order.number) <= 12:
+        return f"#{order.number}"
+    return order.buyer_login or f"#{order.order_id}"
 
 
 def _timestamp(value) -> datetime | None:
@@ -623,6 +637,7 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
         elif row.items != items:
             result.updated += 1
         row.number = data.number
+        row.buyer_login = data.buyer_login
         row.source = data.source
         row.source_id = data.source_id
         row.source_name = names.get(_source_key(data)) or row.source_name
@@ -712,10 +727,94 @@ async def _part_products(db: AsyncSession, part_ids: set[int]) -> dict[int, int]
     return dict(rows.all())
 
 
+def draft_parts(order: BaseOrder) -> tuple[dict[int, int], dict[int, int]]:
+    """A waiting order's saved choice: (product id -> held back, part id -> on hand)."""
+
+    def ints(raw) -> dict[int, int]:
+        result = {}
+        for key, n in (raw or {}).items():
+            try:
+                k, v = int(key), int(n)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                result[k] = v
+        return result
+
+    draft = order.draft or {}
+    return ints(draft.get("held")), ints(draft.get("on_hand"))
+
+
+async def _check_choices(db: AsyncSession, order: BaseOrder, choices: list[ProductChoice], skus) -> dict[int, set[int]]:
+    """Every choice names a product of the order and parts of that product; returns product -> its parts."""
+    from backend.app.models.products import ProductPart
+
+    wanted = wanted_products(order.items or [], skus)
+    parts: dict[int, set[int]] = {}
+    for choice in choices:
+        if choice.product_id not in wanted:
+            raise ValueError(f"The order has no line for product {choice.product_id}")
+        parts[choice.product_id] = {
+            part.id
+            for part in (
+                await db.execute(select(ProductPart).where(ProductPart.product_id == choice.product_id))
+            ).scalars()
+        }
+        for part_id in choice.have:
+            if part_id not in parts[choice.product_id]:
+                raise ValueError(f"Part {part_id} is not a part of product {choice.product_id}")
+    return parts
+
+
+async def save_draft(db: AsyncSession, order: BaseOrder, choices: list[ProductChoice]) -> None:
+    """Keep a choice on a waiting order without sending it: nothing goes into stock or the queue.
+
+    The choices replace the saved ones for their products; sending the order
+    applies them. The caller commits.
+    """
+    skus = await sku_map(db)
+    await _check_choices(db, order, choices, skus)
+    wanted = wanted_products(order.items or [], skus)
+    held, on_hand = draft_parts(order)
+    owner = await _part_products(db, set(on_hand))
+    for choice in choices:
+        held[choice.product_id] = max(0, wanted[choice.product_id] - max(0, choice.units))
+        for part_id in [p for p, product_id in owner.items() if product_id == choice.product_id]:
+            on_hand.pop(part_id, None)
+        for part_id, pieces in choice.have.items():
+            if pieces > 0:
+                on_hand[part_id] = pieces
+    held = {pid: n for pid, n in held.items() if n > 0}
+    order.draft = (
+        {"held": {str(k): v for k, v in held.items()}, "on_hand": {str(k): v for k, v in on_hand.items()}}
+        if held or on_hand
+        else None
+    )
+    await db.flush()
+
+
+async def _draft_choices(db: AsyncSession, order: BaseOrder, skus) -> list[ProductChoice] | None:
+    """The saved choice as choices for every product of the order; None without one."""
+    if not order.draft:
+        return None
+    held, on_hand = draft_parts(order)
+    owner = await _part_products(db, set(on_hand))
+    wanted = wanted_products(order.items or [], skus)
+    return [
+        ProductChoice(
+            product_id,
+            max(0, units - held.get(product_id, 0)),
+            {part_id: n for part_id, n in on_hand.items() if owner.get(part_id) == product_id},
+        )
+        for product_id, units in wanted.items()
+    ]
+
+
 async def accept(db: AsyncSession, order: BaseOrder, choices: list[ProductChoice] | None = None) -> set[int]:
     """Send an order to production (or change what it prints); returns the products changed.
 
-    Without choices every mapped line is printed in full. A choice holds back
+    Without choices the choice saved while it waited (``draft``) is sent, or
+    every mapped line in full when there is none. A choice holds back
     the products it does not print and says which parts are on hand for the
     order: they are in stock as pieces of no known printer (a correction noted
     with the order). On hand is a total: changing it later puts in or takes
@@ -727,6 +826,10 @@ async def accept(db: AsyncSession, order: BaseOrder, choices: list[ProductChoice
     config = await read_config(db)
     skus = await sku_map(db)
     changed: set[int] = set()
+    if choices is None:
+        # A choice saved while it waited is what is sent.
+        choices = await _draft_choices(db, order, skus)
+    order.draft = None
     if choices is not None:
         wanted = wanted_products(order.items or [], skus)
         held = held_products(order)
@@ -778,6 +881,7 @@ async def reset(db: AsyncSession, order: BaseOrder) -> set[int]:
             changed.add(owner[part_id])
     order.on_hand = None
     order.held = None
+    order.draft = None
     order.state = "new"
     await db.flush()
     return changed

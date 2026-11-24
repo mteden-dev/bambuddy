@@ -3,9 +3,10 @@
 Fork-only tables, created by ``create_all`` like any model: the official image
 has no model for them and never reads them. See services/base_sync.py.
 
-Nothing about the buyer is stored: an order keeps its Base id, its number in
-the shop or marketplace, where it came from, its status, when it was confirmed,
-when it must ship and its product lines (SKU, name, quantity).
+Of the buyer only the marketplace login is stored (an Allegro nick, to label
+prints): an order keeps its Base id, its number in the shop or marketplace,
+where it came from, its status, when it was confirmed, when it must ship and
+its product lines (SKU, name, quantity).
 """
 
 from datetime import datetime
@@ -52,6 +53,9 @@ class BaseOrder(Base):
     source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The buyer's marketplace login (an Allegro nick): the label on its prints.
+    # Nothing else about the buyer is kept.
+    buyer_login: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # The marketplace's ship-by deadline (getOrderTransactionData's ship_date_to,
     # e.g. Allegro's), the due date of its product orders; None when it has none
@@ -67,6 +71,10 @@ class BaseOrder(Base):
     # part id (string) -> pieces on hand put into stock for this order (so a
     # change puts in or takes out only the difference).
     on_hand: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # A choice saved on a waiting order before it is sent ({"held": {product:
+    # n}, "on_hand": {part: n}}): nothing goes into stock or the queue until
+    # it is sent, which applies it.
+    draft: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # The last sync found it in one of the statuses orders are taken from.
     in_status: Mapped[bool] = mapped_column(Boolean, default=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

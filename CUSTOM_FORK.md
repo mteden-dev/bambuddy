@@ -169,12 +169,17 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     (numer, źródło, data i pozycje). Pozycje łączy z produktami po SKU (produkt może mieć kilka
     SKU i zestawy, np. 3 sztuki na SKU; SKU „nie drukujemy” jest pomijane; nieprzypisane są
     wypisane do przypisania jednym kliknięciem). Nowe zamówienie czeka na „Drukuj” (albo od razu
-    idzie do produkcji, jeśli tak ustawiono): „Drukuj wszystko” od razu (z „Cofnij”) albo
-    „Wybierz…”: okno, w którym ustawia się, ile sztuk każdego produktu drukować (reszta zostaje
-    niedrukowana też przy zmianach w Base) i które części są poza stanem (idą do stanu bez
-    drukarki, jako stan na zamówienie, więc zmiana nie liczy ich podwójnie); „Zmień” robi to samo
-    dla zamówienia w produkcji, „Wycofaj z produkcji” pyta o potwierdzenie. Termin wysyłki ma
-    kolorową etykietę (dziś, jutro, po terminie), a lista jest po nim posortowana; potem daje
+    idzie do produkcji, jeśli tak ustawiono). Lista jest w kolejności realizacji, w sekcjach:
+    Allegro po terminie wysyłki (dziś, jutro, pojutrze, za 3+ dni), potem sklep od najstarszego;
+    filtr stanu i źródła (Allegro / Sklep) z licznikami i wyszukiwarka (nick, numer, SKU).
+    Wiersz (na Macu tabela, na iPadzie karta) ma termin, znak źródła, nick kupującego z Allegro
+    albo numer ze sklepu (numer z Base obok), pozycje z miniaturami i postęp części w produkcji.
+    „Drukuj” wysyła od razu (z „Cofnij”); „Części” rozwija panel: ile sztuk drukować (reszta
+    zostaje niedrukowana też przy zmianach w Base) i co jest z półki. Na zamówieniu czekającym
+    to szkic („mam już dół”) zapisany od razu, a „Drukuj resztę” wysyła go; w produkcji zmiana
+    działa od razu (z „Cofnij”), a „Wycofaj z produkcji” pyta o potwierdzenie. Wydruki w kolejce,
+    na osi czasu i na karcie drukarki mają etykietę zamówienia (nick albo numer, „+N” dla kilku,
+    „na stan”), z numerem z Base po najechaniu i przejściem do zamówienia; potem daje
     zamówienia produktów i przelicza plan;
     póki jest w tych statusach, zmiany pozycji w Base idą za nim; przestawione w Base zachowuje
     druki, a anulowane anuluje otwarte. Termin to termin wysyłki z platformy (Allegro), czytany z

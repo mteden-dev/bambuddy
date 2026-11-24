@@ -174,8 +174,9 @@ statystyki Dobry/Odrzucony ją widzą; upstreamowe pytanie o wynik jest dla zada
 Bambuddy może co kilka minut czytać zamówienia z wybranych statusów w Base (np. „Przyjęte do
 realizacji” i statusy „DZIŚ / Jutro / Pojutrze / 3+ Dni”, do których automat przenosi je po kilku
 sekundach) i zamieniać ich pozycje na zamówienia produktów. **Tylko czyta**: niczego w Base nie
-zmienia i nie zapisuje danych kupującego (zostaje numer zamówienia, źródło, status i od kiedy w nim
-jest, data potwierdzenia i pozycje: SKU, nazwa, ilość). Logika: `backend/app/services/base_sync.py`, trasy `/base-sync`.
+zmienia. Z danych kupującego zapisuje tylko login z platformy (nick z Allegro, `buyer_login`), którym
+podpisuje wydruki; zostaje też numer zamówienia, źródło, status, data potwierdzenia, termin wysyłki
+i pozycje (SKU, nazwa, ilość). Imienia, adresu, telefonu ani maila nie zapisuje. Logika: `backend/app/services/base_sync.py`, trasy `/base-sync`.
 
 - **SKU** łączy pozycję z Base z produktem: w produkcie pole `skus` (`[{"sku": "SKU-BOX-100-B",
   "units": 1}]`, `units` to liczba produktów w jednej sprzedanej sztuce, np. 3 dla zestawu) albo
@@ -192,8 +193,23 @@ jest, data potwierdzenia i pozycje: SKU, nazwa, ilość). Logika: `backend/app/s
   dokładka: zamówienie pamięta go (`on_hand`) i kolejna zmiana dokłada lub odejmuje tylko różnicę.
   To samo wywołanie na zatwierdzonym zamówieniu zmienia wybór (`units: 0` anuluje zamówienie
   produktu). `POST /base-sync/orders/{order_id}/reset` cofa przyjęcie albo pominięcie (zamówienie
-  znowu czeka, części „mam” wychodzą ze stanu). Lista czekających i zatwierdzonych jest posortowana
-  po terminie wysyłki. Dopóki zamówienie jest w którymś z tych statusów, zmiany pozycji w Base (ilość,
+  znowu czeka, części „mam” wychodzą ze stanu). Lista czekających i zatwierdzonych jest w kolejności
+  realizacji: najpierw Allegro po terminie wysyłki (dziś, jutro, pojutrze, później), potem zamówienia
+  bez terminu (sklep) od najstarszego; `?source=allegro` albo `?source=shop` zawęża do źródła. Każde
+  zamówienie ma `label` (nick z Allegro albo krótki numer ze sklepu), `source_kind` (`allegro`
+  albo `shop`), a pozycje miniaturę produktu (`has_thumbnail`, `thumbnail_version`). Zamówienie w
+  produkcji ma `progress`: części produktu gotowe z potrzebnych (z tego `on_hand` z półki) i
+  `estimated_ready_at`. `GET /base-sync/orders/counts` zwraca liczby zamówień w każdym stanie, osobno
+  z Allegro i ze sklepu.
+- **Szkic** na zamówieniu czekającym: `POST /base-sync/orders/{order_id}/draft` z tym samym ciałem
+  co `accept` zapisuje wybór („mam już dół”) bez wysyłania do druku: nic nie trafia do stanu ani
+  do kolejki. Zamówienie pokazuje go jako `draft`, a `accept` bez treści wysyła go i czyści.
+- **Dla kogo drukujemy**: `GET /products/order-tags` mówi, dla których zamówień są czekające i
+  drukowane zadania planera (`items`: id zadania kolejki → `{orders, for_stock}`, `printers`: id
+  drukarki → to samo dla tego, co drukuje teraz), z etykietą, tytułem na najechanie (numer z Base),
+  źródłem i terminem; `for_stock`, gdy płyta nie jest dla żadnego zamówienia. Stan idzie
+  do zamówień najpierw, potem zadania w kolejności druku, najbliższy termin pierwszy; jedna płyta
+  bywa dla kilku zamówień. Dopóki zamówienie jest w którymś z tych statusów, zmiany pozycji w Base (ilość,
   nowa pozycja, dopisane SKU) idą za nim. Zamówienie przestawione w Base dalej (np. „W produkcji”)
   zachowuje swoje druki; to w statusie anulowanych (`cancel_status_id`) anuluje otwarte zamówienia
   produktów.

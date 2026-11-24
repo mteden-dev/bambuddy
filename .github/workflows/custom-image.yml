@@ -133,6 +133,7 @@ jobs:
             src/__tests__/components/ProductsView.test.tsx \
             src/__tests__/components/BaseOrdersView.test.tsx \
             src/__tests__/components/ProductQc.test.tsx \
+            src/__tests__/components/OrderLabelChip.test.tsx \
             src/__tests__/pages/ProductsPage.test.tsx \
             src/__tests__/components/Layout.test.tsx \
             src/__tests__/pages/SettingsPage.test.tsx

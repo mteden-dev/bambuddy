@@ -349,6 +349,130 @@ async def complete_ready_orders(db: AsyncSession, product: Product, pool: planne
     return completed
 
 
+# --- which orders a job prints for ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OrderTag:
+    """An order a job prints for, as a label: an Allegro nick or a shop number, the Base id on hover."""
+
+    product_order_id: int
+    label: str
+    title: str
+    base_order_id: int | None = None
+    # "allegro" or "shop" for a Base order, None for one entered by hand.
+    source_kind: str | None = None
+    ship_by: datetime | None = None
+    due: datetime | None = None
+
+
+async def _order_tag_lookup(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, OrderTag]:
+    from backend.app.models.base_sync import BaseOrder
+    from backend.app.services.base_sync import EXTERNAL_SOURCE, order_label
+
+    base_ids = {}
+    for order in orders:
+        if order.external_source == EXTERNAL_SOURCE and order.external_ref:
+            try:
+                base_ids[order.id] = int(order.external_ref.split("/", 1)[0])
+            except ValueError:
+                pass
+    rows = {}
+    if base_ids:
+        found = await db.execute(select(BaseOrder).where(BaseOrder.order_id.in_(set(base_ids.values()))))
+        rows = {row.order_id: row for row in found.scalars()}
+    tags = {}
+    for order in orders:
+        base = rows.get(base_ids.get(order.id, -1))
+        if base is not None:
+            where = base.source_name or base.source or "Base"
+            title = f"Base {base.order_id} · {where}"
+            if base.number and order_label(base) != f"#{base.number}":
+                title += f" · #{base.number}"
+            tags[order.id] = OrderTag(
+                order.id,
+                order_label(base),
+                title,
+                base.order_id,
+                "allegro" if base.source == "allegro" else "shop",
+                base.ship_by,
+                order.due_date,
+            )
+        else:
+            text = (order.notes or "").strip()
+            tags[order.id] = OrderTag(order.id, text[:24] or f"#{order.id}", text or f"#{order.id}", due=order.due_date)
+    return tags
+
+
+@dataclass
+class JobOrders:
+    """The orders a job prints for; ``for_stock`` when its pieces go to none."""
+
+    orders: list[OrderTag] = field(default_factory=list)
+    for_stock: bool = False
+
+
+async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, JobOrders]]:
+    """Which open orders each waiting or printing job prints for: by queue job, and by printer printing.
+
+    The pieces in stock go to the orders first (as when orders close), then
+    the jobs' pieces in the order they print (the one printing, then the
+    queue), each to the orders still short of that part, soonest due first.
+    One plate may print for several orders; a job printing only for stock is
+    ``for_stock``.
+    """
+    jobs = list((await db.execute(select(ProductJob).where(ProductJob.status.in_(JOB_ACTIVE)))).scalars())
+    by_item: dict[int, JobOrders] = {}
+    by_printer: dict[int, JobOrders] = {}
+    if not jobs:
+        return by_item, by_printer
+    item_ids = [j.queue_item_id for j in jobs if j.queue_item_id is not None]
+    positions = {}
+    if item_ids:
+        rows = await db.execute(
+            select(PrintQueueItem.id, PrintQueueItem.position).where(PrintQueueItem.id.in_(item_ids))
+        )
+        positions = dict(rows.all())
+    for product_id in sorted({j.product_id for j in jobs}):
+        product = await load_product(db, product_id)
+        orders = await open_orders(db, product_id)
+        if product is None:
+            continue
+        specs = part_specs(product)
+        part_ids = {p.id for p in specs}
+        allocation = planner.allocate(specs, await stock_pool(db, product), needs_of(orders))
+        short = {
+            o.id: {p.id: o.quantity * p.per_unit - allocation.pieces.get(o.id, {}).get(p.id, 0) for p in specs}
+            for o in orders
+        }
+        tags = await _order_tag_lookup(db, orders)
+        own = sorted(
+            (j for j in jobs if j.product_id == product_id),
+            key=lambda j: (j.status != "printing", positions.get(j.queue_item_id, 10**9), j.id),
+        )
+        for job in own:
+            served: list[OrderTag] = []
+            for part_id, n in job_pieces(job, part_ids):
+                left = n
+                for order in orders:
+                    if left <= 0:
+                        break
+                    take = min(left, short[order.id].get(part_id, 0))
+                    if take > 0:
+                        short[order.id][part_id] -= take
+                        left -= take
+                        if tags[order.id] not in served:
+                            served.append(tags[order.id])
+            entry = JobOrders(served, for_stock=not served)
+            if job.queue_item_id is not None:
+                by_item[job.queue_item_id] = entry
+            if job.status == "printing" and job.printer_id is not None:
+                printing = by_printer.setdefault(job.printer_id, JobOrders())
+                printing.orders.extend(t for t in served if t not in printing.orders)
+                printing.for_stock = not printing.orders
+    return by_item, by_printer
+
+
 # --- checking finished pieces -------------------------------------------------------
 
 # A finished job waits this long on the list to be checked; after it, its
@@ -862,14 +986,15 @@ async def announce_planned(item_ids: list[int]) -> None:
 
 
 async def order_estimates(
-    db: AsyncSession, product: Product, pool: planner.Pool, orders: list[ProductOrder]
+    db: AsyncSession, product: Product, pool: planner.Pool, orders: list[ProductOrder], forecast=None
 ) -> dict[int, datetime | None]:
-    """When each open order is expected to be ready, from the queue forecast."""
+    """When each open order is expected to be ready, from the queue forecast (built when not given)."""
     if not orders:
         return {}
     from backend.app.services.queue_forecast import build_queue_forecast
 
-    forecast = await build_queue_forecast(db)
+    if forecast is None:
+        forecast = await build_queue_forecast(db)
     now = forecast.generated_at
     ready_after = forecast.turnaround.as_function() if forecast.turnaround is not None else None
     placed = {p.item_id: p for p in forecast.placements}
@@ -1049,6 +1174,14 @@ def thumbnail_file(product: Product) -> Path | None:
             if path is not None and path.is_file():
                 return path
     return None
+
+
+def thumbnail_version(product: Product) -> str | None:
+    """Changes with the picture a product shows (for caches); None without one."""
+    if product.thumbnail_path:
+        return product.thumbnail_path.rsplit("/", 1)[-1].removesuffix(".png")
+    first = next((p for p in product.plates if plate_usable(p) and p.library_file.thumbnail_path), None)
+    return f"plate-{first.library_file_id}" if first is not None else None
 
 
 def has_thumbnail(product: Product) -> bool:

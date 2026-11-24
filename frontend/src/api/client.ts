@@ -4718,11 +4718,17 @@ export interface BaseOrderLine {
   product_id: number | null;
   product_name: string | null;
   units: number;
+  /** The product's picture: getProductThumbnailUrl(product_id, thumbnail_version). */
+  has_thumbnail: boolean;
+  thumbnail_version: string | null;
 }
 
 export interface BaseOrder {
   order_id: number;
   number: string | null;
+  /** What its prints are labelled with: an Allegro nick, else the shop's number. */
+  label: string;
+  buyer_login: string | null;
   source: string | null;
   source_name: string | null;
   date_confirmed: string | null;
@@ -4737,7 +4743,25 @@ export interface BaseOrder {
   held: Record<string, number>;
   /** Part id -> pieces on hand put into stock for this order. */
   on_hand: Record<string, number>;
+  /** "allegro" for every Allegro account, "shop" for the rest. */
+  source_kind: 'allegro' | 'shop';
+  /** A waiting order's saved choice (nothing in stock or the queue yet), applied when it is sent. */
+  draft: { held: Record<string, number>; on_hand: Record<string, number> } | null;
+  /** In production: each product's parts there of the ones needed, and when it is expected. */
+  progress: BaseOrderProgress[];
 }
+
+export interface BaseOrderProgress {
+  product_id: number;
+  product_order_id: number;
+  status: string;
+  units: number;
+  units_ready: number;
+  estimated_ready_at: string | null;
+  parts: { part_id: number; name: string; ready: number; needed: number; on_hand: number }[];
+}
+
+export type BaseOrderCounts = Record<string, { allegro: number; shop: number }>;
 
 /** Fork (Base sync): what to print of one product when sending an order. */
 export interface BaseOrderAcceptProduct {
@@ -4767,6 +4791,32 @@ export interface ProductQcCheckResult {
   job: ProductQcJob;
   replanned: boolean;
   reopened_orders: number[];
+}
+
+/** Fork (products): an order a planner job prints for. */
+export interface ProductOrderTag {
+  product_order_id: number;
+  /** An Allegro nick, else the shop's order number. */
+  label: string;
+  /** For the hover: the Base order id and where it came from. */
+  title: string;
+  base_order_id: number | null;
+  source_kind: 'allegro' | 'shop' | null;
+  ship_by: string | null;
+  due: string | null;
+}
+
+export interface ProductJobOrders {
+  orders: ProductOrderTag[];
+  /** Its pieces go to no open order: it prints for stock. */
+  for_stock: boolean;
+}
+
+export interface ProductOrderTags {
+  /** Queue job id -> the orders it prints for. */
+  items: Record<string, ProductJobOrders>;
+  /** Printer id -> the orders of what it prints now. */
+  printers: Record<string, ProductJobOrders>;
 }
 
 export interface BaseSkus {
@@ -7949,8 +7999,14 @@ export const api = {
   testBaseConnection: (apiToken?: string) =>
     request<BaseConnectionInfo>('/base-sync/test', { method: 'POST', body: JSON.stringify({ api_token: apiToken || null }) }),
   runBaseSync: () => request<BaseSyncResult>('/base-sync/sync', { method: 'POST' }),
-  getBaseOrders: (state?: string) =>
-    request<BaseOrder[]>(`/base-sync/orders${state ? `?state=${encodeURIComponent(state)}` : ''}`),
+  getBaseOrders: (state?: string, source?: 'allegro' | 'shop') => {
+    const params = new URLSearchParams();
+    if (state) params.set('state', state);
+    if (source) params.set('source', source);
+    const query = params.toString();
+    return request<BaseOrder[]>(`/base-sync/orders${query ? `?${query}` : ''}`);
+  },
+  getProductOrderTags: () => request<ProductOrderTags>('/products/order-tags'),
   /** Without products every mapped line is printed in full. */
   acceptBaseOrder: (orderId: number, data?: { products: BaseOrderAcceptProduct[] }) =>
     request<BaseOrder>(`/base-sync/orders/${orderId}/accept`, {
@@ -7960,6 +8016,10 @@ export const api = {
   skipBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/skip`, { method: 'POST' }),
   /** Undo sending or skipping: the order waits again. */
   resetBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/reset`, { method: 'POST' }),
+  /** Save a choice on a waiting order without sending it ("I have the base"). */
+  saveBaseOrderDraft: (orderId: number, data: { products: BaseOrderAcceptProduct[] }) =>
+    request<BaseOrder>(`/base-sync/orders/${orderId}/draft`, { method: 'POST', body: JSON.stringify(data) }),
+  getBaseOrderCounts: () => request<BaseOrderCounts>('/base-sync/orders/counts'),
   getBaseSkus: () => request<BaseSkus>('/base-sync/skus'),
   mapBaseSku: (sku: string, data: { product_id: number | null; units?: number }) =>
     request<BaseSkus['mapped'][number]>(`/base-sync/skus/${encodeURIComponent(sku)}`, {

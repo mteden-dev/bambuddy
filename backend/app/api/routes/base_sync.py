@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from backend.app.core.auth import RequirePermissionIfAuthEnabled, require_ownership_permission
 from backend.app.core.database import get_db
@@ -196,6 +198,9 @@ class OrderLineOut(BaseModel):
     product_id: int | None = None
     product_name: str | None = None
     units: int = 1
+    # The product's picture: GET /products/{id}/thumbnail?v=<version>.
+    has_thumbnail: bool = False
+    thumbnail_version: str | None = None
 
 
 class ProductOrderRef(BaseModel):
@@ -205,10 +210,41 @@ class ProductOrderRef(BaseModel):
     status: str
 
 
+class PartProgress(BaseModel):
+    part_id: int
+    name: str
+    # Pieces there for the order now (stock, printed), of the ones it needs.
+    ready: int
+    needed: int
+    # Of them, put in as on hand for this order (from the shelf).
+    on_hand: int = 0
+
+
+class ProductProgress(BaseModel):
+    product_id: int
+    product_order_id: int
+    status: str
+    units: int
+    units_ready: int
+    estimated_ready_at: UTCDatetime = None
+    parts: list[PartProgress]
+
+
+class DraftOut(BaseModel):
+    # product id -> products held back; part id -> pieces on hand (saved, not applied yet).
+    held: dict[int, int]
+    on_hand: dict[int, int]
+
+
 class BaseOrderOut(BaseModel):
     order_id: int
     number: str | None
+    # What its prints are labelled with: an Allegro nick, else the shop's number.
+    label: str
+    buyer_login: str | None = None
     source: str | None
+    # "allegro" for every Allegro account, "shop" for the rest.
+    source_kind: str
     source_name: str | None
     date_confirmed: UTCDatetime = None
     # The marketplace's ship-by deadline: the product orders' due date.
@@ -221,14 +257,33 @@ class BaseOrderOut(BaseModel):
     held: dict[int, int] = Field(default_factory=dict)
     # part id -> pieces on hand put into stock for this order.
     on_hand: dict[int, int] = Field(default_factory=dict)
+    # A waiting order's saved choice, applied when it is sent.
+    draft: DraftOut | None = None
+    # An order in production: its products' parts there of the ones needed, and when it is expected.
+    progress: list[ProductProgress] = Field(default_factory=list)
     # Every product order is done: the order can be packed.
     ready: bool = False
 
 
 async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrderOut]:
+    from backend.app.models.products import ProductPlate
+    from backend.app.services import products as product_service
+
     skus = await svc.sku_map(db)
-    names = dict((await db.execute(select(Product.id, Product.name))).all())
+    wanted_ids = {t.product_id for t in skus.values() if t.product_id is not None}
+    products = {
+        p.id: p
+        for p in (
+            await db.execute(
+                select(Product)
+                .where(Product.id.in_(wanted_ids))
+                .options(selectinload(Product.plates).selectinload(ProductPlate.library_file))
+            )
+        ).scalars()
+    }
+    names = {pid: p.name for pid, p in products.items()}
     refs: dict[int, list[ProductOrderRef]] = {}
+    product_orders: dict[int, list[ProductOrder]] = {}
     if rows:
         found = (
             await db.execute(select(ProductOrder).where(ProductOrder.external_source == svc.EXTERNAL_SOURCE))
@@ -243,6 +298,10 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                 refs.setdefault(order_id, []).append(
                     ProductOrderRef(id=po.id, product_id=po.product_id, quantity=po.quantity, status=po.status)
                 )
+                product_orders.setdefault(order_id, []).append(po)
+    progress = await _progress(
+        db, [po for row in rows if row.state == "accepted" for po in product_orders.get(row.order_id, [])]
+    )
     result = []
     for row in rows:
         lines = []
@@ -264,14 +323,32 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                     product_id=product_id,
                     product_name=names.get(product_id) if product_id else None,
                     units=units,
+                    has_thumbnail=bool(product_id in products and product_service.has_thumbnail(products[product_id])),
+                    thumbnail_version=(
+                        product_service.thumbnail_version(products[product_id]) if product_id in products else None
+                    ),
                 )
             )
         own = refs.get(row.order_id, [])
         live = [r for r in own if r.status != "cancelled"]
+        on_hand = svc.on_hand_parts(row)
+        draft_held, draft_on_hand = svc.draft_parts(row)
+        row_progress = []
+        for po in product_orders.get(row.order_id, []):
+            entry = progress.get(po.id)
+            if entry is not None:
+                for part in entry.parts:
+                    part.on_hand = min(part.needed, on_hand.get(part.part_id, 0))
+                row_progress.append(entry)
         result.append(
             BaseOrderOut(
                 order_id=row.order_id,
                 number=row.number,
+                label=svc.order_label(row),
+                buyer_login=row.buyer_login,
+                source_kind="allegro" if row.source == "allegro" else "shop",
+                draft=DraftOut(held=draft_held, on_hand=draft_on_hand) if row.draft else None,
+                progress=row_progress,
                 source=row.source,
                 source_name=row.source_name,
                 date_confirmed=row.date_confirmed,
@@ -288,24 +365,95 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
     return result
 
 
+async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, ProductProgress]:
+    """Product order id -> its parts there of the ones it needs, and when it is expected (open ones)."""
+    from backend.app.services import product_planner as planner, products as product_service
+    from backend.app.services.queue_forecast import build_queue_forecast
+
+    result: dict[int, ProductProgress] = {}
+    live = [po for po in orders if po.status in ("open", "done")]
+    forecast = None
+    for product_id in sorted({po.product_id for po in live}):
+        product = await product_service.load_product(db, product_id)
+        if product is None:
+            continue
+        specs = product_service.part_specs(product)
+        names = {p.id: p.name for p in product.parts}
+        open_rows = await product_service.open_orders(db, product_id)
+        pool = await product_service.stock_pool(db, product)
+        allocation = planner.allocate(specs, pool, product_service.needs_of(open_rows))
+        estimates = {}
+        if open_rows:
+            if forecast is None:
+                forecast = await build_queue_forecast(db)
+            estimates = await product_service.order_estimates(db, product, pool, open_rows, forecast)
+        for po in (po for po in live if po.product_id == product_id):
+            done = po.status == "done"
+            parts = [
+                PartProgress(
+                    part_id=spec.id,
+                    name=names.get(spec.id, ""),
+                    ready=(
+                        po.quantity * spec.per_unit
+                        if done
+                        else min(allocation.pieces.get(po.id, {}).get(spec.id, 0), po.quantity * spec.per_unit)
+                    ),
+                    needed=po.quantity * spec.per_unit,
+                )
+                for spec in specs
+            ]
+            result[po.id] = ProductProgress(
+                product_id=product_id,
+                product_order_id=po.id,
+                status=po.status,
+                units=po.quantity,
+                units_ready=po.quantity if done else allocation.units.get(po.id, 0),
+                estimated_ready_at=None if done else _utc(estimates.get(po.id)),
+                parts=parts,
+            )
+    return result
+
+
+@router.get("/orders/counts")
+async def order_counts(db: AsyncSession = Depends(get_db, scope="function"), _=ReadAccess) -> dict:
+    """How many orders each state has, from Allegro and from the rest (for the filters)."""
+    counts = {state: {"allegro": 0, "shop": 0} for state in ("new", "accepted", "skipped", "cancelled")}
+    rows = await db.execute(
+        select(BaseOrder.state, BaseOrder.source, func.count()).group_by(BaseOrder.state, BaseOrder.source)
+    )
+    for state, source, n in rows.all():
+        counts.setdefault(state, {"allegro": 0, "shop": 0})["allegro" if source == "allegro" else "shop"] += n
+    return counts
+
+
 @router.get("/orders", response_model=list[BaseOrderOut])
 async def list_orders(
     state: str | None = None,
+    source: Literal["allegro", "shop"] | None = None,
     db: AsyncSession = Depends(get_db, scope="function"),
     _=ReadAccess,
 ):
-    """Orders the sync found; ``state`` filters (new, accepted, skipped, cancelled).
+    """Orders the sync found; ``state`` filters (new, accepted, skipped, cancelled), ``source``
+    too (``allegro``: every Allegro account; ``shop``: every other source).
 
-    Waiting and accepted ones come by ship-by deadline (soonest first, those
-    without one last), the rest newest first.
+    Waiting and accepted ones come in the order they are to be made: by ship-by
+    deadline (today and tomorrow first, then the day after, then later), then
+    the ones without one (a shop's) oldest first. The rest newest first.
     """
-    newest = (BaseOrder.date_confirmed.desc().nulls_last(), BaseOrder.order_id.desc())
     if state in ("new", "accepted"):
-        query = select(BaseOrder).order_by(BaseOrder.ship_by.asc().nulls_last(), *newest)
+        query = select(BaseOrder).order_by(
+            BaseOrder.ship_by.asc().nulls_last(),
+            BaseOrder.date_confirmed.asc().nulls_last(),
+            BaseOrder.order_id.asc(),
+        )
     else:
-        query = select(BaseOrder).order_by(*newest)
+        query = select(BaseOrder).order_by(BaseOrder.date_confirmed.desc().nulls_last(), BaseOrder.order_id.desc())
     if state:
         query = query.where(BaseOrder.state == state)
+    if source == "allegro":
+        query = query.where(BaseOrder.source == "allegro")
+    elif source == "shop":
+        query = query.where(or_(BaseOrder.source.is_(None), BaseOrder.source != "allegro"))
     rows = list((await db.execute(query.limit(300))).scalars())
     return await _orders_out(db, rows)
 
@@ -369,6 +517,37 @@ async def accept_order(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await _replan(db, changed)
+    await db.commit()
+    return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+
+
+@router.post("/orders/{order_id}/draft", response_model=BaseOrderOut)
+async def save_draft(
+    order_id: int,
+    data: AcceptIn,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+):
+    """Save a choice on a waiting order without sending it ("I have the base already"): nothing goes
+    into stock or the queue. Per product, ``units`` to print and ``have`` the parts on hand, as for
+    ``accept``; they replace the saved ones for those products. Sending the order applies them.
+    """
+    row = await _get_order(db, order_id)
+    if row.state not in ("new", "skipped"):
+        raise HTTPException(409, "Only a waiting order keeps a draft; change an accepted one with accept")
+    if data.products is None:
+        raise HTTPException(400, "Say what to keep: products")
+    try:
+        await svc.save_draft(
+            db,
+            row,
+            [
+                svc.ProductChoice(p.product_id, p.units, {h.part_id: h.pieces for h in p.have if h.pieces > 0})
+                for p in data.products
+            ],
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     await db.commit()
     return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
 

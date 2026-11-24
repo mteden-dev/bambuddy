@@ -213,6 +213,7 @@ import { NumberInput } from '../components/NumberInput';
 import { getCurrencySymbol } from '../utils/currency';
 import { useUiSettings } from '../hooks/useUiSettings';
 import { usePlateClearQc } from '../hooks/usePlateClearQc';
+import { OrderLabelChip } from '../components/OrderLabelChip';
 import { isSlicedLibraryFile, mayBeSlicedFileName } from '../utils/libraryFiles';
 import { PrinterTagChips, PrinterTagPicker } from '../components/PrinterTagPicker';
 import { printerTagsQueryKey, usePrinterTags } from '../utils/printerTags';
@@ -4551,6 +4552,12 @@ function PrinterCard({
                           {status.layer_num}/{status.total_layers}
                         </span>
                       )}
+                      {/* Fork (products): the order(s) this print is for; cut off first. */}
+                      {hasCompactEta && (
+                        <span className="flex min-w-0 shrink overflow-hidden">
+                          <OrderLabelChip printerId={printer.id} />
+                        </span>
+                      )}
                     </div>
                   </>
                 );
@@ -4678,6 +4685,10 @@ function PrinterCard({
                                     {currentPrintUser}
                                   </span>
                                 )}
+                                {/* Fork (products): the order(s) this print is for. */}
+                                <span className="flex min-w-0 shrink">
+                                  <OrderLabelChip printerId={printer.id} />
+                                </span>
                               </>
                             ) : lastPrint ? (
                               <p className="truncate" title={lastPrint.print_name || lastPrint.filename}>

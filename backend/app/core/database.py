@@ -6160,6 +6160,10 @@ async def _run_migrations(conn):
     # Fork (Base sync): products of an order not printed for it, chosen line by line.
     await _safe_execute(conn, "ALTER TABLE custom_base_orders ADD COLUMN held JSON")
     await _safe_execute(conn, "ALTER TABLE custom_base_orders ADD COLUMN on_hand JSON")
+    # Fork (Base sync): the buyer's marketplace login, the label on an order's prints.
+    await _safe_execute(conn, "ALTER TABLE custom_base_orders ADD COLUMN buyer_login VARCHAR(100)")
+    # Fork (Base sync): a choice saved on a waiting order before it is sent.
+    await _safe_execute(conn, "ALTER TABLE custom_base_orders ADD COLUMN draft JSON")
     # Fork (products): someone checked a finished job's pieces, and the bad ones.
     await _safe_execute(
         conn,
