@@ -12,6 +12,12 @@ export function wantedUnits(order: BaseOrder): Map<number, number> {
   return wanted;
 }
 
+/** What sending a waiting order does: print it all, print what the shelf leaves, or nothing to print. */
+export function sendLabel(order: BaseOrder): string {
+  if (order.draft?.nothing_to_print) return 'baseSync.markReady';
+  return order.draft ? 'baseSync.printRest' : 'baseSync.print';
+}
+
 /** Whole local days from today to a date (negative: past); null without one. */
 export function daysUntil(iso: string | null | undefined, now: Date = new Date()): number | null {
   const date = parseUTCDate(iso ?? null);

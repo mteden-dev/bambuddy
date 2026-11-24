@@ -234,6 +234,8 @@ class DraftOut(BaseModel):
     # product id -> products held back; part id -> pieces on hand (saved, not applied yet).
     held: dict[int, int]
     on_hand: dict[int, int]
+    # The choice leaves nothing to print: every product held back or all its parts on hand.
+    nothing_to_print: bool = False
 
 
 class BaseOrderOut(BaseModel):
@@ -277,7 +279,10 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
             await db.execute(
                 select(Product)
                 .where(Product.id.in_(wanted_ids))
-                .options(selectinload(Product.plates).selectinload(ProductPlate.library_file))
+                .options(
+                    selectinload(Product.plates).selectinload(ProductPlate.library_file),
+                    selectinload(Product.parts),
+                )
             )
         ).scalars()
     }
@@ -333,6 +338,7 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
         live = [r for r in own if r.status != "cancelled"]
         on_hand = svc.on_hand_parts(row)
         draft_held, draft_on_hand = svc.draft_parts(row)
+        wanted = {pid: n for pid, n in svc.wanted_products(row.items or [], skus).items() if pid in products}
         row_progress = []
         for po in product_orders.get(row.order_id, []):
             entry = progress.get(po.id)
@@ -347,7 +353,15 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                 label=svc.order_label(row),
                 buyer_login=row.buyer_login,
                 source_kind="allegro" if row.source == "allegro" else "shop",
-                draft=DraftOut(held=draft_held, on_hand=draft_on_hand) if row.draft else None,
+                draft=(
+                    DraftOut(
+                        held=draft_held,
+                        on_hand=draft_on_hand,
+                        nothing_to_print=_nothing_to_print(wanted, draft_held, draft_on_hand, products),
+                    )
+                    if row.draft
+                    else None
+                ),
                 progress=row_progress,
                 source=row.source,
                 source_name=row.source_name,
@@ -359,10 +373,42 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                 product_orders=own,
                 held=svc.held_products(row),
                 on_hand=svc.on_hand_parts(row),
-                ready=row.state == "accepted" and bool(live) and all(r.status == "done" for r in live),
+                ready=_ready(row, wanted, live),
             )
         )
     return result
+
+
+def _nothing_to_print(
+    wanted: dict[int, int], held: dict[int, int], on_hand: dict[int, int], products: dict[int, Product]
+) -> bool:
+    """A choice leaves nothing to print: each product is held back or has every part on hand."""
+    from backend.app.services import products as product_service
+
+    if not wanted:
+        return False
+    for product_id, units in wanted.items():
+        units -= held.get(product_id, 0)
+        if units <= 0:
+            continue
+        for spec in product_service.part_specs(products[product_id]):
+            if on_hand.get(spec.id, 0) < units * spec.per_unit:
+                return False
+    return True
+
+
+def _ready(row: BaseOrder, wanted: dict[int, int], live: list[ProductOrderRef]) -> bool:
+    """An accepted order can be packed: every product printed for it is done, the rest held back.
+
+    Holding back every product leaves it no product order, and it is ready all the same.
+    """
+    if row.state != "accepted" or not (live or wanted):
+        return False
+    if any(r.status != "done" for r in live):
+        return False
+    held = svc.held_products(row)
+    done = {r.product_id for r in live}
+    return all(product_id in done for product_id, n in wanted.items() if n - held.get(product_id, 0) > 0)
 
 
 async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, ProductProgress]:

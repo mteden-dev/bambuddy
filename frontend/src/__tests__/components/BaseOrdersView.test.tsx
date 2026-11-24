@@ -116,6 +116,7 @@ let orders: BaseOrder[];
 let listUrls: string[];
 let accepted: { id: number; body: unknown }[];
 let drafts: { id: number; body: unknown }[];
+let acceptReply: BaseOrder;
 let resets: number[];
 let skipped: number[];
 let mapped: { sku: string; body: unknown }[];
@@ -132,6 +133,7 @@ beforeEach(() => {
   listUrls = [];
   accepted = [];
   drafts = [];
+  acceptReply = { ...ORDER, state: 'accepted' };
   resets = [];
   skipped = [];
   mapped = [];
@@ -169,7 +171,7 @@ beforeEach(() => {
     http.post('/api/v1/base-sync/orders/:id/accept', async ({ params, request }) => {
       const text = await request.text();
       accepted.push({ id: Number(params.id), body: text ? JSON.parse(text) : null });
-      return HttpResponse.json({ ...ORDER, state: 'accepted' });
+      return HttpResponse.json(acceptReply);
     }),
     http.post('/api/v1/base-sync/orders/:id/draft', async ({ params, request }) => {
       drafts.push({ id: Number(params.id), body: await request.json() });
@@ -248,9 +250,12 @@ describe('BaseOrdersView', () => {
     render(<BaseOrdersView hasPermission={allowAll} />);
     await user.click(await screen.findByRole('button', { name: 'Parts' }));
     const base = await screen.findByRole('radiogroup', { name: 'Extra Base of 9mm 100 Black on hand' });
-    // The shelf count is the opposite of printing: its picked 0 is not the green "print" fill.
+    // What is there is the opposite of printing: its picked 0 is not the green "print" fill.
     expect(within(base).getByRole('radio', { name: '0' })).not.toHaveClass('bg-bambu-green');
+    expect(screen.getByText('9mm 100 Black: 2 to print')).toBeInTheDocument();
     expect(screen.getByText('Base: 2 to print')).toBeInTheDocument();
+    // Bambuddy's own stock is said only where there is some.
+    expect(screen.getAllByText(/in stock/)).toHaveLength(1);
     await user.click(within(base).getByRole('radio', { name: '1' }));
     expect(within(base).getByRole('radio', { name: '1' })).toHaveClass('bg-sky-600');
     // Each part says what is left to print.
@@ -263,18 +268,80 @@ describe('BaseOrdersView', () => {
       ]),
     );
     expect(accepted).toEqual([]);
-    expect(screen.getByText('To print: Lid 2, Base 1.')).toHaveTextContent(
-      'To print: Lid 2, Base 1. From the shelf: Base 1.',
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+  });
+
+  it('"I have the whole product" counts what is there, and the parts go away', async () => {
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Parts' }));
+    const whole = await screen.findByRole('radiogroup', { name: 'Finished 9mm 100 Black on hand' });
+    // Nothing is there yet: both are printed.
+    expect(within(whole).getByRole('radio', { name: '0' })).toBeChecked();
+    await user.click(within(whole).getByRole('radio', { name: '1' }));
+    // One is there: the parts are for the one that is left.
+    expect(screen.getByText('9mm 100 Black: 1 to print')).toBeInTheDocument();
+    expect(screen.getByText('Lid: 1 to print')).toBeInTheDocument();
+    await user.click(within(whole).getByRole('radio', { name: '2' }));
+    expect(screen.getByText('You have the finished product – nothing to print.')).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(drafts).toEqual([{ id: 5001, body: { products: [{ product_id: 4, units: 0, have: [] }] } }]),
+    );
+    // "Clear choices" prints everything again.
+    await user.click(screen.getByRole('button', { name: 'Clear choices' }));
+    expect(screen.getByText('Lid: 2 to print')).toBeInTheDocument();
+    await waitFor(() => expect(drafts).toHaveLength(2));
+    expect(drafts[1].body).toEqual({ products: [{ product_id: 4, units: 2, have: [] }] });
+  });
+
+  it('every part there says nothing is printed', async () => {
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Parts' }));
+    const base = await screen.findByRole('radiogroup', { name: 'Extra Base of 9mm 100 Black on hand' });
+    const lid = screen.getByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' });
+    await user.click(within(base).getByRole('radio', { name: '2' }));
+    await user.click(within(lid).getByRole('radio', { name: '2' }));
+    expect(screen.getByText('You have every part – nothing to print.')).toBeInTheDocument();
+  });
+
+  it('a big order steps the count and takes "all" in one tap', async () => {
+    orders = [{ ...ORDER, lines: [{ ...LINE, quantity: 10 }] }];
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Parts' }));
+    const base = await screen.findByRole('group', { name: 'Extra Base of 9mm 100 Black on hand' });
+    await user.click(within(base.parentElement as HTMLElement).getByRole('button', { name: 'all' }));
+    expect(screen.getByText('Base: 0 to print')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(drafts).toEqual([
+        { id: 5001, body: { products: [{ product_id: 4, units: 10, have: [{ part_id: 42, pieces: 10 }] }] } },
+      ]),
     );
   });
 
   it('a draft shows on the row and "Print the rest" sends it', async () => {
-    orders = [{ ...ORDER, draft: { held: {}, on_hand: { '42': 1 } } }];
+    orders = [{ ...ORDER, draft: { held: {}, on_hand: { '42': 1 }, nothing_to_print: false } }];
     const user = userEvent.setup();
     render(<BaseOrdersView hasPermission={allowAll} />);
     expect(await screen.findByText('Have: Base 1')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Print the rest' }));
     await waitFor(() => expect(accepted).toEqual([{ id: 5001, body: null }]));
+  });
+
+  it('a draft that leaves nothing to print marks the order ready instead', async () => {
+    orders = [{ ...ORDER, draft: { held: { '7': 1 }, on_hand: {}, nothing_to_print: true } }];
+    acceptReply = { ...ORDER, state: 'accepted', ready: true };
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await screen.findByText('nick_5001');
+    expect(screen.queryByRole('button', { name: 'Print the rest' })).not.toBeInTheDocument();
+    // The row says so before anything is opened.
+    expect(screen.getByText('Have everything – nothing to print')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Mark as ready' }));
+    await waitFor(() => expect(accepted).toEqual([{ id: 5001, body: null }]));
+    expect(await screen.findByText('The order is ready to pack.')).toBeInTheDocument();
   });
 
   it('an order in production shows its parts and changes apply at once', async () => {

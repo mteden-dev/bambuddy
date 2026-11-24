@@ -567,7 +567,10 @@ async def test_a_waiting_order_keeps_a_draft_until_it_is_sent(async_client: Asyn
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert (body["state"], body["draft"]) == ("new", {"held": {}, "on_hand": {str(base): 1}})
+    assert (body["state"], body["draft"]) == (
+        "new",
+        {"held": {}, "on_hand": {str(base): 1}, "nothing_to_print": False},
+    )
     assert list((await db_session.execute(select(ProductStockAdjustment))).scalars()) == []
     assert await _product_orders(db_session) == []
 
@@ -591,6 +594,61 @@ async def test_a_waiting_order_keeps_a_draft_until_it_is_sent(async_client: Asyn
         "/api/v1/base-sync/orders/5801/draft", json={"products": [{"product_id": shop.product_id, "units": 1}]}
     )
     assert response.status_code == 409
+
+
+async def test_an_order_held_back_in_full_is_ready_to_pack(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5811, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+
+    # "Print 0 of 1": the draft leaves nothing to print.
+    response = await async_client.post(
+        "/api/v1/base-sync/orders/5811/draft", json={"products": [{"product_id": shop.product_id, "units": 0}]}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["draft"]["nothing_to_print"] is True
+
+    # Sent, it has no product order and can be packed at once.
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5811/accept")
+    body = response.json()
+    assert (body["state"], body["held"], body["ready"]) == ("accepted", {str(shop.product_id): 1}, True)
+    assert await _product_orders(db_session) == []
+
+
+async def test_an_order_with_every_part_on_hand_is_ready_to_pack(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5812, [("SKU-BOX-100-B", 2)])]
+    await _sync(async_client, {shop.printer})
+    product = (await async_client.get(f"/api/v1/products/{shop.product_id}")).json()
+    parts = {p["name"]: p["id"] for p in product["parts"]}
+
+    # One part on the shelf still leaves the other to print.
+    response = await async_client.post(
+        "/api/v1/base-sync/orders/5812/draft",
+        json={
+            "products": [{"product_id": shop.product_id, "units": 2, "have": [{"part_id": parts["Lid"], "pieces": 2}]}]
+        },
+    )
+    assert response.json()["draft"]["nothing_to_print"] is False
+
+    # Both on the shelf: nothing to print.
+    have = [{"part_id": part_id, "pieces": 2} for part_id in parts.values()]
+    response = await async_client.post(
+        "/api/v1/base-sync/orders/5812/draft",
+        json={"products": [{"product_id": shop.product_id, "units": 2, "have": have}]},
+    )
+    assert response.json()["draft"]["nothing_to_print"] is True
+
+    # Sent, its product order is done from those pieces: it can be packed.
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5812/accept")
+    body = response.json()
+    assert (body["state"], body["ready"]) == ("accepted", True)
+    [po] = await _product_orders(db_session)
+    assert po.status == "done"
 
 
 async def test_order_counts_by_state_and_source(async_client: AsyncClient, db_session, shop, fake_base):

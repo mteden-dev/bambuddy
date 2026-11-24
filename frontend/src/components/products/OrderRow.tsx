@@ -8,7 +8,7 @@ import { Button } from '../Button';
 import { useUiSettings } from '../../hooks/useUiSettings';
 import { formatDateOnly, formatDateTime, formatRelativeTime, formatTimeOnly, parseUTCDate } from '../../utils/date';
 import type { TimeFormat } from '../../utils/date';
-import { shipKind, wantedUnits } from '../../utils/baseOrders';
+import { sendLabel, shipKind, wantedUnits } from '../../utils/baseOrders';
 import { OrderPartsPanel } from './OrderPartsPanel';
 
 const TOUCH = 'pointer-coarse:min-h-11!';
@@ -193,16 +193,31 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
       </div>
     );
   }
-  if (order.draft && Object.keys(order.draft.on_hand).length) {
+  if (order.draft?.nothing_to_print) {
     return (
-      <span className="text-xs text-amber-600 dark:text-amber-300">
-        {t('baseSync.haveDraft', {
-          list: Object.entries(order.draft.on_hand)
-            .map(([partId, n]) => `${partNames.get(Number(partId)) ?? `#${partId}`} ${n}`)
-            .join(', '),
-        })}
+      <span className="inline-flex items-center gap-1 text-xs text-sky-700 dark:text-sky-300">
+        <PackageCheck className="w-3.5 h-3.5 shrink-0" />
+        {t('baseSync.haveAll')}
       </span>
     );
+  }
+  if (order.draft) {
+    // Whole products first ("1× Box"), then loose parts ("Base 1").
+    const productName = (id: number) => {
+      const line = order.lines.find((l) => l.product_id === id);
+      return line?.product_name ?? line?.name ?? `#${id}`;
+    };
+    const have = [
+      ...Object.entries(order.draft.held)
+        .filter(([, n]) => n > 0)
+        .map(([productId, n]) => `${n}× ${productName(Number(productId))}`),
+      ...Object.entries(order.draft.on_hand).map(
+        ([partId, n]) => `${partNames.get(Number(partId)) ?? `#${partId}`} ${n}`,
+      ),
+    ];
+    if (have.length) {
+      return <span className="text-xs text-sky-700 dark:text-sky-300">{t('baseSync.haveDraft', { list: have.join(', ') })}</span>;
+    }
   }
   return null;
 }
@@ -318,8 +333,8 @@ export function OrderRow(props: OrderRowProps) {
             )}
             {waiting && (
               <Button size="sm" className={TOUCH} onClick={onPrint} disabled={busy}>
-                {busy && <Loader2 className="w-4 h-4 animate-spin" />}
-                {t(order.draft ? 'baseSync.printRest' : 'baseSync.print')}
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : order.draft?.nothing_to_print && <PackageCheck className="w-4 h-4" />}
+                {t(sendLabel(order))}
               </Button>
             )}
           </div>

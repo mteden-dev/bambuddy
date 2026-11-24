@@ -4763,7 +4763,8 @@ export interface BaseOrder {
   /** "allegro" for every Allegro account, "shop" for the rest. */
   source_kind: 'allegro' | 'shop';
   /** A waiting order's saved choice (nothing in stock or the queue yet), applied when it is sent. */
-  draft: { held: Record<string, number>; on_hand: Record<string, number> } | null;
+  // A waiting order's saved choice; nothing_to_print: every product held back or all its parts on hand.
+  draft: { held: Record<string, number>; on_hand: Record<string, number>; nothing_to_print: boolean } | null;
   /** In production: each product's parts there of the ones needed, and when it is expected. */
   progress: BaseOrderProgress[];
 }

@@ -158,13 +158,15 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
   const orderMutation = useMutation({
     mutationFn: ({ order, action }: { order: BaseOrder; action: 'accept' | 'skip' | 'withdraw' }) =>
       action === 'accept' ? api.acceptBaseOrder(order.order_id) : api.skipBaseOrder(order.order_id),
-    onSuccess: (_, { order, action }) => {
+    onSuccess: (sent, { order, action }) => {
       refresh();
       setWithdrawing(null);
       if (expanded === order.order_id && action !== 'accept') setExpanded(null);
       const message = t(
         action === 'accept'
-          ? 'baseSync.toast.accepted'
+          ? sent.ready
+            ? 'baseSync.toast.readyToPack'
+            : 'baseSync.toast.accepted'
           : action === 'withdraw'
             ? 'baseSync.toast.withdrawn'
             : 'baseSync.toast.skipped',
