@@ -115,6 +115,36 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     pyta też o slot AMS, którego ilości nikt nie liczy. Dwa filamenty pliku zmapowane na jeden slot
     są ważone razem. Tylko wbudowany magazyn (nie Spoolman). Logika: `services/slot_spools.py`,
     API `/slot-spools`,
+  - **produkty z części** (osobna pozycja **Produkty** w menu bocznym, pod kolejką; tu będzie
+    rosła synchronizacja zamówień): produkt to części z liczbą sztuk na
+    produkt (np. pudełko: góra, dół, tray) i płyty, czyli pocięte pliki z biblioteki, każdy dla
+    modelu ze swojego pliku i z liczbą sztuk każdej części (podpowiadaną z obiektów w 3MF i nazwy
+    pliku); płyta może drukować kilka części, np. cały zestaw 22lr. Części oznaczone „ta sama
+    drukarka” (góra i dół) drukują się dla jednego produktu na jednej drukarce, bo każda drukarka
+    trochę inaczej drukuje ściany. **Zamówienie** (ilość, opcjonalny termin) od razu planuje
+    wszystkie otwarte zamówienia produktu od nowa (`services/product_planner.py`): brakuje tego,
+    czego chcą zamówienia, minus stan, minus to, co się drukuje. Planer układa plan tak, jak
+    wykona go kolejka (grupa z najdłuższym czasem druku idzie na drukarkę, która najwcześniej
+    skończy paczkę w przeliczeniu na produkt; paczka ma do N produktów, z osobnym N dla części
+    parowanych i pozostałych na każdy model, i sprawdzane są wszystkie kombinacje), liczy każdy
+    wariant prognozą z godzinami obsady i bierze najtańszy: czas do odbioru każdego zamówienia
+    (koniec wydruku przesunięty do zdjęcia płyty), spóźnienie wobec terminu ×4, **koszt płyty**
+    w minutach (przycisk Planowanie, domyślnie 15) i nadwyżka (dozwolona, trafia na stan). Dwa
+    zamówienia złożone przed startem druku mogą więc dostać większe płyty, a wieczorem drukarka
+    bierze jedną większą płytę zamiast czekać do rana. Zadania planera to zwykłe zadania kolejki:
+    części parowane są przypięte do drukarki, pozostałe to „Dowolna <model>” z rezerwacją na
+    drukarce z planu; obowiązują tagi drukarek, drukarki użytkownika i ręczny start. Czekające
+    zadania planer zastępuje przy każdym przeliczeniu (nowe, zmienione lub anulowane zamówienie,
+    korekta stanu, „Przelicz plan”, nieudany wydruk, ale tylko taki, który ruszył, i najwyżej
+    3 razy na godzinę); rozpoczęte zostają i liczą się jako w drodze. **Stan części** jest liczony
+    na drukarkę (zakończone zadania + korekty − to, co zabrały zrealizowane zamówienia);
+    zamówienia biorą z niego po kolei (termin, potem kolejność), a zamówienie z kompletem części
+    samo się zamyka. Góra bez dołu (np. po nieudanym dole) nie przepada: brakujący dół idzie na
+    tę samą drukarkę. Widok pokazuje zamówienia z postępem i prognozą gotowości, zadania w
+    kolejce, stan części z korektą i braki, których nie ma w kolejce (np. ręcznie usunięte
+    zadanie). Zamówienia mają pola `external_source`/`external_ref` na przyszłe zamówienia ze
+    sklepu. Logika: `services/products.py`, API `/products`; zadania śledzi odświeżanie batchy w
+    `services/print_batch.py`,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,
@@ -127,13 +157,15 @@ wrócić na oficjalny obraz tej samej lub nowszej wersji. Poprawki dokładają d
 bazy wiersze w tabeli ustawień (`hidden_filament_presets`,
 `hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
 `slicer_inbox_manual_start`, `printer_tags`, `filament_check_per_slot`,
-`filament_check_margin_pct`, `queue_staffed_hours`), które oficjalna wersja po prostu pomija, i cztery własne tabele
-zakładane przez `create_all` bez migracji: `custom_queue_item_tags` (tagi ustawione zadaniu w
-oknie druku), `custom_queue_reservations` (rezerwacje z planu osi czasu),
-`custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”) i `custom_plate_clears`
-(momenty zdjęcia płyty, do nauki prognozy). Oficjalny obraz ich nie zna i
-nie czyta, więc powrót działa jak dotąd (zarezerwowane zadania wracają do „Dowolna”); wiersz
-zadania usuniętego w tym czasie jest pomijany. Dwa ustawienia kontroli filamentu fork zapisuje
+`filament_check_margin_pct`, `queue_staffed_hours`, `product_plate_cost_minutes`), które
+oficjalna wersja po prostu pomija, i własne tabele zakładane przez `create_all` bez migracji:
+`custom_queue_item_tags` (tagi ustawione zadaniu w oknie druku), `custom_queue_reservations`
+(rezerwacje z planu osi czasu), `custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”),
+`custom_plate_clears` (momenty zdjęcia płyty, do nauki prognozy) oraz tabele produktów
+`custom_products`, `custom_product_parts`, `custom_product_plates`, `custom_product_plate_parts`,
+`custom_product_orders`, `custom_product_jobs` i `custom_product_stock`. Oficjalny obraz ich nie
+zna i nie czyta, więc powrót działa jak dotąd (zarezerwowane zadania wracają do „Dowolna”, zadania
+planera zostają zwykłymi zadaniami kolejki); wiersz zadania usuniętego w tym czasie jest pomijany. Dwa ustawienia kontroli filamentu fork zapisuje
 przy starcie, jeśli ich nie ma (każdy slot osobno, 5 %); bez nich kontrola działa jak w
 upstream. Szpule slotów to zwykłe szpule magazynu i po powrocie zostają w nim (aktywne i
 zarchiwizowane). Pliki

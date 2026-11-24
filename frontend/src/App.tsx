@@ -26,6 +26,8 @@ const FinancePage = lazyPage(() => import('./pages/FinancePage'), 'FinancePage')
 const ProfilesPage = lazyPage(() => import('./pages/ProfilesPage'), 'ProfilesPage');
 const MaintenancePage = lazyPage(() => import('./pages/MaintenancePage'), 'MaintenancePage');
 const ProjectsPage = lazyPage(() => import('./pages/ProjectsPage'), 'ProjectsPage');
+// Fork: products made of parts and their orders.
+const ProductsPage = lazyPage(() => import('./pages/ProductsPage'), 'ProductsPage');
 const ProjectDetailPage = lazyPage(() => import('./pages/ProjectDetailPage'), 'ProjectDetailPage');
 const FileManagerPage = lazyPage(() => import('./pages/FileManagerPage'), 'FileManagerPage');
 const LibraryTrashPage = lazyPage(() => import('./pages/LibraryTrashPage'), 'LibraryTrashPage');
@@ -245,6 +247,7 @@ function App() {
                   <Route path="finance" element={<PermissionRoute permission="cost_centers:read_own"><FinancePage /></PermissionRoute>} />
                   <Route path="maintenance" element={<MaintenancePage />} />
                   <Route path="projects" element={<ProjectsPage />} />
+                  <Route path="products" element={<ProductsPage />} />
                   <Route path="projects/:id" element={<ProjectDetailPage />} />
                   <Route path="inventory" element={<InventoryPage />} />
                   <Route path="files" element={<FileManagerPage />} />

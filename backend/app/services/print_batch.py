@@ -436,6 +436,21 @@ async def backfill_batch_statuses(db: AsyncSession) -> int:
     return changed
 
 
+async def _follow_product_jobs(db: AsyncSession, queue_item_ids: list[int]) -> None:
+    """Fork: products follow the queue jobs their planner made (services/products.py).
+
+    Best-effort in a savepoint, like the batch refresh around it: a product's
+    bookkeeping must not be the reason a print's end, a cancel or a stop fails.
+    """
+    from backend.app.services.products import after_queue_items_changed
+
+    try:
+        async with db.begin_nested():
+            await after_queue_items_changed(db, queue_item_ids)
+    except Exception as e:
+        logger.warning("[PRODUCTS] Failed to follow queue items %s: %s", queue_item_ids, e)
+
+
 async def refresh_batches_for_items(db: AsyncSession, queue_item_ids: list[int]) -> None:
     """Re-evaluate every batch owning one of *queue_item_ids*, once each.
 
@@ -447,6 +462,7 @@ async def refresh_batches_for_items(db: AsyncSession, queue_item_ids: list[int])
     if not queue_item_ids:
         return
     await db.flush()
+    await _follow_product_jobs(db, queue_item_ids)
     batch_ids = (
         (
             await db.execute(
@@ -490,6 +506,7 @@ async def refresh_batch_status_for_item(db: AsyncSession, queue_item_id: int) ->
     complete the moment its last run lands, rather than whenever someone next
     opens the page.
     """
+    await _follow_product_jobs(db, [queue_item_id])
     batch_id = (
         await db.execute(select(PrintQueueItem.batch_id).where(PrintQueueItem.id == queue_item_id))
     ).scalar_one_or_none()

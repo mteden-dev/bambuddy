@@ -1,0 +1,214 @@
+"""The product planner: sharing stock between orders, choosing plates and printers (fork).
+
+See services/product_planner.py.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from backend.app.services.product_planner import (
+    Arrival,
+    OrderNeed,
+    PartSpec,
+    PlanInputs,
+    PlannerPrinter,
+    PlateOption,
+    allocate,
+    plan,
+    ready_times,
+)
+
+NOW = datetime(2026, 11, 24, 10, 0, tzinfo=timezone.utc)
+H = 3600
+LID, BASE, TRAY = 1, 2, 3
+BOX = [PartSpec(LID, 1, True), PartSpec(BASE, 1, True), PartSpec(TRAY, 1, False)]
+
+
+def _options(*, h2s: bool = True) -> list[PlateOption]:
+    """1/2/3 pieces per part on a P1S, 1/3/6 on an H2S (a little faster)."""
+    options = []
+    next_id = iter(range(1, 100))
+    for part in (LID, BASE, TRAY):
+        for n, hours in ((1, 2.0), (2, 3.67), (3, 5.2)):
+            options.append(PlateOption(next(next_id), "p1s", int(hours * H), ((part, n),)))
+        if h2s:
+            for n, hours in ((1, 1.8), (3, 4.6), (6, 8.5)):
+                options.append(PlateOption(next(next_id), "h2s", int(hours * H), ((part, n),)))
+    return options
+
+
+def _farm(now: datetime = NOW, *, h2s: bool = True) -> list[PlannerPrinter]:
+    printers = [PlannerPrinter(1, "p1s", now), PlannerPrinter(2, "p1s", now)]
+    if h2s:
+        printers.append(PlannerPrinter(3, "h2s", now))
+    return printers
+
+
+def _inputs(orders, **kw) -> PlanInputs:
+    h2s = kw.pop("h2s", True)
+    values = {
+        "now": NOW,
+        "parts": BOX,
+        "options": _options(h2s=h2s),
+        "printers": _farm(h2s=h2s),
+        "orders": orders,
+        "stock": {},
+    }
+    values.update(kw)
+    return PlanInputs(**values)
+
+
+def _staffed_7_to_19(end: datetime) -> datetime:
+    """Someone clears plates from 7:00 to 19:00, in 10 minutes."""
+    if 7 <= end.hour < 19:
+        return end + timedelta(minutes=10)
+    morning = end.replace(hour=7, minute=0, second=0, microsecond=0)
+    if end.hour >= 19:
+        morning += timedelta(days=1)
+    return morning + timedelta(minutes=10)
+
+
+# --- allocate ---------------------------------------------------------------------
+
+
+def test_a_product_takes_its_matched_parts_from_one_printer():
+    # A lid on printer 1 and a base on printer 2 do not make a box.
+    pool = {LID: {1: 1}, BASE: {2: 1}, TRAY: {1: 1}}
+    allocation = allocate(BOX, pool, [OrderNeed(10, 1)])
+    assert allocation.units == {10: 0}
+
+    pool[BASE][1] = 1
+    allocation = allocate(BOX, pool, [OrderNeed(10, 1)])
+    assert allocation.units == {10: 1}
+    assert allocation.taken[10] == {LID: {1: 1}, BASE: {1: 1}, TRAY: {1: 1}}
+
+
+def test_orders_share_the_stock_in_order_and_count_partial_pieces():
+    pool = {LID: {1: 3}, BASE: {1: 2}, TRAY: {2: 5}}
+    allocation = allocate(BOX, pool, [OrderNeed(10, 1), OrderNeed(11, 2)])
+    assert allocation.units == {10: 1, 11: 1}
+    # The third lid counts towards the second order's missing box.
+    assert allocation.pieces[11] == {LID: 2, BASE: 1, TRAY: 2}
+
+
+def test_ready_times_follow_the_arrivals():
+    later = NOW + timedelta(hours=2)
+    arrivals = [
+        Arrival(NOW, 1, ((LID, 1), (BASE, 1))),
+        Arrival(later, 2, ((TRAY, 1),)),
+    ]
+    assert ready_times(BOX, [OrderNeed(10, 1), OrderNeed(11, 1)], arrivals, NOW) == {10: later, 11: None}
+
+
+# --- plan ---------------------------------------------------------------------------
+
+
+def test_one_box_keeps_lid_and_base_on_one_printer_and_takes_the_fastest():
+    result = plan(_inputs([OrderNeed(10, 1)]))
+    matched = [p for p in result.plates if p.pinned]
+    assert {p.printer_id for p in matched} == {3}  # the H2S prints both faster than a P1S
+    assert sorted(p.option.pieces for p in matched) == [((LID, 1),), ((BASE, 1),)]
+    tray = [p for p in result.plates if not p.pinned]
+    assert len(tray) == 1 and tray[0].printer_id in (1, 2)
+    assert result.ready_at[10] == NOW + timedelta(hours=3.6)
+    assert result.short == {} and result.extra == {}
+
+
+def test_two_orders_spread_over_the_printers_in_the_day():
+    result = plan(_inputs([OrderNeed(10, 1), OrderNeed(11, 1)]))
+    # Each box's lid and base come from one printer, and the two boxes print at once.
+    by_printer: dict[int, list] = {}
+    for p in result.plates:
+        if p.pinned:
+            by_printer.setdefault(p.printer_id, []).append(p.option.pieces)
+    assert len(by_printer) == 2
+    for pieces in by_printer.values():
+        assert sorted(pieces) == [((LID, 1),), ((BASE, 1),)]
+    assert max(result.ready_at.values()) <= NOW + timedelta(hours=4)
+
+
+def test_a_high_plate_cost_merges_two_boxes_into_bigger_plates():
+    cheap = plan(_inputs([OrderNeed(10, 1), OrderNeed(11, 1)], plate_cost_s=0))
+    dear = plan(_inputs([OrderNeed(10, 1), OrderNeed(11, 1)], plate_cost_s=4 * H))
+    assert len(dear.plates) < len(cheap.plates)
+    assert any(n >= 2 for p in dear.plates for _, n in p.option.pieces)
+
+
+def test_overnight_a_printer_takes_one_bigger_plate_rather_than_waiting_for_the_morning():
+    evening = datetime(2026, 11, 24, 18, 0, tzinfo=timezone.utc)
+    result = plan(
+        _inputs(
+            [OrderNeed(10, 3)],
+            now=evening,
+            printers=_farm(evening),
+            ready_after=_staffed_7_to_19,
+            h2s=False,
+        )
+    )
+    # Nobody clears plates until 7:00: every printer gets one plate before then,
+    # and packing more pieces on it beats leaving them for the morning.
+    overnight = [p for p in result.plates if p.start < evening + timedelta(hours=13)]
+    assert len({p.printer_id for p in overnight}) == len(overnight)
+    assert any(n >= 2 for p in overnight for _, n in p.option.pieces)
+
+
+def test_a_leftover_lid_is_finished_on_its_own_printer():
+    # Printer 2 printed a lid whose base failed: one base there makes the box.
+    result = plan(_inputs([OrderNeed(10, 1)], stock={LID: {2: 1}}))
+    matched = [p for p in result.plates if p.pinned]
+    assert [(p.printer_id, p.option.pieces) for p in matched] == [(2, ((BASE, 1),))]
+
+
+def test_stock_from_an_earlier_overrun_is_used_before_printing():
+    stock = {LID: {1: 1}, BASE: {1: 1}, TRAY: {2: 1}}
+    result = plan(_inputs([OrderNeed(10, 1)], stock=stock))
+    assert result.plates == []
+    assert result.ready_at == {10: NOW}
+
+
+def test_pieces_printing_now_count_as_coming():
+    later = NOW + timedelta(hours=1)
+    arriving = [Arrival(later, 1, ((LID, 1), (BASE, 1), (TRAY, 1)))]
+    result = plan(_inputs([OrderNeed(10, 1)], arriving=arriving))
+    assert result.plates == []
+    assert result.ready_at == {10: later}
+
+
+def test_a_plate_with_several_parts_prints_a_whole_set():
+    combo = PlateOption(50, "h2s", int(3 * H), ((LID, 1), (BASE, 1), (TRAY, 1)))
+    result = plan(_inputs([OrderNeed(10, 1)], options=[combo], printers=[PlannerPrinter(3, "h2s", NOW)]))
+    assert [(p.option.id, p.pinned) for p in result.plates] == [(50, True)]
+    assert result.ready_at == {10: NOW + timedelta(hours=3)}
+
+
+def test_parts_without_a_plate_for_any_printer_are_short():
+    options = [o for o in _options(h2s=False) if o.count(TRAY) == 0]
+    result = plan(_inputs([OrderNeed(10, 2)], options=options, h2s=False))
+    assert result.short == {TRAY: 2}
+    assert result.ready_at == {10: None}
+
+
+def test_printer_tags_keep_a_plate_off_other_printers():
+    options = [
+        PlateOption(o.id, o.model, o.duration_s, o.pieces, frozenset({2}) if o.count(TRAY) else None)
+        for o in _options(h2s=False)
+    ]
+    result = plan(_inputs([OrderNeed(10, 2)], options=options, h2s=False))
+    assert {p.printer_id for p in result.plates if p.option.count(TRAY)} == {2}
+
+
+def test_a_due_date_keeps_bigger_plates_from_making_an_order_late():
+    # With plates this dear the two boxes would share 2-piece plates (17:20);
+    # the first is due at 14:00, so it gets its own plates and is ready in time.
+    soon = NOW + timedelta(hours=4)
+    merged = plan(_inputs([OrderNeed(11, 1), OrderNeed(10, 1)], plate_cost_s=4 * H))
+    assert merged.ready_at[11] > soon
+    due = plan(_inputs([OrderNeed(11, 1, due=soon), OrderNeed(10, 1)], plate_cost_s=4 * H))
+    assert due.ready_at[11] is not None and due.ready_at[11] <= soon
+    assert len(due.plates) > len(merged.plates)
+
+
+def test_nothing_to_do_without_orders():
+    result = plan(_inputs([]))
+    assert result.plates == [] and result.ready_at == {}

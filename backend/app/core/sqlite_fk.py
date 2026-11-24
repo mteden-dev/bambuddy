@@ -67,13 +67,24 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         ("print_batches", "library_file_id"),
         ("print_queue", "library_file_id"),
         ("print_queue_variants", "library_file_id"),
+        ("custom_product_plates", "library_file_id"),  # fork: products
         # print_queue
         ("pipeline_jobs", "queue_entry_id"),
         ("print_log_entries", "queue_item_id"),
         ("print_queue_variants", "queue_item_id"),
         ("custom_queue_item_tags", "queue_item_id"),  # fork: printer tags
         ("custom_queue_reservations", "queue_item_id"),  # fork: timeline reservations
+        ("custom_product_jobs", "queue_item_id"),  # fork: products
         ("wallet_transactions", "print_queue_id"),
+        # fork: products
+        ("custom_product_parts", "product_id"),
+        ("custom_product_plates", "product_id"),
+        ("custom_product_plate_parts", "plate_id"),
+        ("custom_product_plate_parts", "part_id"),
+        ("custom_product_orders", "product_id"),
+        ("custom_product_jobs", "product_id"),
+        ("custom_product_jobs", "product_plate_id"),
+        ("custom_product_stock", "part_id"),
         # print_batches
         ("print_batch_plates", "batch_id"),
         ("print_queue", "batch_id"),
@@ -137,6 +148,9 @@ APPLIED: frozenset[tuple[str, str]] = frozenset(
         ("connected_apps", "created_by_id"),
         ("cost_center_members", "user_id"),
         ("cost_centers", "owner_user_id"),
+        ("custom_products", "created_by_id"),  # fork: products
+        ("custom_product_orders", "created_by_id"),
+        ("custom_product_stock", "created_by_id"),
         ("file_variant_groups", "created_by_id"),
         ("library_files", "created_by_id"),
         ("library_folders", "created_by_id"),

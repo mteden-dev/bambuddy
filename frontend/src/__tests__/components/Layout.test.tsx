@@ -99,6 +99,21 @@ describe('Layout', () => {
     });
   });
 
+  describe('products (fork)', () => {
+    it('has its own sidebar entry right after the print queue', async () => {
+      render(<Layout />);
+
+      const products = await waitFor(() => {
+        const link = document.querySelector('aside a[href="/products"]');
+        expect(link).not.toBeNull();
+        return link as HTMLAnchorElement;
+      });
+      const hrefs = Array.from(document.querySelectorAll('aside a')).map((a) => a.getAttribute('href'));
+      expect(hrefs.indexOf('/products')).toBe(hrefs.indexOf('/queue') + 1);
+      expect(products.textContent).toContain('Products');
+    });
+  });
+
   describe('external link count', () => {
     // A connected app (Bambuddy Orders) reports its To do count for the link
     // pointing at it; the sidebar shows it like the queue's badge.

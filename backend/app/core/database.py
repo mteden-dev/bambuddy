@@ -401,11 +401,17 @@ NON_FK_ID_REFERENCES: dict[str, tuple[tuple[str, str], ...]] = {
         ("print_log_entries", "printer_id"),
         ("notification_live_activities", "printer_id"),
         ("notification_lock_screen_widgets", "printer_id"),
+        # Fork: products. Which printer made a part's pieces is history.
+        ("custom_product_jobs", "printer_id"),
+        ("custom_product_stock", "printer_id"),
     ),
     "api_keys": (("auth_ephemeral_tokens", "api_key_id"),),
     # A merged archive's id keeps finding the archive it went into after its
     # soft-deleted row is purged (archive redesign P2).
-    "print_archives": (("archive_aliases", "merged_archive_id"),),
+    "print_archives": (
+        ("archive_aliases", "merged_archive_id"),
+        ("custom_product_jobs", "archive_id"),  # fork: products
+    ),
 }
 
 
@@ -700,6 +706,7 @@ async def init_db():
         printer_ha_sensor,
         printer_location,
         printer_sensor_history,
+        products,
         project,
         project_bom,
         queue_item_tags,

@@ -4543,6 +4543,122 @@ export interface SlotSpoolPrompt {
   created_at: string;
 }
 
+/** Fork (products): a product's part and how many of it one product takes. */
+export interface ProductPart {
+  id: number;
+  name: string;
+  quantity: number;
+  /** Printed on the same printer as the product's other matched parts. */
+  matched: boolean;
+}
+
+/** Fork (products): pieces of one part. */
+export interface ProductPartPieces {
+  part_id: number;
+  pieces: number;
+}
+
+/** Fork (products): what a library file brings as a plate. */
+export interface ProductPlateFile {
+  library_file_id: number;
+  filename: string | null;
+  print_name: string | null;
+  model: string | null;
+  print_time_seconds: number | null;
+  filament_grams: number | null;
+  object_count: number | null;
+  has_thumbnail: boolean;
+  missing: boolean;
+}
+
+/** Fork (products): a sliced plate that prints pieces of a product's parts. */
+export interface ProductPlate {
+  id: number;
+  library_file_id: number;
+  plate_id: number | null;
+  pieces: ProductPartPieces[];
+  file: ProductPlateFile;
+}
+
+export interface Product {
+  id: number;
+  name: string;
+  notes: string | null;
+  parts: ProductPart[];
+  plates: ProductPlate[];
+  open_orders: number;
+  open_units: number;
+  created_at: string | null;
+}
+
+export interface ProductStockEntry {
+  part_id: number;
+  /** 0 when the printer that made the pieces is not known. */
+  printer_id: number;
+  printer_name: string | null;
+  pieces: number;
+}
+
+export interface ProductOrder {
+  id: number;
+  quantity: number;
+  due_date: string | null;
+  notes: string | null;
+  status: 'open' | 'done' | 'cancelled';
+  created_at: string | null;
+  completed_at: string | null;
+  units_ready: number;
+  parts: { part_id: number; ready: number; needed: number }[];
+  estimated_ready_at: string | null;
+  external_source: string | null;
+  external_ref: string | null;
+}
+
+export interface ProductJob {
+  id: number;
+  queue_item_id: number | null;
+  status: 'planned' | 'printing';
+  printer_id: number | null;
+  printer_name: string | null;
+  pinned: boolean;
+  pieces: ProductPartPieces[];
+  product_plate_id: number | null;
+  filename: string | null;
+  print_time_seconds: number | null;
+}
+
+export interface ProductDetail extends Product {
+  stock: ProductStockEntry[];
+  orders: ProductOrder[];
+  jobs: ProductJob[];
+  unplanned: ProductPartPieces[];
+}
+
+/** Fork (products): a product as sent to create or change it. */
+export interface ProductWrite {
+  name: string;
+  notes?: string | null;
+  parts: { id?: number | null; name: string; quantity: number; matched: boolean }[];
+  /** ``part`` is the index into ``parts``. */
+  plates: { library_file_id: number; plate_id?: number | null; pieces: { part: number; pieces: number }[] }[];
+}
+
+/** Fork (products): the plan after an order, a change or a replan. */
+export interface ProductPlanResult {
+  product: ProductDetail;
+  planned_jobs: number;
+  replaced: number;
+  ready_at: Record<string, string>;
+  finish_at: string | null;
+  short: ProductPartPieces[];
+  extra: ProductPartPieces[];
+  skipped_plates: { plate_id: number; reason: string }[];
+}
+
+export interface ProductSettings {
+  plate_cost_minutes: number;
+}
+
 /** Fork (slot spools): a roll taken out of a slot with filament left on it. */
 export interface RestorableSlotSpool {
   id: number;
@@ -7648,6 +7764,31 @@ export const api = {
       `/slot-spools/prompts/${printerId}/${amsId}/${trayId}/same`,
       { method: 'POST' },
     ),
+  // Fork (products): products made of parts; orders become queue jobs.
+  getProducts: () => request<Product[]>('/products/'),
+  getProduct: (id: number) => request<ProductDetail>(`/products/${id}`),
+  createProduct: (data: ProductWrite) =>
+    request<ProductDetail>('/products/', { method: 'POST', body: JSON.stringify(data) }),
+  updateProduct: (id: number, data: ProductWrite) =>
+    request<ProductDetail>(`/products/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteProduct: (id: number) => request<{ deleted: number }>(`/products/${id}`, { method: 'DELETE' }),
+  getProductFileInfo: (libraryFileId: number) => request<ProductPlateFile>(`/products/file-info/${libraryFileId}`),
+  createProductOrder: (productId: number, data: { quantity: number; due_date?: string | null; notes?: string | null }) =>
+    request<ProductPlanResult>(`/products/${productId}/orders`, { method: 'POST', body: JSON.stringify(data) }),
+  updateProductOrder: (
+    orderId: number,
+    data: { quantity?: number; due_date?: string | null; clear_due_date?: boolean; notes?: string | null },
+  ) => request<ProductPlanResult>(`/products/orders/${orderId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  cancelProductOrder: (orderId: number) =>
+    request<ProductPlanResult>(`/products/orders/${orderId}/cancel`, { method: 'POST' }),
+  replanProduct: (productId: number) => request<ProductPlanResult>(`/products/${productId}/replan`, { method: 'POST' }),
+  adjustProductStock: (
+    productId: number,
+    data: { part_id: number; printer_id?: number | null; delta: number; note?: string | null },
+  ) => request<ProductPlanResult>(`/products/${productId}/stock`, { method: 'POST', body: JSON.stringify(data) }),
+  getProductSettings: () => request<ProductSettings>('/products/settings'),
+  updateProductSettings: (data: ProductSettings) =>
+    request<ProductSettings>('/products/settings', { method: 'PUT', body: JSON.stringify(data) }),
   getRestorableSlotSpools: (material?: string, rgba?: string) => {
     const params = new URLSearchParams();
     if (material) params.set('material', material);

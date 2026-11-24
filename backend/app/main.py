@@ -13484,6 +13484,11 @@ from backend.app.api.routes import slot_spools as slot_spools_routes  # noqa: E4
 
 app.include_router(slot_spools_routes.router, prefix=app_settings.api_prefix)
 
+# Fork: products made of parts; orders become queue jobs (services/products.py).
+from backend.app.api.routes import products as products_routes  # noqa: E402
+
+app.include_router(products_routes.router, prefix=app_settings.api_prefix)
+
 
 # Serve static files (React build)
 if app_settings.static_dir.exists() and any(app_settings.static_dir.iterdir()):
