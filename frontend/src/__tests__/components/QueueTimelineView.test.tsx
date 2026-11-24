@@ -323,6 +323,7 @@ describe('QueueTimelineView', () => {
 
       fireEvent.click(await screen.findByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
       const dialog = await screen.findByTestId('staffed-hours-dialog');
+      fireEvent.click(await within(dialog).findByTestId('staffed-tab-week'));
       fireEvent.click(await within(dialog).findByRole('checkbox', { name: 'queue.timeline.staffed.enabled' }));
       fireEvent.click(within(within(dialog).getByTestId('staffed-day-6')).getByRole('checkbox'));
       fireEvent.change(within(dialog).getByRole('spinbutton'), { target: { value: '5' } });
@@ -337,6 +338,7 @@ describe('QueueTimelineView', () => {
         clear_minutes: 5,
         // Learning is on unless turned off.
         learn: true,
+        marks: [],
       });
       expect(screen.queryByTestId('staffed-hours-dialog')).toBeNull();
     });
@@ -352,8 +354,100 @@ describe('QueueTimelineView', () => {
       const dialog = await screen.findByTestId('staffed-hours-dialog');
 
       expect(await within(dialog).findByTestId('staffed-no-plate-clear')).toBeInTheDocument();
+      // Nothing to paint with on the calendar, nothing to change in the week.
+      expect(within(dialog).getByTestId('staffed-calendar')).toBeInTheDocument();
+      expect(within(dialog).queryByTestId('staffed-brush-away')).toBeNull();
+      fireEvent.click(within(dialog).getByTestId('staffed-tab-week'));
       expect(within(dialog).getByRole('checkbox', { name: 'queue.timeline.staffed.enabled' })).toBeDisabled();
       expect(within(dialog).queryByRole('button', { name: 'common.save' })).toBeNull();
+    });
+
+    describe('marked for given dates', () => {
+      const typicalStart = () => new Date(Math.floor(Date.now() / HOUR) * HOUR).toISOString();
+
+      it('shows the marked stretches on the lanes, the axis and the legend', async () => {
+        vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+          staffed: {
+            enabled: false,
+            windows: [{ start: iso(-24), end: iso(-1) }, { start: iso(3), end: iso(24 * 14) }],
+            marks: [
+              { start: iso(-1), end: iso(3), kind: 'away' },
+              { start: iso(8), end: iso(10), kind: 'here' },
+            ],
+            clear_minutes: 5,
+            waits_for_plate: true,
+          },
+          plate_waits: [{ printer_id: 2, start: iso(1), end: iso(3.1), reason: 'absent' }],
+        }));
+        renderTimeline();
+
+        const wait = await within(lane(2)).findByTestId('plate-wait-2');
+        expect(wait).toHaveTextContent('queue.timeline.plateAbsent');
+        expect(wait.getAttribute('title')).toContain('queue.timeline.plateWaitAbsent');
+        expect(screen.getAllByTestId('marked-away')).toHaveLength(1);
+        expect(screen.getAllByTestId('axis-mark').map((m) => m.dataset.kind)).toEqual(['away', 'here']);
+        expect(screen.getByTestId('legend-absent')).toBeInTheDocument();
+        expect(screen.getByTestId('legend-here')).toBeInTheDocument();
+        // The weekly hours are not used.
+        expect(screen.queryByText('queue.timeline.legend.unstaffed')).toBeNull();
+
+        // Nobody is there now, as marked: says until when, and opens the calendar.
+        fireEvent.click(screen.getByTestId('timeline-marked-away'));
+        expect(await screen.findByTestId('staffed-hours-dialog')).toBeInTheDocument();
+      });
+
+      it('lays out a plan going by a marked absence, not by the usual wait', async () => {
+        // Plates usually wait ten hours; nobody is there, as marked, until six hours from now.
+        const back = iso(6);
+        vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+          staffed: {
+            enabled: false,
+            windows: [{ start: iso(-24), end: iso(0.5) }, { start: back, end: iso(24 * 14) }],
+            marks: [{ start: iso(0.5), end: back, kind: 'away' }],
+            clear_minutes: 5,
+            waits_for_plate: true,
+            learn: true,
+            learned_samples: 40,
+            typical: { start: typicalStart(), minutes: Array(168).fill(600) },
+          },
+        }));
+        const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+          const el = this as HTMLElement;
+          const laneEl = el.closest('[data-lane]') as HTMLElement | null;
+          const index = (laneEl ? Number(laneEl.dataset.lane) : 2) - 1;
+          const isLane = el.hasAttribute('data-lane');
+          const top = index * 56 + (isLane ? 0 : 8);
+          const height = isLane ? 56 : 40;
+          const width = isLane ? 800 : 100;
+          const left = el.hasAttribute('data-bar-item') ? (parseFloat(el.style.left) / 100) * 800 : 0;
+          return { x: left, y: top, top, left, right: left + width, bottom: top + height, width, height, toJSON: () => ({}) } as DOMRect;
+        });
+        try {
+          renderTimeline({ onApplyPlan: vi.fn() });
+          const later = await within(lane(2)).findByTitle((title) => title.startsWith('Later cup'));
+
+          // Later cup goes first on printer 2 and ends an hour from now, in
+          // the marked absence: Any tray starts once someone is back at six.
+          const fromX = later.getBoundingClientRect().left + 10;
+          fireEvent.mouseDown(later, { button: 0, clientX: fromX, clientY: 76 });
+          act(() => {
+            fireEvent.mouseMove(document, { clientX: fromX + 10, clientY: 76 });
+          });
+          act(() => {
+            fireEvent.mouseMove(document, { clientX: 0, clientY: 76 });
+          });
+          act(() => {
+            fireEvent.mouseUp(document);
+          });
+
+          expect(leftOf(bar('Any tray'))).toBeCloseTo(pctOf(Date.parse(back) + 5 * 60_000), 1);
+          const wait = within(lane(2)).getAllByTestId('plate-wait-2')[0];
+          expect(wait).toHaveAttribute('data-reason', 'absent');
+        } finally {
+          rectSpy.mockRestore();
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+      });
     });
 
     describe('waiting for a manual start', () => {
@@ -523,6 +617,7 @@ describe('QueueTimelineView', () => {
 
         fireEvent.click(await screen.findByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
         const dialog = await screen.findByTestId('staffed-hours-dialog');
+        fireEvent.click(await within(dialog).findByTestId('staffed-tab-week'));
         const heatmap = await within(dialog).findByTestId('staffed-heatmap');
         expect(heatmap.querySelectorAll('[title]').length).toBe(168);
         expect(within(dialog).getByTestId('staffed-now')).toHaveTextContent('queue.timeline.staffed.nowAway');
@@ -551,6 +646,7 @@ describe('QueueTimelineView', () => {
 
         fireEvent.click(await screen.findByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
         const dialog = await screen.findByTestId('staffed-hours-dialog');
+        fireEvent.click(await within(dialog).findByTestId('staffed-tab-week'));
 
         expect(await within(dialog).findByTestId('staffed-too-few')).toHaveTextContent('"count":3');
       });

@@ -3192,9 +3192,14 @@ export interface QueueForecast {
   plate_waits?: QueueForecastPlateWait[];
   /** When someone is there to clear plates; null on servers without staffed hours. */
   staffed?: {
+    /** The weekly hours are used. */
     enabled: boolean;
-    /** Staffed stretches from a day back to two weeks ahead. */
+    /** Staffed stretches from a day back to two weeks ahead: the weekly hours
+     *  (around the clock when not used) with the marks laid over. Empty with
+     *  neither weekly hours nor marks. */
     windows: Array<{ start: string; end: string }>;
+    /** Stretches marked for given dates over the same span: nobody there (away) or someone there (here). */
+    marks?: Array<{ start: string; end: string; kind: QueueStaffedMarkKind }>;
     clear_minutes: number;
     /** Plate-clear confirmation is on: a printer waits for it after each print. */
     waits_for_plate: boolean;
@@ -3210,13 +3215,14 @@ export interface QueueForecast {
     /** When someone is expected to be there to start a job by hand: a job waiting
      *  for a manual start goes on the lanes from then. */
     someone_there_at?: string | null;
-    someone_there_reason?: 'present' | 'now' | 'unstaffed' | 'typical' | 'away' | null;
+    someone_there_reason?: 'present' | 'now' | 'unstaffed' | 'absent' | 'typical' | 'away' | null;
   } | null;
 }
 
 /**
  * A printer standing with a finished plate. `reason`: clear (only the clearing),
- * unstaffed (outside the staffed hours), typical (how long plates usually wait
+ * unstaffed (outside the staffed hours), absent (nobody there, as marked for
+ * that date), typical (how long plates usually wait
  * then), and for a plate waiting now, waiting (as usual) or away (far longer
  * than usual: nobody seems to be there).
  */
@@ -3224,7 +3230,7 @@ export interface QueueForecastPlateWait {
   printer_id: number;
   start: string;
   end: string;
-  reason?: 'clear' | 'unstaffed' | 'typical' | 'waiting' | 'away';
+  reason?: 'clear' | 'unstaffed' | 'absent' | 'typical' | 'waiting' | 'away';
 }
 
 /** When someone is at the farm to clear plates (fork): wall-clock hours in `timezone`, Monday first. */
@@ -3236,6 +3242,17 @@ export interface QueueStaffedHours {
   clear_minutes: number;
   /** Also go by how long plates actually wait, and by what is going on now. */
   learn: boolean;
+  /** Given dates when nobody is there or someone is, whatever `days` say. Left out on a save: the stored ones stay. */
+  marks?: QueueStaffedMark[];
+}
+
+export type QueueStaffedMarkKind = 'away' | 'here';
+
+/** A stretch on given dates: wall-clock "YYYY-MM-DDTHH:MM" in the hours' `timezone`; the end may fall on a later date. */
+export interface QueueStaffedMark {
+  start: string;
+  end: string;
+  kind: QueueStaffedMarkKind;
 }
 
 /** The staffed hours, and what the forecast learned from the plates of the last eight weeks. */

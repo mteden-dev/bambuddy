@@ -2,8 +2,8 @@
 and services/queue_plan."""
 
 import re
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -63,7 +63,8 @@ class QueueForecastPlateWait(BaseModel):
     start: datetime
     end: datetime
     # Why until then: clear (only the clearing), unstaffed (outside the staffed
-    # hours), typical (how long plates usually wait then), and for a plate
+    # hours), absent (nobody there, as marked for that date), typical (how
+    # long plates usually wait then), and for a plate
     # waiting now, waiting (as usual) or away (far longer than usual: nobody
     # seems to be there).
     reason: str = "clear"
@@ -84,12 +85,25 @@ class QueueForecastTypical(BaseModel):
     minutes: list[int]
 
 
+class QueueForecastMark(BaseModel):
+    """A stretch marked for given dates: nobody there (away) or someone there (here)."""
+
+    start: datetime
+    end: datetime
+    kind: str
+
+
 class QueueForecastStaffed(BaseModel):
     """When someone is there to clear plates (services/staffed_hours.py)."""
 
+    # The weekly hours are used.
     enabled: bool
-    # Staffed stretches from a day back to two weeks ahead (empty when not enabled).
+    # Staffed stretches from a day back to two weeks ahead: the weekly hours
+    # (around the clock when not used) with the marks laid over. Empty with
+    # neither weekly hours nor marks.
     windows: list[QueueForecastWindow]
+    # The marks over the same stretch, in UTC.
+    marks: list[QueueForecastMark] = []
     clear_minutes: int
     # Plate-clear confirmation is on, so a printer waits for it after each print.
     waits_for_plate: bool
@@ -103,7 +117,7 @@ class QueueForecastStaffed(BaseModel):
     present_until: datetime | None = None
     # When someone is expected to be there to start a job by hand
     # (PlateTurnaround.someone_there): a job waiting for a manual start goes on
-    # the lanes from then. The reason is present | now | unstaffed | typical | away.
+    # the lanes from then. The reason is present | now | unstaffed | absent | typical | away.
     someone_there_at: datetime | None = None
     someone_there_reason: str | None = None
 
@@ -147,6 +161,37 @@ class QueueStaffedDay(BaseModel):
         return value
 
 
+class QueueStaffedMark(BaseModel):
+    """A stretch on given dates when nobody is there (away) or someone is (here).
+
+    Wall-clock "YYYY-MM-DDTHH:MM" in the hours' time zone; the end may fall on a later date.
+    """
+
+    start: str
+    end: str
+    kind: Literal["away", "here"] = "away"
+
+    @field_validator("start", "end")
+    @classmethod
+    def _stamp(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d", value):
+            raise ValueError("expected YYYY-MM-DDTHH:MM")
+        try:
+            datetime.fromisoformat(value)
+        except ValueError as e:
+            raise ValueError("not a date") from e
+        return value
+
+    @model_validator(mode="after")
+    def _in_order(self) -> "QueueStaffedMark":
+        length = datetime.fromisoformat(self.end) - datetime.fromisoformat(self.start)
+        if length <= timedelta(0):
+            raise ValueError("end must come after start")
+        if length > timedelta(days=31):
+            raise ValueError("a mark is at most 31 days long")
+        return self
+
+
 class QueueStaffedHours(IgnoresNullForRequiredColumns):
     """GET/PUT /queue/staffed-hours (fork)."""
 
@@ -163,6 +208,9 @@ class QueueStaffedHours(IgnoresNullForRequiredColumns):
     clear_minutes: int = Field(default=0, ge=0, le=240)
     # Also go by how long plates actually wait, and by what is going on now.
     learn: bool = True
+    # Given dates when nobody is there or someone is, whatever ``days`` say.
+    # Not sent (or null): the stored ones stay.
+    marks: list[QueueStaffedMark] | None = Field(default=None, max_length=200)
 
     @model_validator(mode="before")
     @classmethod

@@ -931,6 +931,7 @@ def _forecast_staffed(turnaround) -> dict:
     return {
         "enabled": turnaround.hours.enabled,
         "windows": [{"start": a, "end": b} for a, b in turnaround.windows],
+        "marks": [{"start": a, "end": b, "kind": "here" if here else "away"} for a, b, here in turnaround.marks],
         "clear_minutes": turnaround.hours.clear_minutes,
         "waits_for_plate": turnaround.waits_for_plate,
         "learn": turnaround.waits_for_plate and turnaround.hours.learn,
@@ -975,8 +976,14 @@ async def put_staffed_hours(
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SETTINGS_UPDATE),
 ):
-    """Set the staffed hours (fork, services/staffed_hours.py)."""
+    """Set the staffed hours (fork, services/staffed_hours.py).
+
+    ``marks`` left out keeps the stored ones; marks that ended over two days ago are dropped.
+    """
     hours = parse_staffed_hours(data.model_dump())
+    if data.marks is None:
+        hours.marks = (await read_staffed_hours(db)).marks
+    hours = hours.without_old_marks(datetime.now(timezone.utc))
     await write_staffed_hours(db, hours)
     await db.commit()
     return await _staffed_hours_view(db, hours)

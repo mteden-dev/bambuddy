@@ -38,6 +38,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { formatDuration, parseUTCDate } from '../utils/date';
+import { AWAY_STRIPES } from '../utils/staffedMarks';
 import { api } from '../api/client';
 import type {
   PrintQueueItem,
@@ -676,14 +677,40 @@ export function QueueTimelineView({
 
   // When someone is there to clear plates (fork, services/staffed_hours.py).
   const staffed = forecast?.staffed ?? null;
+  // The weekly hours with the marks laid over; empty when neither is used.
   const staffedWindows = useMemo(
-    () => (staffed?.enabled
-      ? staffed.windows
-          .map((w) => [parseUTCDate(w.start)?.getTime() ?? 0, parseUTCDate(w.end)?.getTime() ?? 0] as const)
-          .sort((a, b) => a[0] - b[0])
-      : []),
+    () => (staffed?.windows ?? [])
+      .map((w) => [parseUTCDate(w.start)?.getTime() ?? 0, parseUTCDate(w.end)?.getTime() ?? 0] as const)
+      .sort((a, b) => a[0] - b[0]),
     [staffed],
   );
+  // Stretches marked for given dates: nobody there (away) or someone there (here).
+  const staffedMarks = useMemo(
+    () => (staffed?.marks ?? [])
+      .map((m) => ({
+        start: parseUTCDate(m.start)?.getTime() ?? 0,
+        end: parseUTCDate(m.end)?.getTime() ?? 0,
+        kind: m.kind,
+      }))
+      .filter((m) => m.end > m.start),
+    [staffed],
+  );
+  // Whether a mark says someone is there at `t` (true), nobody is (false), or none covers it.
+  const markAt = (t: number): boolean | null => {
+    let found: boolean | null = null;
+    for (const m of staffedMarks) {
+      if (m.start <= t && t < m.end) {
+        if (m.kind === 'away') return false;
+        found = true;
+      }
+    }
+    return found;
+  };
+  // The first moment at or after `t` someone is there (PlateTurnaround.next_staffed).
+  const nextStaffed = (t: number): number => {
+    const shift = staffedWindows.find(([, closes]) => closes > t);
+    return shift ? Math.max(t, shift[0]) : t;
+  };
   // What the forecast learned of how long plates wait (fork, services/plate_clears.py).
   const typical = staffed?.typical ?? null;
   const typicalStartMs = parseUTCDate(typical?.start)?.getTime() ?? null;
@@ -701,18 +728,36 @@ export function QueueTimelineView({
     if (presentUntilMs != null && generatedMs <= endMs && endMs < presentUntilMs) {
       return { at: endMs + clear, reason: 'clear' };
     }
-    let opens = endMs;
-    const shift = staffedWindows.find(([, closes]) => closes > endMs);
-    if (shift) opens = Math.max(endMs, shift[0]);
+    const opens = nextStaffed(endMs);
     let at = opens + clear;
-    let reason: PlateWaitReason = opens > endMs ? 'unstaffed' : 'clear';
-    if (typical && typicalStartMs != null && typical.minutes.length > 0) {
+    let reason: PlateWaitReason = 'clear';
+    if (opens > endMs) {
+      const marked = markAt(endMs) === false
+        || staffedMarks.some((m) => m.kind === 'away' && m.end === opens && m.start < opens);
+      reason = marked ? 'absent' : 'unstaffed';
+    }
+    // How long plates usually wait then, unless a mark says who is there.
+    if (typical && typicalStartMs != null && typical.minutes.length > 0 && markAt(endMs) === null) {
       const n = typical.minutes.length;
       const hour = ((Math.floor((endMs - typicalStartMs) / 3_600_000) % n) + n) % n;
-      const usual = endMs + typical.minutes[hour] * 60_000;
+      let usual = endMs + typical.minutes[hour] * 60_000;
       if (usual > at) {
-        at = usual;
-        reason = 'typical';
+        let why: PlateWaitReason = 'typical';
+        const hereFrom = Math.min(
+          ...staffedMarks.filter((m) => m.kind === 'here' && endMs < m.start && m.start < usual).map((m) => m.start),
+        );
+        if (Number.isFinite(hereFrom)) {
+          // Someone marked to come clears it then.
+          usual = Math.min(usual, nextStaffed(hereFrom) + clear);
+        } else if (markAt(usual) === false) {
+          // Running into a marked absence: until it is over.
+          usual = nextStaffed(usual) + clear;
+          why = 'absent';
+        }
+        if (usual > at) {
+          at = usual;
+          reason = why;
+        }
       }
     }
     // Nobody seems to be there: whoever comes next clears it.
@@ -800,9 +845,9 @@ export function QueueTimelineView({
       });
     }
     return { queuedByPrinter: map, plateWaitsByPrinter: waits };
-    // variantOn and explainWait read forecast and staffedWindows, which are listed.
+    // variantOn and explainWait read forecast, staffedWindows and staffedMarks, which are listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planLanes, draft, printers, lanePrinterState, nowMs, itemsById, forecast, staffedWindows]);
+  }, [planLanes, draft, printers, lanePrinterState, nowMs, itemsById, forecast, staffedWindows, staffedMarks]);
   const hasManualStart = useMemo(
     () => Array.from(queuedByPrinter.values()).some((evs) => evs.some((ev) => ev.item.manual_start)),
     [queuedByPrinter],
@@ -810,7 +855,7 @@ export function QueueTimelineView({
 
   // The stretches of the window nobody is there, shaded on the lanes.
   const unstaffed = useMemo(() => {
-    if (!staffed?.enabled || staffedWindows.length === 0) return [];
+    if (staffedWindows.length === 0) return [];
     const gaps: Array<{ start: number; end: number }> = [];
     let cursor = rangeStartMs;
     for (const [opens, closes] of staffedWindows) {
@@ -821,7 +866,9 @@ export function QueueTimelineView({
     }
     if (cursor < rangeEndMs) gaps.push({ start: cursor, end: rangeEndMs });
     return gaps;
-  }, [staffed, staffedWindows, rangeStartMs, rangeEndMs]);
+  }, [staffedWindows, rangeStartMs, rangeEndMs]);
+  const visibleMarks = staffedMarks.filter((m) => m.end > rangeStartMs && m.start < rangeEndMs);
+  const markedAwayNow = staffedMarks.find((m) => m.kind === 'away' && m.start <= nowMs && nowMs < m.end) ?? null;
   const [staffedOpen, setStaffedOpen] = useState(false);
   const shortTime = (ms: number) =>
     new Date(ms).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
@@ -834,6 +881,8 @@ export function QueueTimelineView({
         return t('queue.timeline.plateWaitTypical', { duration: formatDuration((w.end - w.start) / 1000), time });
       case 'waiting':
         return t('queue.timeline.plateWaitWaiting', { duration: waited, time });
+      case 'absent':
+        return t('queue.timeline.plateWaitAbsent', { time });
       case 'away':
         return w.start < generatedMs
           ? t('queue.timeline.plateWaitAway', { duration: waited, time })
@@ -1179,6 +1228,17 @@ export function QueueTimelineView({
             {t('queue.timeline.away', { time: shortTime(awayUntilMs) })}
           </span>
         )}
+        {markedAwayNow && (
+          <button
+            type="button"
+            onClick={() => setStaffedOpen(true)}
+            className="text-xs text-red-200 flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-red-400/30 bg-red-500/10 hover:bg-red-500/20"
+            data-testid="timeline-marked-away"
+          >
+            <UserX className="w-3.5 h-3.5" />
+            {t('queue.timeline.absent', { time: shortTime(markedAwayNow.end) })}
+          </button>
+        )}
         {allDoneBy && (
           <span className="text-xs text-bambu-gray flex items-center gap-1.5">
             <Clock className="w-3.5 h-3.5" />
@@ -1231,6 +1291,18 @@ export function QueueTimelineView({
             <span className="inline-flex w-5 h-3.5 rounded-sm bg-black/40" />
             <Moon className="w-3 h-3" aria-hidden />
             {t('queue.timeline.legend.unstaffed')}
+          </span>
+        )}
+        {visibleMarks.some((m) => m.kind === 'away') && (
+          <span className="flex items-center gap-1.5" data-testid="legend-absent">
+            <span className="inline-flex w-5 h-3.5 rounded-sm" style={{ backgroundImage: AWAY_STRIPES }} />
+            {t('queue.timeline.legend.absent')}
+          </span>
+        )}
+        {visibleMarks.some((m) => m.kind === 'here') && (
+          <span className="flex items-center gap-1.5" data-testid="legend-here">
+            <span className="inline-flex w-5 h-1.5 rounded-full bg-bambu-green/70" />
+            {t('queue.timeline.legend.here')}
           </span>
         )}
         {onApplyPlan && (
@@ -1322,6 +1394,28 @@ export function QueueTimelineView({
                     {tick.label}
                   </div>
                 ))}
+                {/* Marked stretches, along the bottom of the axis. */}
+                {visibleMarks.map((m) => {
+                  const startMs = Math.max(rangeStartMs, m.start);
+                  const endMs = Math.min(rangeEndMs, m.end);
+                  return (
+                    <div
+                      key={`${m.kind}-${m.start}`}
+                      className={`absolute bottom-0 h-1.5 rounded-full ${m.kind === 'here' ? 'bg-bambu-green/70' : ''}`}
+                      data-testid="axis-mark"
+                      data-kind={m.kind}
+                      title={t(m.kind === 'away' ? 'queue.timeline.markAway' : 'queue.timeline.markHere', {
+                        from: shortTime(m.start),
+                        to: shortTime(m.end),
+                      })}
+                      style={{
+                        left: `${((startMs - rangeStartMs) / rangeMs) * 100}%`,
+                        width: `${((endMs - startMs) / rangeMs) * 100}%`,
+                        backgroundImage: m.kind === 'away' ? AWAY_STRIPES : undefined,
+                      }}
+                    />
+                  );
+                })}
               </div>
             </div>
 
@@ -1343,6 +1437,31 @@ export function QueueTimelineView({
                         }}
                       />
                     ))}
+                  </div>
+                </div>
+              )}
+              {/* Marked: nobody there. Tinted over the shading. */}
+              {visibleMarks.some((m) => m.kind === 'away') && (
+                <div className="absolute inset-0 flex pointer-events-none" aria-hidden>
+                  <div className="w-32 sm:w-40 shrink-0" />
+                  <div className="relative flex-1">
+                    {visibleMarks
+                      .filter((m) => m.kind === 'away')
+                      .map((m) => {
+                        const startMs = Math.max(rangeStartMs, m.start);
+                        const endMs = Math.min(rangeEndMs, m.end);
+                        return (
+                          <div
+                            key={m.start}
+                            className="absolute top-0 bottom-0 bg-red-500/10 border-x border-dashed border-red-400/30"
+                            data-testid="marked-away"
+                            style={{
+                              left: `${((startMs - rangeStartMs) / rangeMs) * 100}%`,
+                              width: `${((endMs - startMs) / rangeMs) * 100}%`,
+                            }}
+                          />
+                        );
+                      })}
                   </div>
                 </div>
               )}
@@ -1415,11 +1534,16 @@ export function QueueTimelineView({
                         const endMs = Math.min(rangeEndMs, w.end);
                         if (endMs <= startMs) return null;
                         const away = w.reason === 'away';
+                        const absent = w.reason === 'absent';
                         return (
                           <div
                             key={`plate-${w.start}`}
                             className={`absolute rounded-md border border-dashed flex items-center px-1.5 overflow-hidden text-[10px] ${
-                              away ? 'border-amber-400/50 text-amber-200/90' : 'border-bambu-gray/40 text-bambu-gray'
+                              away
+                                ? 'border-amber-400/50 text-amber-200/90'
+                                : absent
+                                  ? 'border-red-400/40 text-red-200/90'
+                                  : 'border-bambu-gray/40 text-bambu-gray'
                             }`}
                             data-testid={`plate-wait-${printer.id}`}
                             data-reason={w.reason}
@@ -1433,7 +1557,11 @@ export function QueueTimelineView({
                             }}
                           >
                             <span className="truncate">
-                              {away ? t('queue.timeline.plateAway') : t('queue.timeline.legend.plateWait')}
+                              {away
+                                ? t('queue.timeline.plateAway')
+                                : absent
+                                  ? t('queue.timeline.plateAbsent')
+                                  : t('queue.timeline.legend.plateWait')}
                             </span>
                           </div>
                         );

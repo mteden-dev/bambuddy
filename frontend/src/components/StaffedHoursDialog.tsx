@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarClock, X } from 'lucide-react';
+import { CalendarClock, CalendarDays, Repeat, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api, type QueueStaffedHours, type QueueStaffedHoursView } from '../api/client';
 import { formatDuration } from '../utils/date';
+import { stampToMin, zoneNowMin } from '../utils/staffedMarks';
 import { Button } from './Button';
+import { StaffedMarksCalendar } from './StaffedMarksCalendar';
 
 /** The browser's time zone, for hours entered here. */
 function browserZone(): string {
@@ -36,17 +38,20 @@ const SHADE_SCALE: Array<[string, string]> = [
  * When someone is at the farm to clear finished plates (fork,
  * services/staffed_hours.py). With plate-clear confirmation on, the timeline
  * forecasts a printer that finishes outside these hours as standing until
- * someone comes and clears it.
+ * someone comes and clears it. The calendar marks given dates; the other tab
+ * holds the usual week and what the forecast learned.
  */
 export function StaffedHoursDialog({
   canEdit,
   waitsForPlate,
   awayUntil = null,
   present = false,
+  initialTab = 'calendar',
   onClose,
   t,
 }: {
   canEdit: boolean;
+  initialTab?: 'calendar' | 'week';
   /** Plate-clear confirmation is on, so the hours change the forecast. */
   waitsForPlate: boolean;
   /** The forecast takes it nobody is there until then (formatted), from a plate waiting far longer than usual. */
@@ -72,10 +77,12 @@ export function StaffedHoursDialog({
         days: stored.days,
         clear_minutes: stored.clear_minutes,
         learn: stored.learn ?? true,
+        marks: stored.marks ?? [],
       });
     }
   }, [stored, hours]);
   const learned = stored?.learned ?? null;
+  const [tab, setTab] = useState<'calendar' | 'week'>(initialTab);
 
   const save = useMutation({
     mutationFn: (value: QueueStaffedHours) => api.updateStaffedHours(value),
@@ -104,6 +111,13 @@ export function StaffedHoursDialog({
     setHours((h) => (h ? { ...h, days: h.days.map((d, i) => (i === index ? value : d)) } : h));
   const readOnly = !canEdit;
   const zone = browserZone();
+  const upcomingMarks = hours
+    ? (hours.marks ?? []).filter((m) => stampToMin(m.end) > zoneNowMin(hours.timezone)).length
+    : 0;
+  const tabs = [
+    { key: 'calendar' as const, icon: CalendarDays, label: t('queue.timeline.staffed.tabCalendar'), count: upcomingMarks },
+    { key: 'week' as const, icon: Repeat, label: t('queue.timeline.staffed.tabWeek'), count: 0 },
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4" onClick={onClose} role="presentation">
@@ -112,7 +126,7 @@ export function StaffedHoursDialog({
         aria-modal="true"
         aria-label={t('queue.timeline.staffed.title')}
         data-testid="staffed-hours-dialog"
-        className="w-full sm:max-w-lg max-h-[90vh] overflow-y-auto bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-t-2xl sm:rounded-2xl shadow-2xl"
+        className="w-full sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-t-2xl sm:rounded-2xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-2 p-4 sm:p-5 border-b border-bambu-dark-tertiary">
@@ -142,154 +156,190 @@ export function StaffedHoursDialog({
                 {t('queue.timeline.staffed.noPlateClear')}
               </p>
             )}
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-sm text-white">{t('queue.timeline.staffed.enabled')}</span>
-              <input
-                type="checkbox"
-                checked={hours.enabled}
-                disabled={readOnly}
-                onChange={(e) => setHours({ ...hours, enabled: e.target.checked })}
-                className="w-4 h-4 accent-bambu-green"
-              />
-            </label>
-
-            <div className={`space-y-2 ${hours.enabled ? '' : 'opacity-50'}`}>
-              {dayNames.map((name, index) => {
-                const day = hours.days[index];
-                return (
-                  <div key={index} className="flex items-center gap-2" data-testid={`staffed-day-${index}`}>
-                    <label className="flex items-center gap-2 w-36 shrink-0 text-sm text-white capitalize">
-                      <input
-                        type="checkbox"
-                        checked={day != null}
-                        disabled={readOnly || !hours.enabled}
-                        onChange={(e) => setDay(index, e.target.checked ? DEFAULT_DAY : null)}
-                        className="w-4 h-4 accent-bambu-green"
-                      />
-                      {name}
-                    </label>
-                    {day ? (
-                      <>
-                        <input
-                          type="time"
-                          value={day.start}
-                          disabled={readOnly || !hours.enabled}
-                          onChange={(e) => e.target.value && setDay(index, { ...day, start: e.target.value })}
-                          aria-label={`${name} ${t('queue.timeline.staffed.from')}`}
-                          className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
-                        />
-                        <span className="text-bambu-gray">–</span>
-                        <input
-                          type="time"
-                          value={day.end}
-                          disabled={readOnly || !hours.enabled}
-                          onChange={(e) => e.target.value && setDay(index, { ...day, end: e.target.value })}
-                          aria-label={`${name} ${t('queue.timeline.staffed.to')}`}
-                          className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
-                        />
-                      </>
-                    ) : (
-                      <span className="text-xs text-bambu-gray">{t('queue.timeline.staffed.dayOff')}</span>
-                    )}
-                  </div>
-                );
-              })}
-              <p className="text-[11px] text-bambu-gray">{t('queue.timeline.staffed.overnight')}</p>
+            <div className="flex gap-1 p-1 rounded-lg bg-bambu-dark border border-bambu-dark-tertiary" role="tablist">
+              {tabs.map(({ key, icon: Icon, label, count }) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === key}
+                  onClick={() => setTab(key)}
+                  data-testid={`staffed-tab-${key}`}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
+                    tab === key ? 'bg-bambu-dark-tertiary text-white shadow-sm' : 'text-bambu-gray hover:text-white'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span className="truncate">{label}</span>
+                  {count > 0 && (
+                    <span className="min-w-5 px-1.5 rounded-full bg-red-500/20 text-red-200 text-[11px] leading-5">{count}</span>
+                  )}
+                </button>
+              ))}
             </div>
 
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-sm text-white">
-                {t('queue.timeline.staffed.clearMinutes')}
-                <span className="block text-xs text-bambu-gray">{t('queue.timeline.staffed.clearMinutesHelp')}</span>
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={240}
-                value={hours.clear_minutes}
-                disabled={readOnly}
-                onChange={(e) => setHours({ ...hours, clear_minutes: Math.max(0, Math.min(240, Number(e.target.value) || 0)) })}
-                className="w-20 px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+            {tab === 'calendar' ? (
+              <StaffedMarksCalendar
+                marks={hours.marks ?? []}
+                onChange={(marks) => setHours((h) => (h ? { ...h, marks } : h))}
+                timezone={hours.timezone}
+                days={hours.days}
+                weeklyEnabled={hours.enabled}
+                readOnly={readOnly}
+                t={t}
               />
-            </label>
-
-            <div className="space-y-2 pt-3 border-t border-bambu-dark-tertiary" data-testid="staffed-learn">
+            ) : (
+              <>
               <label className="flex items-center justify-between gap-3">
-                <span className="text-sm text-white">
-                  {t('queue.timeline.staffed.learn')}
-                  <span className="block text-xs text-bambu-gray">{t('queue.timeline.staffed.learnHelp')}</span>
-                </span>
+                <span className="text-sm text-white">{t('queue.timeline.staffed.enabled')}</span>
                 <input
                   type="checkbox"
-                  checked={hours.learn}
+                  checked={hours.enabled}
                   disabled={readOnly}
-                  onChange={(e) => setHours({ ...hours, learn: e.target.checked })}
-                  className="w-4 h-4 accent-bambu-green shrink-0"
+                  onChange={(e) => setHours({ ...hours, enabled: e.target.checked })}
+                  className="w-4 h-4 accent-bambu-green"
                 />
               </label>
-              {hours.learn && waitsForPlate && (awayUntil || present) && (
-                <p
-                  className={`text-xs rounded-lg px-3 py-2 border ${
-                    awayUntil ? 'border-amber-400/40 bg-amber-500/10 text-amber-200' : 'border-bambu-green/40 bg-bambu-green/10 text-bambu-green'
-                  }`}
-                  data-testid="staffed-now"
-                >
-                  {awayUntil
-                    ? t('queue.timeline.staffed.nowAway', { time: awayUntil })
-                    : t('queue.timeline.staffed.nowPresent')}
-                </p>
-              )}
-              {hours.learn && learned && (
-                learned.typical_minutes ? (
-                  <div className="space-y-1.5">
-                    <p className="text-xs text-bambu-gray">
-                      {t('queue.timeline.staffed.learnedFrom', { count: learned.samples })}
-                    </p>
-                    <div
-                      className="grid gap-px text-[9px] text-bambu-gray"
-                      style={{ gridTemplateColumns: 'auto repeat(24, minmax(0, 1fr))' }}
-                      data-testid="staffed-heatmap"
-                    >
-                      <span />
-                      {Array.from({ length: 24 }, (_, h) => (
-                        <span key={h} className="text-center leading-3">{h % 6 === 0 ? h : ''}</span>
-                      ))}
-                      {shortDayNames.map((day, d) => (
-                        <div key={day} className="contents">
-                          <span className="pr-1 leading-4 capitalize">{day}</span>
-                          {Array.from({ length: 24 }, (_, h) => {
-                            const minutes = learned.typical_minutes![d * 24 + h];
-                            return (
-                              <span
-                                key={h}
-                                className={`h-4 rounded-[2px] ${waitShade(minutes)}`}
-                                title={t('queue.timeline.staffed.heatmapCell', {
-                                  day: dayNames[d],
-                                  hour: `${String(h).padStart(2, '0')}:00`,
-                                  duration: formatDuration(minutes * 60),
-                                })}
-                              />
-                            );
-                          })}
-                        </div>
-                      ))}
+
+              <div className={`space-y-2 ${hours.enabled ? '' : 'opacity-50'}`}>
+                {dayNames.map((name, index) => {
+                  const day = hours.days[index];
+                  return (
+                    <div key={index} className="flex items-center gap-2" data-testid={`staffed-day-${index}`}>
+                      <label className="flex items-center gap-2 w-36 shrink-0 text-sm text-white capitalize">
+                        <input
+                          type="checkbox"
+                          checked={day != null}
+                          disabled={readOnly || !hours.enabled}
+                          onChange={(e) => setDay(index, e.target.checked ? DEFAULT_DAY : null)}
+                          className="w-4 h-4 accent-bambu-green"
+                        />
+                        {name}
+                      </label>
+                      {day ? (
+                        <>
+                          <input
+                            type="time"
+                            value={day.start}
+                            disabled={readOnly || !hours.enabled}
+                            onChange={(e) => e.target.value && setDay(index, { ...day, start: e.target.value })}
+                            aria-label={`${name} ${t('queue.timeline.staffed.from')}`}
+                            className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                          />
+                          <span className="text-bambu-gray">–</span>
+                          <input
+                            type="time"
+                            value={day.end}
+                            disabled={readOnly || !hours.enabled}
+                            onChange={(e) => e.target.value && setDay(index, { ...day, end: e.target.value })}
+                            aria-label={`${name} ${t('queue.timeline.staffed.to')}`}
+                            className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                          />
+                        </>
+                      ) : (
+                        <span className="text-xs text-bambu-gray">{t('queue.timeline.staffed.dayOff')}</span>
+                      )}
                     </div>
-                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-bambu-gray">
-                      {SHADE_SCALE.map(([key, shade]) => (
-                        <span key={key} className="flex items-center gap-1">
-                          <span className={`inline-block w-3 h-3 rounded-[2px] ${shade}`} />
-                          {t(`queue.timeline.staffed.scale.${key}`)}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-xs text-bambu-gray" data-testid="staffed-too-few">
-                    {t('queue.timeline.staffed.learnedTooFew', { count: learned.samples, needed: learned.needed })}
+                  );
+                })}
+                <p className="text-[11px] text-bambu-gray">{t('queue.timeline.staffed.overnight')}</p>
+              </div>
+
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-sm text-white">
+                  {t('queue.timeline.staffed.clearMinutes')}
+                  <span className="block text-xs text-bambu-gray">{t('queue.timeline.staffed.clearMinutesHelp')}</span>
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={240}
+                  value={hours.clear_minutes}
+                  disabled={readOnly}
+                  onChange={(e) => setHours({ ...hours, clear_minutes: Math.max(0, Math.min(240, Number(e.target.value) || 0)) })}
+                  className="w-20 px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                />
+              </label>
+
+              <div className="space-y-2 pt-3 border-t border-bambu-dark-tertiary" data-testid="staffed-learn">
+                <label className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-white">
+                    {t('queue.timeline.staffed.learn')}
+                    <span className="block text-xs text-bambu-gray">{t('queue.timeline.staffed.learnHelp')}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={hours.learn}
+                    disabled={readOnly}
+                    onChange={(e) => setHours({ ...hours, learn: e.target.checked })}
+                    className="w-4 h-4 accent-bambu-green shrink-0"
+                  />
+                </label>
+                {hours.learn && waitsForPlate && (awayUntil || present) && (
+                  <p
+                    className={`text-xs rounded-lg px-3 py-2 border ${
+                      awayUntil ? 'border-amber-400/40 bg-amber-500/10 text-amber-200' : 'border-bambu-green/40 bg-bambu-green/10 text-bambu-green'
+                    }`}
+                    data-testid="staffed-now"
+                  >
+                    {awayUntil
+                      ? t('queue.timeline.staffed.nowAway', { time: awayUntil })
+                      : t('queue.timeline.staffed.nowPresent')}
                   </p>
-                )
-              )}
-            </div>
+                )}
+                {hours.learn && learned && (
+                  learned.typical_minutes ? (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-bambu-gray">
+                        {t('queue.timeline.staffed.learnedFrom', { count: learned.samples })}
+                      </p>
+                      <div
+                        className="grid gap-px text-[9px] text-bambu-gray"
+                        style={{ gridTemplateColumns: 'auto repeat(24, minmax(0, 1fr))' }}
+                        data-testid="staffed-heatmap"
+                      >
+                        <span />
+                        {Array.from({ length: 24 }, (_, h) => (
+                          <span key={h} className="text-center leading-3">{h % 6 === 0 ? h : ''}</span>
+                        ))}
+                        {shortDayNames.map((day, d) => (
+                          <div key={day} className="contents">
+                            <span className="pr-1 leading-4 capitalize">{day}</span>
+                            {Array.from({ length: 24 }, (_, h) => {
+                              const minutes = learned.typical_minutes![d * 24 + h];
+                              return (
+                                <span
+                                  key={h}
+                                  className={`h-4 rounded-[2px] ${waitShade(minutes)}`}
+                                  title={t('queue.timeline.staffed.heatmapCell', {
+                                    day: dayNames[d],
+                                    hour: `${String(h).padStart(2, '0')}:00`,
+                                    duration: formatDuration(minutes * 60),
+                                  })}
+                                />
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-bambu-gray">
+                        {SHADE_SCALE.map(([key, shade]) => (
+                          <span key={key} className="flex items-center gap-1">
+                            <span className={`inline-block w-3 h-3 rounded-[2px] ${shade}`} />
+                            {t(`queue.timeline.staffed.scale.${key}`)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-bambu-gray" data-testid="staffed-too-few">
+                      {t('queue.timeline.staffed.learnedTooFew', { count: learned.samples, needed: learned.needed })}
+                    </p>
+                  )
+                )}
+              </div>
+              </>
+            )}
 
             <div className="text-xs text-bambu-gray flex flex-wrap items-center gap-2">
               {t('queue.timeline.staffed.timezone', { zone: hours.timezone })}
