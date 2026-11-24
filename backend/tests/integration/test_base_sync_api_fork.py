@@ -21,7 +21,7 @@ from backend.app.services import base_sync
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 H = 3600
-TAKE, CANCELLED = 128256, 90587
+TAKE, CANCELLED = 100001, 100002
 
 
 def _order(order_id: int, lines: list[tuple[str, int]], status: int = TAKE, confirmed: int = 1795111511) -> dict:
@@ -31,7 +31,7 @@ def _order(order_id: int, lines: list[tuple[str, int]], status: int = TAKE, conf
         "shop_order_id": order_id - 1000,
         "external_order_id": str(order_id - 1000),
         "order_source": "allegro",
-        "order_source_id": 7697,
+        "order_source_id": 1111,
         "order_status_id": status,
         "date_confirmed": confirmed,
         "date_add": confirmed - 60,
@@ -64,7 +64,7 @@ class FakeBase:
                 found = [o for o in found if o["date_confirmed"] >= since]
             return {"status": "SUCCESS", "orders": found}
         if method == "getOrderSources":
-            return {"status": "SUCCESS", "sources": {"allegro": {"7697": "MTEPrints"}, "shop": {"5033308": "Sklep"}}}
+            return {"status": "SUCCESS", "sources": {"allegro": {"1111": "Allegro Shop A"}, "shop": {"2222": "Sklep"}}}
         if method == "getOrderStatusList":
             return {
                 "status": "SUCCESS",
@@ -97,7 +97,7 @@ def _live(connected: set[int]):
 
 @pytest.fixture
 async def shop(async_client: AsyncClient, db_session, printer_factory, fake_base):
-    """A P1S, a box (lid + base, matched) with SKU AB-9x19.100.B, and the sync set up."""
+    """A P1S, a box (lid + base, matched) with SKU SKU-BOX-100-B, and the sync set up."""
     printer = await printer_factory(name="P1S-A", model="P1S")
     files = []
     for name in ("lid", "base"):
@@ -120,7 +120,7 @@ async def shop(async_client: AsyncClient, db_session, printer_factory, fake_base
                 {"library_file_id": files[0], "pieces": [{"part_name": "Lid", "pieces": 1}]},
                 {"library_file_id": files[1], "pieces": [{"part_name": "Base", "pieces": 1}]},
             ],
-            "skus": [{"sku": "AB-9x19.100.B"}],
+            "skus": [{"sku": "SKU-BOX-100-B"}],
         },
     )
     assert response.status_code == 200, response.text
@@ -164,11 +164,11 @@ async def test_the_connection_test_lists_statuses_and_sources(async_client: Asyn
     assert response.status_code == 200, response.text
     body = response.json()
     assert {s["name"] for s in body["statuses"]} == {"Przyjęte do realizacji", "Anulowane"}
-    assert {"key": "allegro:7697", "name": "MTEPrints"} in body["sources"]
+    assert {"key": "allegro:1111", "name": "Allegro Shop A"} in body["sources"]
 
 
 async def test_a_new_order_waits_and_keeps_no_buyer_data(async_client: AsyncClient, db_session, shop, fake_base):
-    fake_base.orders = [_order(5001, [("AB-9x19.100.B", 2), ("ABZ-20.1000.W", 1)])]
+    fake_base.orders = [_order(5001, [("SKU-BOX-100-B", 2), ("SKU-STICKER-W", 1)])]
     result = await _sync(async_client, {shop.printer})
     assert (result["seen"], result["new"]) == (1, 1)
     assert await _product_orders(db_session) == []  # waits for someone to send it
@@ -177,20 +177,20 @@ async def test_a_new_order_waits_and_keeps_no_buyer_data(async_client: AsyncClie
     stored = str({c.name: getattr(row, c.name) for c in BaseOrder.__table__.columns})
     for buyer in ("buyer@example.com", "+48000000000", "Kowalski", "Ulica", "1234567890"):
         assert buyer not in stored
-    assert row.source_name == "MTEPrints" and row.number == "4001"
+    assert row.source_name == "Allegro Shop A" and row.number == "4001"
 
     [listed] = (await async_client.get("/api/v1/base-sync/orders")).json()
     assert listed["state"] == "new"
     assert [(line["sku"], line["mapping"]) for line in listed["lines"]] == [
-        ("AB-9x19.100.B", "product"),
-        ("ABZ-20.1000.W", "unmapped"),
+        ("SKU-BOX-100-B", "product"),
+        ("SKU-STICKER-W", "unmapped"),
     ]
     skus = (await async_client.get("/api/v1/base-sync/skus")).json()
-    assert skus["unmapped"] == [{"sku": "ABZ-20.1000.W", "name": "Name of ABZ-20.1000.W", "orders": 1}]
+    assert skus["unmapped"] == [{"sku": "SKU-STICKER-W", "name": "Name of SKU-STICKER-W", "orders": 1}]
 
 
 async def test_accepting_an_order_queues_its_prints(async_client: AsyncClient, db_session, shop, fake_base):
-    fake_base.orders = [_order(5001, [("AB-9x19.100.B", 2), ("ABZ-20.1000.W", 1)])]
+    fake_base.orders = [_order(5001, [("SKU-BOX-100-B", 2), ("SKU-STICKER-W", 1)])]
     await _sync(async_client, {shop.printer})
     online, status = _live({shop.printer})
     with online, status:
@@ -203,12 +203,12 @@ async def test_accepting_an_order_queues_its_prints(async_client: AsyncClient, d
         "base",
         "5001/" + str(shop.product_id),
     )
-    assert "Base #4001 (MTEPrints)" in (po.notes or "")
+    assert "Base #4001 (Allegro Shop A)" in (po.notes or "")
     items = list((await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars())
     assert items  # planned into the queue
 
     # The stickers are not printed: marking them clears the unmapped list.
-    response = await async_client.put("/api/v1/base-sync/skus/ABZ-20.1000.W", json={"product_id": None})
+    response = await async_client.put("/api/v1/base-sync/skus/SKU-STICKER-W", json={"product_id": None})
     assert response.status_code == 200
     assert (await async_client.get("/api/v1/base-sync/skus")).json()["unmapped"] == []
 
@@ -217,27 +217,27 @@ async def test_auto_accepted_orders_follow_their_lines_and_cancellations(
     async_client: AsyncClient, db_session, shop, fake_base
 ):
     await async_client.put("/api/v1/base-sync/settings", json={"auto_accept": True})
-    fake_base.orders = [_order(5002, [("AB-9x19.100.B", 1)])]
+    fake_base.orders = [_order(5002, [("SKU-BOX-100-B", 1)])]
     await _sync(async_client, {shop.printer})
     [po] = await _product_orders(db_session)
     assert (po.quantity, po.status) == (1, "open")
 
     # The buyer adds one more in Base: the product order follows.
-    fake_base.orders = [_order(5002, [("AB-9x19.100.B", 3)])]
+    fake_base.orders = [_order(5002, [("SKU-BOX-100-B", 3)])]
     result = await _sync(async_client, {shop.printer})
     assert result["updated"] == 1
     [po] = await _product_orders(db_session)
     assert po.quantity == 3
 
     # Moved on by hand in Base: the prints stay.
-    fake_base.orders = [_order(5002, [("AB-9x19.100.B", 3)], status=128257)]
+    fake_base.orders = [_order(5002, [("SKU-BOX-100-B", 3)], status=100003)]
     await _sync(async_client, {shop.printer})
     [po] = await _product_orders(db_session)
     assert po.status == "open"
     assert (await db_session.get(BaseOrder, 5002)).in_status is False
 
     # Cancelled in Base: the product order is cancelled too.
-    fake_base.orders = [_order(5002, [("AB-9x19.100.B", 3)], status=CANCELLED)]
+    fake_base.orders = [_order(5002, [("SKU-BOX-100-B", 3)], status=CANCELLED)]
     result = await _sync(async_client, {shop.printer})
     assert result["cancelled"] == 1
     [po] = await _product_orders(db_session)
@@ -247,13 +247,13 @@ async def test_auto_accepted_orders_follow_their_lines_and_cancellations(
 
 async def test_mapping_a_sku_later_adds_its_product_order(async_client: AsyncClient, db_session, shop, fake_base):
     await async_client.put("/api/v1/base-sync/settings", json={"auto_accept": True})
-    fake_base.orders = [_order(5003, [("AB-9x19.100.G", 1)])]
+    fake_base.orders = [_order(5003, [("SKU-BOX-100-G", 1)])]
     await _sync(async_client, {shop.printer})
     assert await _product_orders(db_session) == []
     online, status = _live({shop.printer})
     with online, status:
         response = await async_client.put(
-            "/api/v1/base-sync/skus/AB-9x19.100.G", json={"product_id": shop.product_id, "units": 2}
+            "/api/v1/base-sync/skus/SKU-BOX-100-G", json={"product_id": shop.product_id, "units": 2}
         )
     assert response.status_code == 200, response.text
     [po] = await _product_orders(db_session)
@@ -264,7 +264,7 @@ async def test_skipping_an_order_cancels_its_open_product_orders(
     async_client: AsyncClient, db_session, shop, fake_base
 ):
     await async_client.put("/api/v1/base-sync/settings", json={"auto_accept": True})
-    fake_base.orders = [_order(5004, [("AB-9x19.100.B", 1)])]
+    fake_base.orders = [_order(5004, [("SKU-BOX-100-B", 1)])]
     await _sync(async_client, {shop.printer})
     online, status = _live({shop.printer})
     with online, status:
@@ -275,8 +275,8 @@ async def test_skipping_an_order_cancels_its_open_product_orders(
 
 
 async def test_only_chosen_sources_are_taken(async_client: AsyncClient, db_session, shop, fake_base):
-    await async_client.put("/api/v1/base-sync/settings", json={"sources": ["shop:5033308"]})
-    fake_base.orders = [_order(5005, [("AB-9x19.100.B", 1)])]
+    await async_client.put("/api/v1/base-sync/settings", json={"sources": ["shop:2222"]})
+    fake_base.orders = [_order(5005, [("SKU-BOX-100-B", 1)])]
     result = await _sync(async_client, {shop.printer})
     assert result["seen"] == 0
     assert await db_session.get(BaseOrder, 5005) is None
@@ -285,7 +285,7 @@ async def test_only_chosen_sources_are_taken(async_client: AsyncClient, db_sessi
 async def test_a_sku_belongs_to_one_product(async_client: AsyncClient, shop):
     response = await async_client.post(
         "/api/v1/products/",
-        json={"name": "Other", "parts": [{"name": "Lid"}], "skus": [{"sku": "ab-9x19.100.b"}]},
+        json={"name": "Other", "parts": [{"name": "Lid"}], "skus": [{"sku": "sku-box-100-b"}]},
     )
     assert response.status_code == 409
 
@@ -318,8 +318,8 @@ async def test_setting_up_takes_orders_from_now_on(async_client: AsyncClient, db
 
     now = int(datetime.now(timezone.utc).timestamp())
     fake_base.orders = [
-        _order(7001, [("AB-9x19.100.B", 1)], confirmed=now - 86400),  # before the sync was set up
-        _order(7002, [("AB-9x19.100.B", 1)], confirmed=now + 60),
+        _order(7001, [("SKU-BOX-100-B", 1)], confirmed=now - 86400),  # before the sync was set up
+        _order(7002, [("SKU-BOX-100-B", 1)], confirmed=now + 60),
     ]
     result = await _sync(async_client, set())
     assert result["seen"] == 1

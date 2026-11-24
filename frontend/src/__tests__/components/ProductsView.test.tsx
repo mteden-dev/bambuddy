@@ -42,7 +42,7 @@ const PRODUCT = {
       },
     },
   ],
-  skus: [{ sku: 'AB-9x19.100.B', units: 1 }],
+  skus: [{ sku: 'SKU-BOX-100-B', units: 1 }],
   open_orders: 1,
   open_units: 2,
   has_thumbnail: true,

@@ -148,7 +148,7 @@ realizacji”) i zamieniać ich pozycje na zamówienia produktów. **Tylko czyta
 zmienia i nie zapisuje danych kupującego (zostaje numer zamówienia, źródło, data potwierdzenia i
 pozycje: SKU, nazwa, ilość). Logika: `backend/app/services/base_sync.py`, trasy `/base-sync`.
 
-- **SKU** łączy pozycję z Base z produktem: w produkcie pole `skus` (`[{"sku": "AB-9x19.100.B",
+- **SKU** łączy pozycję z Base z produktem: w produkcie pole `skus` (`[{"sku": "SKU-BOX-100-B",
   "units": 1}]`, `units` to liczba produktów w jednej sprzedanej sztuce, np. 3 dla zestawu) albo
   `PUT /base-sync/skus/{sku}` z `{"product_id": 7, "units": 1}`. `{"product_id": null}` oznacza
   SKU, którego nie drukujemy (zaklejki, rzeczy kupowane): takie pozycje są pomijane bez pytania.
@@ -163,18 +163,18 @@ pozycje: SKU, nazwa, ilość). Logika: `backend/app/services/base_sync.py`, tras
 ```bash
 # token (tylko do zapisu), status do pobierania, status anulowanych, włączenie
 curl -s -X PUT "$BB/base-sync/settings" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
-  -d '{"api_token": "<token z Base>", "status_id": 128256, "cancel_status_id": 90587, "enabled": true}'
+  -d '{"api_token": "<token z Base>", "status_id": 100001, "cancel_status_id": 100002, "enabled": true}'
 
 curl -s -X POST "$BB/base-sync/test" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{}'  # statusy i źródła
 curl -s -X POST "$BB/base-sync/sync" -H "X-API-Key: $KEY"                    # odczyt teraz
 curl -s "$BB/base-sync/orders?state=new" -H "X-API-Key: $KEY"                # czekające
-curl -s -X POST "$BB/base-sync/orders/57052903/accept" -H "X-API-Key: $KEY"
-curl -s -X PUT "$BB/base-sync/skus/ABZ-20.1000.W" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+curl -s -X POST "$BB/base-sync/orders/10000001/accept" -H "X-API-Key: $KEY"
+curl -s -X PUT "$BB/base-sync/skus/SKU-STICKER-W" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
   -d '{"product_id": null}'
 ```
 
 Ustawienia (`GET/PUT /base-sync/settings`): `enabled`, `status_id`, `cancel_status_id`, `sources`
-(lista `"źródło:id"`, np. `"allegro:7697"`; pusta = wszystkie), `poll_minutes` (od 2), `auto_accept`,
+(lista `"źródło:id"`, np. `"allegro:1111"`; pusta = wszystkie), `poll_minutes` (od 2), `auto_accept`,
 `manual_start` (zadania czekają na ręczny start), `handling_days` (termin = potwierdzenie + tyle dni
 roboczych; 0 = bez terminu), `since` (tylko zamówienia potwierdzone od tej chwili, UTC; ustawiane
 samo na „teraz” przy pierwszym wyborze statusu, `clear_since: true` bierze wszystkie, czyli ostatnie

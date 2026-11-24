@@ -13,8 +13,8 @@ import type { BaseOrder, BaseSyncSettings } from '../../api/client';
 
 const SETTINGS: BaseSyncSettings = {
   enabled: true,
-  status_id: 128256,
-  cancel_status_id: 90587,
+  status_id: 100001,
+  cancel_status_id: 100002,
   sources: [],
   poll_minutes: 5,
   auto_accept: false,
@@ -31,13 +31,13 @@ const ORDER: BaseOrder = {
   order_id: 5001,
   number: '1243',
   source: 'allegro',
-  source_name: 'MTEPrints',
+  source_name: 'Allegro Shop A',
   date_confirmed: '2026-11-24T09:00:00Z',
   state: 'new',
   in_status: true,
   lines: [
     {
-      sku: 'AB-9x19.100.B',
+      sku: 'SKU-BOX-100-B',
       name: 'Box 9mm 100 Black',
       quantity: 2,
       attributes: 'Black',
@@ -47,7 +47,7 @@ const ORDER: BaseOrder = {
       units: 1,
     },
     {
-      sku: 'ABZ-20.1000.W',
+      sku: 'SKU-STICKER-W',
       name: 'Stickers white',
       quantity: 1,
       attributes: '',
@@ -80,15 +80,15 @@ beforeEach(() => {
     http.post('/api/v1/base-sync/test', () =>
       HttpResponse.json({
         statuses: [
-          { id: 128256, name: 'Przyjęte do realizacji', color: null },
-          { id: 90587, name: 'Anulowane', color: null },
+          { id: 100001, name: 'Przyjęte do realizacji', color: null },
+          { id: 100002, name: 'Anulowane', color: null },
         ],
-        sources: [{ key: 'allegro:7697', name: 'MTEPrints' }],
+        sources: [{ key: 'allegro:1111', name: 'Allegro Shop A' }],
       }),
     ),
     http.get('/api/v1/base-sync/orders', () => HttpResponse.json([ORDER])),
     http.get('/api/v1/base-sync/skus', () =>
-      HttpResponse.json({ mapped: [], unmapped: [{ sku: 'ABZ-20.1000.W', name: 'Stickers white', orders: 1 }] }),
+      HttpResponse.json({ mapped: [], unmapped: [{ sku: 'SKU-STICKER-W', name: 'Stickers white', orders: 1 }] }),
     ),
     http.get('/api/v1/products/', () => HttpResponse.json([{ id: 4, name: '9mm 100 Black', parts: [], plates: [], skus: [] }])),
     http.post('/api/v1/base-sync/orders/:id/accept', ({ params }) => {
@@ -115,7 +115,7 @@ describe('BaseOrdersView', () => {
     const user = userEvent.setup();
     render(<BaseOrdersView hasPermission={allowAll} />);
     expect(await screen.findByText('#1243')).toBeInTheDocument();
-    expect(screen.getByText('MTEPrints')).toBeInTheDocument();
+    expect(screen.getByText('Allegro Shop A')).toBeInTheDocument();
     // The line's product badge (the unmapped panel's product list has the name too).
     expect(screen.getAllByText('9mm 100 Black').some((el) => el.tagName === 'SPAN')).toBe(true);
     expect(screen.getAllByText('no product').length).toBeGreaterThan(0);
@@ -126,15 +126,15 @@ describe('BaseOrdersView', () => {
   it('maps an unmapped SKU to a product or marks it not printed', async () => {
     const user = userEvent.setup();
     render(<BaseOrdersView hasPermission={allowAll} />);
-    const select = await screen.findByLabelText('Product for ABZ-20.1000.W');
+    const select = await screen.findByLabelText('Product for SKU-STICKER-W');
     await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(2));
     await user.selectOptions(select, '4');
     await user.click(screen.getByRole('button', { name: 'Map' }));
     await user.click(screen.getByRole('button', { name: 'Not printed' }));
     await waitFor(() =>
       expect(mapped).toEqual([
-        { sku: 'ABZ-20.1000.W', body: { product_id: 4, units: 1 } },
-        { sku: 'ABZ-20.1000.W', body: { product_id: null, units: 1 } },
+        { sku: 'SKU-STICKER-W', body: { product_id: 4, units: 1 } },
+        { sku: 'SKU-STICKER-W', body: { product_id: null, units: 1 } },
       ]),
     );
   });
@@ -144,11 +144,11 @@ describe('BaseOrdersView', () => {
     render(<BaseOrdersView hasPermission={allowAll} />);
     await user.click(await screen.findByRole('button', { name: 'Base settings' }));
     const status = await screen.findByLabelText('Take orders from status');
-    expect((status as HTMLSelectElement).value).toBe('128256');
+    expect((status as HTMLSelectElement).value).toBe('100001');
     await user.click(screen.getByLabelText(/Send new orders to production at once/));
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0]).toMatchObject({ status_id: 128256, cancel_status_id: 90587, auto_accept: true, enabled: true });
+    expect(saved[0]).toMatchObject({ status_id: 100001, cancel_status_id: 100002, auto_accept: true, enabled: true });
     expect(saved[0]).not.toHaveProperty('api_token');
     // No date stored and none entered: every order Base returns.
     expect(saved[0]).toMatchObject({ clear_since: true });
@@ -160,7 +160,7 @@ describe('BaseOrdersView', () => {
     render(<BaseOrdersView hasPermission={allowAll} />);
     await user.click(await screen.findByRole('button', { name: 'Base settings' }));
     const status = await screen.findByLabelText('Take orders from status');
-    await user.selectOptions(status, '128256');
+    await user.selectOptions(status, '100001');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toHaveLength(1));
     const body = saved[0] as { since?: string; clear_since?: boolean };

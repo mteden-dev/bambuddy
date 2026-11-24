@@ -350,7 +350,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                     <input
                       className={`${inputClass} flex-1 min-w-[10rem]`}
                       value={entry.sku}
-                      placeholder="AB-9x19.100.B"
+                      placeholder="SKU-BOX-100-B"
                       aria-label={t('products.editor.sku')}
                       onChange={(e) =>
                         setSkus((current) => current.map((s, i) => (i === index ? { ...s, sku: e.target.value } : s)))

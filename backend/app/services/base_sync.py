@@ -65,7 +65,7 @@ class BaseConfig:
     status_id: int | None = None
     # Orders found here are cancelled in Bambuddy too.
     cancel_status_id: int | None = None
-    # "source:id" (e.g. "allegro:7697"); empty for every source.
+    # "source:id" (e.g. "allegro:1111"); empty for every source.
     sources: list[str] = field(default_factory=list)
     poll_minutes: int = 5
     # New orders go to production at once instead of waiting for someone.
@@ -280,7 +280,7 @@ async def fetch_orders(client: BaseClient, status_id: int, since: datetime | Non
 
 
 async def fetch_sources(client: BaseClient) -> dict[str, str]:
-    """ "source:id" -> the account or shop name, e.g. "allegro:7697" -> "MTEPrints"."""
+    """ "source:id" -> the account or shop name, e.g. "allegro:1111" -> "Allegro Shop A"."""
     body = await client.call("getOrderSources", {})
     names: dict[str, str] = {}
     for source, entries in (body.get("sources") or {}).items():
