@@ -290,6 +290,16 @@ export function Layout() {
   });
   const pendingQueueCount = queueItems?.length ?? 0;
 
+  // Fork (products): finished prints of products waiting to be checked.
+  const { data: productsToCheck } = useQuery({
+    queryKey: ['products', 'qc'],
+    queryFn: () => api.getProductsToCheck(),
+    refetchInterval: 60_000,
+    retry: false,
+    enabled: hasPermission('queue:read'),
+  });
+  const productsToCheckCount = productsToCheck?.length ?? 0;
+
   // Fetch pending uploads count for archive badge (virtual printer review items)
   const { data: pendingUploadsData } = useQuery({
     queryKey: ['pending-uploads', 'count'],
@@ -752,8 +762,15 @@ export function Layout() {
                 const { to, icon: Icon, labelKey } = navItem;
                 const showQueueBadge = id === 'queue' && pendingQueueCount > 0;
                 const showArchiveBadge = id === 'archives' && pendingUploadsCount > 0;
-                const badgeCount = showQueueBadge ? pendingQueueCount : showArchiveBadge ? pendingUploadsCount : 0;
-                const showBadge = showQueueBadge || showArchiveBadge;
+                const showProductsBadge = id === 'products' && productsToCheckCount > 0;
+                const badgeCount = showQueueBadge
+                  ? pendingQueueCount
+                  : showArchiveBadge
+                    ? pendingUploadsCount
+                    : showProductsBadge
+                      ? productsToCheckCount
+                      : 0;
+                const showBadge = showQueueBadge || showArchiveBadge || showProductsBadge;
                 const showClearPlateDot = id === 'printers' && needsClearPlate;
 
                 const expanded = isSidebarCompact || sidebarExpanded;

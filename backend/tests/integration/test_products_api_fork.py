@@ -595,3 +595,134 @@ async def test_the_settings_say_when_shortest_first_is_on(async_client: AsyncCli
         "plate_cost_minutes": 15,
         "sjf_enabled": True,
     }
+
+
+async def test_finished_jobs_wait_to_be_checked_and_a_bad_piece_reopens_the_order(
+    async_client: AsyncClient, db_session, box
+):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    for item in await _queue(db_session):
+        item.status = "completed"
+        item.printer_id = item.printer_id or (await db_session.get(QueueReservation, item.id)).printer_id
+    await db_session.commit()
+    online, status = _live(connected)
+    with online, status:
+        detail = (await async_client.get(f"/api/v1/products/{box.id}")).json()
+    [order] = detail["orders"]
+    assert order["status"] == "done"  # unchecked pieces count as good
+
+    to_check = (await async_client.get("/api/v1/products/qc")).json()
+    assert sorted(j["pieces"][0]["part_name"] for j in to_check) == ["Base", "Lid", "Tray"]
+    by_part = {j["pieces"][0]["part_name"]: j for j in to_check}
+    lid_printer = by_part["Lid"]["printer_id"]
+    on_lid_printer = (await async_client.get(f"/api/v1/products/qc?printer_id={lid_printer}")).json()
+    assert sorted(j["pieces"][0]["part_name"] for j in on_lid_printer) == ["Base", "Lid"]
+
+    # The tray is fine: nothing changes.
+    checked = await _post(async_client, f"/api/v1/products/jobs/{by_part['Tray']['id']}/check", {}, connected)
+    assert checked["replanned"] is False and checked["job"]["checked_at"] is not None
+
+    # The lid is cracked: the order opens again and a new lid goes on the base's printer.
+    checked = await _post(
+        async_client,
+        f"/api/v1/products/jobs/{by_part['Lid']['id']}/check",
+        {"rejected": [{"part_id": box.parts["Lid"], "pieces": 1}]},
+        connected,
+    )
+    assert checked["replanned"] is True
+    assert checked["reopened_orders"] == [order["id"]]
+    assert checked["job"]["pieces"][0]["rejected"] == 1
+    [lid] = await _queue(db_session)
+    assert lid.library_file_id == box.files[("lid", 1)] and lid.printer_id == lid_printer
+
+    left = (await async_client.get("/api/v1/products/qc")).json()
+    assert [j["pieces"][0]["part_name"] for j in left] == ["Base"]
+    # A part the job did not print is refused.
+    response = await async_client.post(
+        f"/api/v1/products/jobs/{by_part['Base']['id']}/check",
+        json={"rejected": [{"part_id": box.parts["Tray"], "pieces": 1}]},
+    )
+    assert response.status_code == 400
+
+
+async def _finished_box(async_client: AsyncClient, db_session, box) -> dict[str, dict]:
+    """One box ordered and printed; its jobs to check by part name."""
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    for item in await _queue(db_session):
+        item.status = "completed"
+        item.printer_id = item.printer_id or (await db_session.get(QueueReservation, item.id)).printer_id
+    await db_session.commit()
+    online, status = _live(connected)
+    with online, status:
+        await async_client.get(f"/api/v1/products/{box.id}")
+    return {j["pieces"][0]["part_name"]: j for j in (await async_client.get("/api/v1/products/qc")).json()}
+
+
+async def test_the_question_at_plate_clear_is_about_the_plate_on_the_printer_only(
+    async_client: AsyncClient, db_session, box
+):
+    from datetime import datetime, timedelta, timezone
+
+    from backend.app.models.plate_clears import PlateClear
+
+    jobs = await _finished_box(async_client, db_session, box)
+    printer = jobs["Lid"]["printer_id"]
+    # Lid and base were printed on one printer: only the newest is on its plate.
+    [on_plate] = (await async_client.get(f"/api/v1/products/qc?printer_id={printer}&on_plate=true")).json()
+    newest = max((j for j in jobs.values() if j["printer_id"] == printer), key=lambda j: (j["finished_at"], j["id"]))
+    assert on_plate["id"] == newest["id"]
+
+    # The plate was cleared after both finished ("check later"): nothing is on it now.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.add(PlateClear(printer_id=printer, finished_at=now, cleared_at=now + timedelta(minutes=1)))
+    await db_session.commit()
+    assert (await async_client.get(f"/api/v1/products/qc?printer_id={printer}&on_plate=true")).json() == []
+    # They still wait in the list.
+    assert len((await async_client.get(f"/api/v1/products/qc?printer_id={printer}")).json()) == 2
+
+
+async def test_a_check_can_be_taken_back_and_goes_to_the_archive(
+    async_client: AsyncClient, db_session, box, archive_factory
+):
+    from backend.app.models.archive import PrintArchive
+    from backend.app.models.print_log import PrintLogEntry
+
+    connected = {box.a, box.b}
+    jobs = await _finished_box(async_client, db_session, box)
+    lid = jobs["Lid"]
+    job = await db_session.get(ProductJob, lid["id"])
+    archive = await archive_factory(lid["printer_id"])
+    run = (await db_session.execute(select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id))).scalar_one()
+    run.queue_item_id = job.queue_item_id
+    job.archive_id = archive.id
+    run_id, archive_id = run.id, archive.id
+    await db_session.commit()
+
+    # Its only piece is bad: the print is a reject in the archive.
+    await _post(
+        async_client,
+        f"/api/v1/products/jobs/{lid['id']}/check",
+        {"rejected": [{"part_id": box.parts["Lid"], "pieces": 1}], "source": "plate_clear"},
+        connected,
+    )
+    db_session.expire_all()
+    run = await db_session.get(PrintLogEntry, run_id)
+    assert (run.user_verdict, run.user_verdict_source) == ("reject", "plate_clear")
+    assert (await db_session.get(PrintArchive, archive_id)).user_verdict == "reject"
+    checked = (await async_client.get("/api/v1/products/qc?checked=true")).json()
+    assert [(j["id"], j["pieces"][0]["rejected"]) for j in checked] == [(lid["id"], 1)]
+
+    # Undo: it waits again, the verdict is gone and the extra lid is no longer planned.
+    result = await _post(async_client, f"/api/v1/products/jobs/{lid['id']}/uncheck", None, connected)
+    assert result["replanned"] is True and result["job"]["checked_at"] is None
+    db_session.expire_all()
+    assert (await db_session.get(PrintLogEntry, run_id)).user_verdict is None
+    assert await _queue(db_session) == []
+    assert lid["id"] in [j["id"] for j in (await async_client.get("/api/v1/products/qc")).json()]
+
+    # All good: a good print.
+    await _post(async_client, f"/api/v1/products/jobs/{lid['id']}/check", {}, connected)
+    db_session.expire_all()
+    assert (await db_session.get(PrintLogEntry, run_id)).user_verdict == "good"

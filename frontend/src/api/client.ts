@@ -4733,6 +4733,40 @@ export interface BaseOrder {
   lines: BaseOrderLine[];
   product_orders: { id: number; product_id: number; quantity: number; status: string }[];
   ready: boolean;
+  /** Product id -> products held back from printing for this order. */
+  held: Record<string, number>;
+  /** Part id -> pieces on hand put into stock for this order. */
+  on_hand: Record<string, number>;
+}
+
+/** Fork (Base sync): what to print of one product when sending an order. */
+export interface BaseOrderAcceptProduct {
+  product_id: number;
+  /** Products to print; the rest of what the order wants is held back. */
+  units: number;
+  /** Pieces on hand outside the stock Bambuddy counts (they go into stock). */
+  have: { part_id: number; pieces: number }[];
+}
+
+/** Fork (products): a finished product job waiting to be checked. */
+export interface ProductQcJob {
+  id: number;
+  product_id: number;
+  product_name: string;
+  printer_id: number | null;
+  printer_name: string | null;
+  library_file_id: number | null;
+  filename: string | null;
+  archive_id: number | null;
+  finished_at: string | null;
+  checked_at: string | null;
+  pieces: { part_id: number; part_name: string; pieces: number; rejected: number }[];
+}
+
+export interface ProductQcCheckResult {
+  job: ProductQcJob;
+  replanned: boolean;
+  reopened_orders: number[];
 }
 
 export interface BaseSkus {
@@ -7917,8 +7951,15 @@ export const api = {
   runBaseSync: () => request<BaseSyncResult>('/base-sync/sync', { method: 'POST' }),
   getBaseOrders: (state?: string) =>
     request<BaseOrder[]>(`/base-sync/orders${state ? `?state=${encodeURIComponent(state)}` : ''}`),
-  acceptBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/accept`, { method: 'POST' }),
+  /** Without products every mapped line is printed in full. */
+  acceptBaseOrder: (orderId: number, data?: { products: BaseOrderAcceptProduct[] }) =>
+    request<BaseOrder>(`/base-sync/orders/${orderId}/accept`, {
+      method: 'POST',
+      ...(data ? { body: JSON.stringify(data) } : {}),
+    }),
   skipBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/skip`, { method: 'POST' }),
+  /** Undo sending or skipping: the order waits again. */
+  resetBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/reset`, { method: 'POST' }),
   getBaseSkus: () => request<BaseSkus>('/base-sync/skus'),
   mapBaseSku: (sku: string, data: { product_id: number | null; units?: number }) =>
     request<BaseSkus['mapped'][number]>(`/base-sync/skus/${encodeURIComponent(sku)}`, {
@@ -7927,6 +7968,26 @@ export const api = {
     }),
   unmapBaseSku: (sku: string) =>
     request<{ deleted: string }>(`/base-sync/skus/${encodeURIComponent(sku)}`, { method: 'DELETE' }),
+  /** Unchecked finished jobs; `checked` lists the ones checked lately, `onPlate` only the one on the plate. */
+  getProductsToCheck: (printerId?: number, options: { checked?: boolean; onPlate?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    if (printerId != null) params.set('printer_id', String(printerId));
+    if (options.checked) params.set('checked', 'true');
+    if (options.onPlate) params.set('on_plate', 'true');
+    const query = params.toString();
+    return request<ProductQcJob[]>(`/products/qc${query ? `?${query}` : ''}`);
+  },
+  checkProductJob: (
+    jobId: number,
+    rejected: { part_id: number; pieces: number }[] = [],
+    source: 'dialog' | 'plate_clear' = 'dialog',
+  ) =>
+    request<ProductQcCheckResult>(`/products/jobs/${jobId}/check`, {
+      method: 'POST',
+      body: JSON.stringify({ rejected, source }),
+    }),
+  uncheckProductJob: (jobId: number) =>
+    request<ProductQcCheckResult>(`/products/jobs/${jobId}/uncheck`, { method: 'POST' }),
   getProductSettings: () => request<ProductSettings>('/products/settings'),
   updateProductSettings: (data: { plate_cost_minutes: number }) =>
     request<ProductSettings>('/products/settings', { method: 'PUT', body: JSON.stringify(data) }),

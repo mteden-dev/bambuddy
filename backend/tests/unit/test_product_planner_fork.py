@@ -15,6 +15,7 @@ from backend.app.services.product_planner import (
     PlannerPrinter,
     PlateOption,
     allocate,
+    complete_units,
     plan,
     ready_times,
 )
@@ -82,6 +83,19 @@ def test_a_product_takes_its_matched_parts_from_one_printer():
     allocation = allocate(BOX, pool, [OrderNeed(10, 1)])
     assert allocation.units == {10: 1}
     assert allocation.taken[10] == {LID: {1: 1}, BASE: {1: 1}, TRAY: {1: 1}}
+
+
+def test_a_piece_of_no_known_printer_goes_with_any_printer():
+    # "I have a lid already": a stock correction naming no printer (0).
+    pool = {LID: {0: 1}, BASE: {2: 1}, TRAY: {1: 1}}
+    allocation = allocate(BOX, pool, [OrderNeed(10, 1)])
+    assert allocation.units == {10: 1}
+    assert allocation.taken[10] == {LID: {0: 1}, BASE: {2: 1}, TRAY: {1: 1}}
+    # A printer's own whole set goes before one completed that way.
+    pool = {LID: {0: 1, 1: 1}, BASE: {1: 1, 2: 1}, TRAY: {1: 2}}
+    allocation = allocate(BOX, pool, [OrderNeed(10, 1), OrderNeed(11, 1)])
+    assert allocation.taken[10][LID] == {1: 1} and allocation.taken[11][LID] == {0: 1}
+    assert complete_units(BOX, pool) == 2
 
 
 def test_orders_share_the_stock_in_order_and_count_partial_pieces():
@@ -160,6 +174,14 @@ def test_a_leftover_lid_is_finished_on_its_own_printer():
     assert [(p.printer_id, p.option.pieces) for p in matched] == [(2, ((BASE, 1),))]
 
 
+def test_a_lid_on_hand_leaves_only_the_base_to_print():
+    # The lid's printer is not known: the base may come from any printer.
+    result = plan(_inputs([OrderNeed(10, 1)], stock={LID: {0: 1}}))
+    printed = sorted(piece for p in result.plates for piece in p.option.pieces)
+    assert printed == [(BASE, 1), (TRAY, 1)]
+    assert result.extra == {}
+
+
 def test_stock_from_an_earlier_overrun_is_used_before_printing():
     stock = {LID: {1: 1}, BASE: {1: 1}, TRAY: {2: 1}}
     result = plan(_inputs([OrderNeed(10, 1)], stock=stock))
@@ -233,3 +255,17 @@ def test_finishing_time_holds_an_order_back_until_it_has_passed():
     # Pieces in stock are finished already.
     stock = [Arrival(NOW, 1, ((LID, 1), (BASE, 1), (TRAY, 1)), finished=True)]
     assert ready_times(box, [OrderNeed(10, 1)], stock, NOW) == {10: NOW}
+
+
+def test_on_one_printer_the_tray_prints_before_the_lid():
+    # Gluing waits for both base and tray: the lid, which needs no work, goes last.
+    box = [PartSpec(LID, 1, True), PartSpec(BASE, 1, True, finish_s=H), PartSpec(TRAY, 1, False, finish_s=H)]
+    one = [PlannerPrinter(1, "p1s", NOW)]
+    result = plan(_inputs([OrderNeed(10, 1)], parts=box, h2s=False, printers=one))
+    assert [p.option.pieces for p in sorted(result.plates, key=lambda p: p.start)] == [
+        ((BASE, 1),),
+        ((TRAY, 1),),
+        ((LID, 1),),
+    ]
+    # Base 10-12, tray 12-14 (+1 h: 15:00), lid 14-16: ready at 16:00, not 17:00.
+    assert result.ready_at[10] == NOW + timedelta(hours=6)

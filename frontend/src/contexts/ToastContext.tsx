@@ -36,7 +36,8 @@ interface DispatchToastData {
 
 interface ToastAction {
   label: string;
-  href: string;
+  // A link opened in a new tab; without one the action is a button (fork: "Undo").
+  href?: string;
   onClick?: () => void;
 }
 
@@ -475,7 +476,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               <>
                 {icons[toast.type]}
                 <span className="text-white text-sm">{toast.message}</span>
-                {toast.action && (
+                {toast.action && toast.action.href && (
                   <a
                     href={toast.action.href}
                     target="_blank"
@@ -488,6 +489,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   >
                     {toast.action.label}
                   </a>
+                )}
+                {toast.action && !toast.action.href && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toast.action?.onClick?.();
+                      dismissToast(toast.id);
+                    }}
+                    className="ml-2 px-3 py-1 pointer-coarse:py-2.5 rounded text-xs font-medium bg-bambu-green/20 text-bambu-green hover:bg-bambu-green/30 whitespace-nowrap"
+                  >
+                    {toast.action.label}
+                  </button>
                 )}
                 <button
                   onClick={() => dismissToast(toast.id)}

@@ -30,10 +30,10 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -128,6 +128,25 @@ def job_pieces(job: ProductJob, part_ids: set[int]) -> planner.Pieces:
         if part_id in part_ids and count > 0:
             result.append((part_id, count))
     return tuple(sorted(result))
+
+
+def rejected_pieces(job: ProductJob) -> dict[int, int]:
+    """part id -> pieces of a finished job found bad when someone checked them."""
+    result = {}
+    for key, n in (job.rejected or {}).items():
+        try:
+            part_id, count = int(key), int(n)
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            result[part_id] = count
+    return result
+
+
+def good_pieces(job: ProductJob, part_ids: set[int]) -> planner.Pieces:
+    """A finished job's pieces less the bad ones (unchecked pieces count as good)."""
+    bad = rejected_pieces(job)
+    return tuple((part_id, n - min(n, bad.get(part_id, 0))) for part_id, n in job_pieces(job, part_ids))
 
 
 def plate_pieces(plate: ProductPlate, part_ids: set[int]) -> planner.Pieces:
@@ -266,14 +285,14 @@ async def sync_jobs(db: AsyncSession, jobs: list[ProductJob]) -> list[ProductJob
 
 
 async def stock_pool(db: AsyncSession, product: Product) -> planner.Pool:
-    """Pieces in stock now: printed, corrected, minus what done orders took."""
+    """Pieces in stock now: printed (less the ones found bad), corrected, minus what done orders took."""
     part_ids = {p.id for p in product.parts}
     pool: planner.Pool = {}
     done = (
         await db.execute(select(ProductJob).where(ProductJob.product_id == product.id, ProductJob.status == "done"))
     ).scalars()
     for job in done:
-        planner.pool_add(pool, job.printer_id or planner.UNKNOWN_PRINTER, job_pieces(job, part_ids))
+        planner.pool_add(pool, job.printer_id or planner.UNKNOWN_PRINTER, good_pieces(job, part_ids))
     if part_ids:
         rows = await db.execute(
             select(
@@ -328,6 +347,195 @@ async def complete_ready_orders(db: AsyncSession, product: Product, pool: planne
                     planner.pool_add(pool, printer_id, ((part_id, -n),))
         await db.flush()
     return completed
+
+
+# --- checking finished pieces -------------------------------------------------------
+
+# A finished job waits this long on the list to be checked; after it, its
+# pieces simply count as good (they do from the start, until someone says no).
+QC_WINDOW = timedelta(days=7)
+
+
+async def jobs_to_check(
+    db: AsyncSession, printer_id: int | None = None, *, checked: bool = False, on_plate: bool = False
+) -> list[ProductJob]:
+    """Finished jobs nobody has checked yet (of the last ``QC_WINDOW``), newest first.
+
+    ``checked``: the ones checked in that time instead, last checked first.
+    ``on_plate`` (with a printer): only the job on its plate now -- the newest,
+    finished after the plate was last cleared -- so the question at plate
+    clear never answers for prints set aside earlier.
+    """
+    from backend.app.models.plate_clears import PlateClear
+
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - QC_WINDOW
+    if checked:
+        query = select(ProductJob).where(
+            ProductJob.status == "done", ProductJob.checked_at.is_not(None), ProductJob.checked_at >= since
+        )
+        order = (ProductJob.checked_at.desc(), ProductJob.id.desc())
+    else:
+        query = select(ProductJob).where(
+            ProductJob.status == "done",
+            ProductJob.checked_at.is_(None),
+            ProductJob.finished_at.is_not(None),
+            ProductJob.finished_at >= since,
+        )
+        order = (ProductJob.finished_at.desc(), ProductJob.id.desc())
+    if printer_id is not None:
+        query = query.where(ProductJob.printer_id == printer_id)
+        if on_plate and not checked:
+            cleared = await db.scalar(
+                select(func.max(PlateClear.cleared_at)).where(
+                    PlateClear.printer_id == printer_id, PlateClear.cleared_at.is_not(None)
+                )
+            )
+            if cleared is not None:
+                query = query.where(ProductJob.finished_at > cleared)
+            query = query.limit(1)
+    return list((await db.execute(query.order_by(*order))).scalars())
+
+
+async def reopen_short_orders(db: AsyncSession, product: Product, pool: planner.Pool) -> list[ProductOrder]:
+    """Reopen done orders whose pieces turned out bad afterwards (stock below zero), newest first.
+
+    A box closed the moment its last plate finished, then a piece of it was
+    found bad at the check: the order is open again and its pieces go back to
+    stock, so the planner prints what is missing.
+    """
+
+    def short() -> set[tuple[int, int]]:
+        return {(part_id, r) for part_id, by in pool.items() for r, n in by.items() if n < 0}
+
+    missing = short()
+    if not missing:
+        return []
+    rows = (
+        await db.execute(
+            select(ProductOrder)
+            .where(ProductOrder.product_id == product.id, ProductOrder.status == "done")
+            .order_by(ProductOrder.completed_at.desc().nulls_last(), ProductOrder.id.desc())
+        )
+    ).scalars()
+    reopened = []
+    for order in rows:
+        if not missing:
+            break
+        taken = []
+        for part_key, by_printer in (order.consumed or {}).items():
+            for printer_key, n in (by_printer or {}).items():
+                try:
+                    taken.append((int(part_key), int(printer_key), int(n)))
+                except (TypeError, ValueError):
+                    continue
+        if not any((part_id, r) in missing for part_id, r, _ in taken):
+            continue
+        order.status = "open"
+        order.completed_at = None
+        order.consumed = None
+        for part_id, r, n in taken:
+            planner.pool_add(pool, r, ((part_id, n),))
+        reopened.append(order)
+        missing = short()
+    if reopened:
+        await db.flush()
+    return reopened
+
+
+async def _job_run(db: AsyncSession, job: ProductJob):
+    """The print run (print log entry) of a finished job, when it can be told apart from others."""
+    from backend.app.models.print_log import PrintLogEntry
+
+    if job.archive_id is None:
+        return None
+    if job.queue_item_id is not None:
+        run = await db.scalar(
+            select(PrintLogEntry)
+            .where(PrintLogEntry.archive_id == job.archive_id, PrintLogEntry.queue_item_id == job.queue_item_id)
+            .order_by(PrintLogEntry.id.desc())
+            .limit(1)
+        )
+        if run is not None:
+            return run
+    if job.printer_id is None or job.finished_at is None:
+        return None
+    candidates = (
+        await db.execute(
+            select(PrintLogEntry).where(
+                PrintLogEntry.archive_id == job.archive_id,
+                PrintLogEntry.printer_id == job.printer_id,
+                PrintLogEntry.completed_at.is_not(None),
+            )
+        )
+    ).scalars()
+    near = [r for r in candidates if abs((r.completed_at - job.finished_at).total_seconds()) <= 600]
+    return near[0] if len(near) == 1 else None
+
+
+async def record_check_verdict(db: AsyncSession, job: ProductJob, source: str | None) -> None:
+    """The check as the print's verdict in the archive (good, or reject when every piece was bad).
+
+    Upstream's "ask for the outcome" is off for the planner's jobs, so this is
+    the one question; its answer still reaches the archive's statistics. A
+    None ``source`` clears it (the check was taken back). Only a run that can
+    be told apart is written; a verdict problem never stops the check.
+    """
+    from backend.app.models.archive import PrintArchive
+    from backend.app.services import print_confirmation
+
+    try:
+        run = await _job_run(db, job)
+        archive = await db.get(PrintArchive, job.archive_id) if job.archive_id is not None else None
+        if archive is None or run is None:
+            return
+        verdict = None
+        if source is not None:
+            printed = dict(job_pieces(job, {int(k) for k in (job.pieces or {}) if str(k).isdigit()}))
+            bad = rejected_pieces(job)
+            all_bad = bool(printed) and all(bad.get(part_id, 0) >= n for part_id, n in printed.items())
+            verdict = "reject" if all_bad else "good"
+        await print_confirmation.record_verdict(db, archive, verdict, source=source, run=run)
+    except Exception:
+        logger.exception("[PRODUCTS] Could not record the check of job %s in the archive", job.id)
+
+
+async def uncheck_job(db: AsyncSession, job: ProductJob) -> bool:
+    """Take a check back: the job waits to be checked again. Returns whether it had bad pieces.
+
+    The caller replans (when it had) and commits.
+    """
+    had_bad = bool(rejected_pieces(job))
+    job.checked_at = None
+    job.rejected = None
+    await record_check_verdict(db, job, None)
+    await db.flush()
+    return had_bad
+
+
+async def check_job(
+    db: AsyncSession, job: ProductJob, rejected: dict[int, int], *, source: str = "dialog"
+) -> list[ProductOrder]:
+    """Record that a finished job was checked and which pieces were bad; returns the orders reopened.
+
+    Checking again replaces the earlier answer. The caller replans and commits.
+    """
+    if job.status != "done":
+        raise ValueError("Only a finished job can be checked")
+    product = await load_product(db, job.product_id)
+    if product is None:
+        raise ValueError("The job's product is gone")
+    printed = dict(job_pieces(job, {p.id for p in product.parts}))
+    bad = {}
+    for part_id, n in rejected.items():
+        if part_id not in printed:
+            raise ValueError(f"The job printed no pieces of part {part_id}")
+        if n > 0:
+            bad[part_id] = min(n, printed[part_id])
+    job.checked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    job.rejected = {str(part_id): n for part_id, n in bad.items()} or None
+    await record_check_verdict(db, job, source)
+    await db.flush()
+    return await reopen_short_orders(db, product, await stock_pool(db, product))
 
 
 async def refresh_product(db: AsyncSession, product: Product) -> tuple[planner.Pool, list[ProductJob]]:

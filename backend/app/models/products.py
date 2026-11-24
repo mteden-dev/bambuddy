@@ -146,7 +146,9 @@ class ProductJob(Base):
     as a string -> pieces), so editing the plate later does not change what a
     finished job counted. ``status`` follows the queue job: planned (waiting,
     the planner may replace it), printing, done, failed or cancelled. A done
-    job's pieces are in stock on ``printer_id``, the printer that printed them.
+    job's pieces are in stock on ``printer_id``, the printer that printed them,
+    less the ones found bad when someone checked them (``rejected``, part id as
+    a string -> pieces). Until ``checked_at`` its pieces count as good.
     """
 
     __tablename__ = "custom_product_jobs"
@@ -171,6 +173,9 @@ class ProductJob(Base):
     pieces: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Someone looked at the finished pieces; rejected: part id (string) -> bad pieces.
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rejected: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class ProductStockAdjustment(Base):

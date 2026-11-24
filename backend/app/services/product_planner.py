@@ -6,7 +6,9 @@ database and the queue forecast and feeds it.
 An order wants whole products, a product is parts, and a plate prints pieces
 of one or more parts. Pieces are counted per printer, because the parts marked
 *matched* (a lid and its base) should come from one printer for one product:
-every printer prints walls a little differently.
+every printer prints walls a little differently. A piece whose printer is not
+known (a stock correction naming none, "I have a lid already") goes with any
+printer's pieces: someone put it there knowing that.
 
 The planner:
 
@@ -19,7 +21,10 @@ The planner:
    and the pieces that printer still has from earlier (a lid whose base failed)
    are used first. Every cap per printer model (one for matched parts, one for
    the others) gives another plan, from one product per package (spread over
-   the printers) to all of them at once;
+   the printers) to all of them at once. Each plan is tried a second time with
+   every printer's plates of parts that need work after printing (a base and
+   a tray glued together) moved before the rest, so the glue can dry while
+   the lid prints;
 3. scores each plan and keeps the cheapest: how long until each order can be
    picked up (its last print's end, moved to when someone clears the plate),
    lateness against due dates, a cost per plate, and pieces made beyond the
@@ -204,6 +209,51 @@ def _printers_holding(pool: Pool, parts: Sequence[PartSpec]) -> list[int]:
     return sorted({r for p in parts for r, n in pool.get(p.id, {}).items() if n > 0})
 
 
+def _known_printers_holding(pool: Pool, parts: Sequence[PartSpec]) -> list[int]:
+    return [r for r in _printers_holding(pool, parts) if r != UNKNOWN_PRINTER]
+
+
+def _completes(pool: Pool, matched: Sequence[PartSpec], printer_id: int) -> bool:
+    """Whether the matched pieces left on a printer make a product with pieces of no known printer."""
+    there = {m.id: max(0, pool.get(m.id, {}).get(printer_id, 0)) for m in matched}
+    if not any(there.values()):
+        return False
+    return all(there[m.id] + max(0, pool.get(m.id, {}).get(UNKNOWN_PRINTER, 0)) >= m.per_unit for m in matched)
+
+
+def _take_completed(pool: Pool, into: Pool, matched: Sequence[PartSpec], printer_id: int) -> None:
+    """One product's matched pieces: the printer's own first, the rest of no known printer."""
+    for m in matched:
+        own = min(m.per_unit, max(0, pool.get(m.id, {}).get(printer_id, 0)))
+        if own:
+            _take(pool, into, m.id, printer_id, own)
+        if m.per_unit - own:
+            _take(pool, into, m.id, UNKNOWN_PRINTER, m.per_unit - own)
+
+
+def _matched_units(pool: Pool, matched: Sequence[PartSpec]) -> int:
+    """Whole sets of the matched parts: per printer, then completed with pieces of no known printer.
+
+    The order ``allocate`` takes them in: each printer's own sets, then the
+    printers' leftovers completed (printer by printer), then sets made only of
+    pieces of no known printer.
+    """
+    work = {m.id: dict(pool.get(m.id, {})) for m in matched}
+    units = 0
+    known = _known_printers_holding(work, matched)
+    for printer_id in known:
+        sets = _sets(work, matched, printer_id)
+        units += sets
+        for m in matched:
+            if sets:
+                work[m.id][printer_id] -= sets * m.per_unit
+    for printer_id in known:
+        while _completes(work, matched, printer_id):
+            _take_completed(work, {}, matched, printer_id)
+            units += 1
+    return units + _sets(work, matched, UNKNOWN_PRINTER)
+
+
 # --- sharing the stock between orders ------------------------------------------
 
 
@@ -211,8 +261,10 @@ def allocate(parts: Sequence[PartSpec], pool: Pool, orders: Sequence[OrderNeed])
     """Give the pieces in ``pool`` to ``orders``, in order, as complete products.
 
     A product takes its matched parts from one printer, the one with the most
-    complete sets; the other parts from wherever there are most. What is left
-    is then counted towards the orders still short, in order, for progress.
+    complete sets; when no printer has a whole set, a printer's leftovers
+    completed with pieces of no known printer, and last sets of those pieces
+    alone. The other parts come from wherever there are most. What is left is
+    then counted towards the orders still short, in order, for progress.
     """
     left = _copy(pool)
     matched = [p for p in parts if p.matched]
@@ -228,14 +280,24 @@ def allocate(parts: Sequence[PartSpec], pool: Pool, orders: Sequence[OrderNeed])
             if matched:
                 best = None
                 best_sets = 0
-                for printer_id in _printers_holding(left, matched):
+                for printer_id in _known_printers_holding(left, matched):
                     sets = _sets(left, matched, printer_id)
                     if sets > best_sets:
                         best, best_sets = printer_id, sets
-                if best is None:
-                    break
-                for m in matched:
-                    _take(left, took, m.id, best, m.per_unit)
+                if best is not None:
+                    for m in matched:
+                        _take(left, took, m.id, best, m.per_unit)
+                else:
+                    completing = next(
+                        (r for r in _known_printers_holding(left, matched) if _completes(left, matched, r)), None
+                    )
+                    if completing is not None:
+                        _take_completed(left, took, matched, completing)
+                    elif _sets(left, matched, UNKNOWN_PRINTER):
+                        for m in matched:
+                            _take(left, took, m.id, UNKNOWN_PRINTER, m.per_unit)
+                    else:
+                        break
             for p in loose:
                 for _ in range(p.per_unit):
                     holding = left[p.id]
@@ -261,9 +323,9 @@ def allocate(parts: Sequence[PartSpec], pool: Pool, orders: Sequence[OrderNeed])
 def complete_units(parts: Sequence[PartSpec], pool: Pool) -> int:
     """How many whole products ``pool`` makes: what ``allocate`` hands out in all.
 
-    Matched sets are counted per printer and the other parts over all
-    printers, so taking products one at a time, as ``allocate`` does, can only
-    stop at this number.
+    Matched sets are counted per printer (completed with pieces of no known
+    printer) and the other parts over all printers, so taking products one at
+    a time, as ``allocate`` does, can only stop at this number.
     """
     matched = [p for p in parts if p.matched]
     loose = [p for p in parts if not p.matched]
@@ -271,7 +333,7 @@ def complete_units(parts: Sequence[PartSpec], pool: Pool) -> int:
         return 0
     units = math.inf
     if matched:
-        units = sum(_sets(pool, matched, printer_id) for printer_id in _printers_holding(pool, matched))
+        units = _matched_units(pool, matched)
     for part in loose:
         units = min(units, _total(pool, part.id) // part.per_unit)
     return int(units)
@@ -440,16 +502,29 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
         pool_add(have, arrival.printer_id, arrival.pieces)
 
     # Matched parts: complete sets already there per printer, and the pieces
-    # left over on each (a lid without its base).
+    # left over on each (a lid without its base). Pieces of no known printer
+    # complete leftovers first; what is left of them (``wild``) goes into the
+    # first packages that can use it, on any printer.
     leftover: Pool = {m.id: {} for m in matched}
+    wild = {m.id: 0 for m in matched}
     missing_units = 0
     if matched:
-        sets_there = 0
-        for printer_id in _printers_holding(have, matched):
-            sets = _sets(have, matched, printer_id)
-            sets_there += sets
+        work = {m.id: {r: n for r, n in have.get(m.id, {}).items() if n > 0} for m in matched}
+        sets_there = _matched_units(work, matched)
+        known = _known_printers_holding(work, matched)
+        for printer_id in known:
+            sets = _sets(work, matched, printer_id)
             for m in matched:
-                leftover[m.id][printer_id] = max(0, have.get(m.id, {}).get(printer_id, 0)) - sets * m.per_unit
+                if sets:
+                    work[m.id][printer_id] -= sets * m.per_unit
+        for printer_id in known:
+            while _completes(work, matched, printer_id):
+                _take_completed(work, {}, matched, printer_id)
+        alone = _sets(work, matched, UNKNOWN_PRINTER)
+        for m in matched:
+            wild[m.id] = max(0, work[m.id].get(UNKNOWN_PRINTER, 0)) - alone * m.per_unit
+            for printer_id in known:
+                leftover[m.id][printer_id] = max(0, work[m.id].get(printer_id, 0))
         missing_units = max(0, wanted - sets_there)
     missing = {p.id: wanted * p.per_unit - _total(have, p.id) for p in loose}
     to_make = {m.id: missing_units * m.per_unit for m in matched} | {p: max(0, n) for p, n in missing.items()}
@@ -480,14 +555,19 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
                     missing[part_id] -= n
 
     def matched_package(printer: PlannerPrinter, units: int) -> tuple[PlateOption, ...] | None:
-        needs = tuple((m.id, max(0, units * m.per_unit - leftover[m.id].get(printer.id, 0))) for m in matched)
+        needs = tuple(
+            (m.id, max(0, units * m.per_unit - leftover[m.id].get(printer.id, 0) - wild[m.id])) for m in matched
+        )
         return covers.cover(printer, needs, matched=True)
 
     def take_matched(printer: PlannerPrinter, units: int, chosen: tuple[PlateOption, ...]) -> None:
         nonlocal missing_units
         for m in matched:
             produced = sum(o.count(m.id) for o in chosen)
-            leftover[m.id][printer.id] = leftover[m.id].get(printer.id, 0) + produced - units * m.per_unit
+            own = leftover[m.id].get(printer.id, 0)
+            from_wild = min(wild[m.id], max(0, units * m.per_unit - own - produced))
+            wild[m.id] -= from_wild
+            leftover[m.id][printer.id] = own + produced + from_wild - units * m.per_unit
         missing_units -= units
 
     if use_leftovers_first and missing_units:
@@ -539,7 +619,7 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
                     chosen = covers.cover(printer, ((part_id, target),), matched=False)
                     units = target
                     products = target / part.per_unit
-                if not chosen:
+                if chosen is None or (not chosen and kind != "matched"):
                     continue
                 done_at = finish(printer, chosen)
                 key = ((done_at - now).total_seconds() / products, done_at, rank[printer.id])
@@ -559,20 +639,51 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
     short = {m.id: missing_units * m.per_unit for m in matched if missing_units > 0}
     short |= {part_id: n for part_id, n in missing.items() if n > 0}
     extra = {part_id: n - to_make.get(part_id, 0) for part_id, n in made.items() if n - to_make.get(part_id, 0) > 0}
+    fixed_cost = inputs.plate_cost_s * len(plates)
+    fixed_cost += sum(EXTRA_PIECE_WEIGHT * n * piece_time.get(part_id, 0.0) for part_id, n in extra.items())
+    start_of = {p.id: max(p.free_at, now) for p in inputs.printers}
 
-    arrivals = stock_arrivals(inputs.stock, now) + list(inputs.arriving)
-    arrivals += [Arrival(p.ready, p.printer_id, p.option.pieces) for p in plates]
-    ready_at = ready_times(inputs.parts, inputs.orders, arrivals, now)
+    def score(candidate: list[PlannedPlate]) -> tuple[float, dict[int, datetime | None]]:
+        arrivals = stock_arrivals(inputs.stock, now) + list(inputs.arriving)
+        arrivals += [Arrival(p.ready, p.printer_id, p.option.pieces) for p in candidate]
+        ready_at = ready_times(inputs.parts, inputs.orders, arrivals, now)
+        cost = fixed_cost
+        for order in inputs.orders:
+            ready = ready_at[order.id]
+            finished = ready if ready is not None else now + NEVER
+            cost += (finished - now).total_seconds()
+            if order.due is not None and finished > order.due:
+                cost += LATE_WEIGHT * (finished - order.due).total_seconds()
+        return cost, ready_at
 
-    cost = 0.0
-    for order in inputs.orders:
-        ready = ready_at[order.id]
-        finished = ready if ready is not None else now + NEVER
-        cost += (finished - now).total_seconds()
-        if order.due is not None and finished > order.due:
-            cost += LATE_WEIGHT * (finished - order.due).total_seconds()
-    cost += inputs.plate_cost_s * len(plates)
-    cost += sum(EXTRA_PIECE_WEIGHT * n * piece_time.get(part_id, 0.0) for part_id, n in extra.items())
+    def drying_first(candidate: list[PlannedPlate]) -> list[PlannedPlate] | None:
+        """Every printer's plates that need work after printing moved first; None when nothing moves."""
+        by_printer: dict[int, list[PlannedPlate]] = {}
+        for planned in candidate:
+            by_printer.setdefault(planned.printer_id, []).append(planned)
+        moved = False
+        result: list[PlannedPlate] = []
+        for printer_id, own in by_printer.items():
+            order = sorted(own, key=lambda p: -finishing(p.option))
+            if order == own:
+                result.extend(own)
+                continue
+            moved = True
+            at = start_of[printer_id]
+            for planned in order:
+                end = at + timedelta(seconds=planned.option.duration_s)
+                ready = max(end, inputs.ready_after(end)) if inputs.ready_after is not None else end
+                result.append(PlannedPlate(planned.option, printer_id, at, end, ready, planned.pinned))
+                at = ready
+        return result if moved else None
+
+    cost, ready_at = score(plates)
+    if finish_of and any(finish_of.values()):
+        resequenced = drying_first(plates)
+        if resequenced is not None:
+            other_cost, other_ready = score(resequenced)
+            if other_cost < cost:
+                plates, cost, ready_at = resequenced, other_cost, other_ready
     used_caps = {
         key: cap
         for key, cap in caps.items()

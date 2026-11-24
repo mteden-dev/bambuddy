@@ -8,9 +8,15 @@ import { Card } from '../Card';
 import { Button } from '../Button';
 import { useToast } from '../../contexts/ToastContext';
 import { useUiSettings } from '../../hooks/useUiSettings';
-import { formatDateOnly, formatDateTime } from '../../utils/date';
+import { formatDateOnly, formatDateTime, parseUTCDate } from '../../utils/date';
 import type { TimeFormat } from '../../utils/date';
+import { useUndoToast } from '../../hooks/useUndoToast';
+import { ConfirmModal } from '../ConfirmModal';
 import { BaseSettingsModal } from './BaseSettingsModal';
+import { AcceptOrderModal } from './AcceptOrderModal';
+
+// Bigger tap targets on a touch screen (an iPad at a printer), whatever its width.
+const TOUCH = 'pointer-coarse:min-h-11!';
 
 type Filter = 'new' | 'accepted' | 'skipped' | 'cancelled' | 'all';
 
@@ -19,7 +25,50 @@ interface BaseOrdersViewProps {
 }
 
 const selectClass =
-  'px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none';
+  'px-2 py-1 pointer-coarse:py-2.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none';
+
+/** Products an order's mapped lines want: product id -> units. */
+function wantedUnits(order: BaseOrder): Map<number, number> {
+  const wanted = new Map<number, number>();
+  for (const line of order.lines) {
+    if (line.mapping === 'product' && line.product_id != null) {
+      wanted.set(line.product_id, (wanted.get(line.product_id) ?? 0) + line.quantity * line.units);
+    }
+  }
+  return wanted;
+}
+
+/** Whole local days from today to a date (negative: past). */
+function daysUntil(iso: string): number | null {
+  const date = parseUTCDate(iso);
+  if (!date) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const day = new Date(date);
+  day.setHours(0, 0, 0, 0);
+  return Math.round((day.getTime() - today.getTime()) / 86_400_000);
+}
+
+/** The ship-by date as a coloured label: late, today, tomorrow, or the date. */
+function ShipByBadge({ shipBy, done }: { shipBy: string; done: boolean }) {
+  const { t } = useTranslation();
+  const days = daysUntil(shipBy);
+  const date = formatDateOnly(shipBy, { weekday: 'short', day: 'numeric', month: 'short' });
+  if (done || days === null || days > 1) {
+    return <span className="text-xs text-bambu-gray-light">{t('baseSync.shipBy', { date })}</span>;
+  }
+  const late = (parseUTCDate(shipBy)?.getTime() ?? 0) < Date.now();
+  const [label, style] = late
+    ? [t('baseSync.shipLate'), 'bg-red-500/20 text-red-600 dark:text-red-300']
+    : days <= 0
+      ? [t('baseSync.shipToday'), 'bg-amber-500/20 text-amber-700 dark:text-amber-300']
+      : [t('baseSync.shipTomorrow'), 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-200'];
+  return (
+    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${style}`} title={t('baseSync.shipBy', { date })}>
+      {label}
+    </span>
+  );
+}
 
 /**
  * Fork (Base sync): orders read from Base (base.com), read-only.
@@ -38,6 +87,11 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
   const canConfigure = hasPermission('settings:update' as Permission);
   const [filter, setFilter] = useState<Filter>('new');
   const [showSettings, setShowSettings] = useState(false);
+  // The order being sent to production line by line (or changed).
+  const [choosing, setChoosing] = useState<BaseOrder | null>(null);
+  // The accepted order about to be taken out of production.
+  const [withdrawing, setWithdrawing] = useState<BaseOrder | null>(null);
+  const undoToast = useUndoToast();
 
   const { data: settings } = useQuery({ queryKey: ['base-sync', 'settings'], queryFn: api.getBaseSyncSettings });
   const configured = !!settings?.token_set && settings.status_ids.length > 0;
@@ -68,12 +122,30 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       showToast(e.message, 'error');
     },
   });
-  const orderMutation = useMutation({
-    mutationFn: ({ order, action }: { order: BaseOrder; action: 'accept' | 'skip' }) =>
-      action === 'accept' ? api.acceptBaseOrder(order.order_id) : api.skipBaseOrder(order.order_id),
-    onSuccess: (_, { action }) => {
+  const resetMutation = useMutation({
+    mutationFn: (order: BaseOrder) => api.resetBaseOrder(order.order_id),
+    onSuccess: () => {
       refresh();
-      showToast(t(action === 'accept' ? 'baseSync.toast.accepted' : 'baseSync.toast.skipped'), 'success');
+      showToast(t('baseSync.toast.undone'), 'success');
+    },
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
+  const orderMutation = useMutation({
+    mutationFn: ({ order, action }: { order: BaseOrder; action: 'accept' | 'skip' | 'withdraw' }) =>
+      action === 'accept' ? api.acceptBaseOrder(order.order_id) : api.skipBaseOrder(order.order_id),
+    onSuccess: (_, { order, action }) => {
+      refresh();
+      setWithdrawing(null);
+      const message = t(
+        action === 'accept'
+          ? 'baseSync.toast.accepted'
+          : action === 'withdraw'
+            ? 'baseSync.toast.withdrawn'
+            : 'baseSync.toast.skipped',
+      );
+      // Sending or skipping a waiting order can be taken back for a moment.
+      if (action === 'withdraw') showToast(message, 'success');
+      else undoToast(message, () => resetMutation.mutate(order));
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
@@ -109,13 +181,19 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
         </div>
         <div className="ml-auto flex items-center gap-2">
           {configured && canAct && (
-            <Button size="sm" variant="secondary" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>
+            <Button
+              size="sm"
+              variant="secondary"
+              className={TOUCH}
+              onClick={() => syncMutation.mutate()}
+              disabled={syncMutation.isPending}
+            >
               <RefreshCw className={`w-4 h-4 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
               {t('baseSync.syncNow')}
             </Button>
           )}
           {canConfigure && (
-            <Button size="sm" variant="ghost" onClick={() => setShowSettings(true)}>
+            <Button size="sm" variant="ghost" className={TOUCH} onClick={() => setShowSettings(true)}>
               <Settings2 className="w-4 h-4" />
               {t('baseSync.settingsButton')}
             </Button>
@@ -159,13 +237,13 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
             </Card>
           )}
 
-          <div className="flex flex-wrap gap-1 mb-3">
+          <div className="flex flex-wrap gap-1.5 mb-3">
             {filters.map((value) => (
               <button
                 key={value}
                 type="button"
                 onClick={() => setFilter(value)}
-                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                className={`text-sm px-3.5 py-1.5 pointer-coarse:py-2.5 rounded-full border transition-colors ${
                   filter === value
                     ? 'border-bambu-green bg-bambu-green/10 text-bambu-green'
                     : 'border-bambu-dark-tertiary text-bambu-gray hover:border-bambu-gray'
@@ -191,11 +269,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                       <span className="text-xs text-bambu-gray">{formatDateTime(order.date_confirmed, timeFormat)}</span>
                     )}
                     {order.ship_by && (
-                      <span className="text-xs text-bambu-gray-light">
-                        {t('baseSync.shipBy', {
-                          date: formatDateOnly(order.ship_by, { weekday: 'short', day: 'numeric', month: 'short' }),
-                        })}
-                      </span>
+                      <ShipByBadge shipBy={order.ship_by} done={order.ready || order.state === 'cancelled' || !order.in_status} />
                     )}
                     <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-dark-tertiary text-bambu-gray-light">
                       {t(`baseSync.state.${order.state}`)}
@@ -210,27 +284,53 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                       <span className="text-xs text-bambu-gray">{t('baseSync.movedOn')}</span>
                     )}
                     {canAct && (
-                      <span className="ml-auto flex gap-1">
+                      <span className="ml-auto flex flex-wrap justify-end gap-1.5">
+                        {order.state === 'accepted' && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className={`${TOUCH} text-red-500 mr-3`}
+                              onClick={() => setWithdrawing(order)}
+                              disabled={orderMutation.isPending}
+                            >
+                              {t('baseSync.withdraw')}
+                            </Button>
+                            {order.lines.some((line) => line.mapping === 'product') && (
+                              <Button size="sm" variant="secondary" className={TOUCH} onClick={() => setChoosing(order)}>
+                                {t('baseSync.change')}
+                              </Button>
+                            )}
+                          </>
+                        )}
+                        {order.state === 'new' && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className={TOUCH}
+                            onClick={() => orderMutation.mutate({ order, action: 'skip' })}
+                            disabled={orderMutation.isPending}
+                          >
+                            {t('baseSync.skip')}
+                          </Button>
+                        )}
+                        {(order.state === 'new' || order.state === 'skipped') &&
+                          order.lines.some((line) => line.mapping === 'product') && (
+                            <Button size="sm" variant="secondary" className={TOUCH} onClick={() => setChoosing(order)}>
+                              {t('baseSync.choose')}
+                            </Button>
+                          )}
                         {(order.state === 'new' || order.state === 'skipped') && (
                           <Button
                             size="sm"
+                            className={TOUCH}
                             onClick={() => orderMutation.mutate({ order, action: 'accept' })}
                             disabled={orderMutation.isPending}
                           >
                             {orderMutation.isPending && orderMutation.variables?.order.order_id === order.order_id && (
                               <Loader2 className="w-4 h-4 animate-spin" />
                             )}
-                            {t('baseSync.accept')}
-                          </Button>
-                        )}
-                        {(order.state === 'new' || order.state === 'accepted') && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => orderMutation.mutate({ order, action: 'skip' })}
-                            disabled={orderMutation.isPending}
-                          >
-                            {t('baseSync.skip')}
+                            {t('baseSync.acceptAll')}
                           </Button>
                         )}
                       </span>
@@ -257,6 +357,18 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                               : line.product_name
                             : t(`baseSync.mapping.${line.mapping}`)}
                         </span>
+                        {line.product_id != null &&
+                          (order.held?.[String(line.product_id)] ?? 0) > 0 &&
+                          // Held back per product: said once, on its first line.
+                          order.lines.findIndex((other) => other.product_id === line.product_id) === index && (
+                          <span className="text-xs text-amber-600 dark:text-amber-300">
+                            {t('baseSync.heldBack', {
+                              print:
+                                (wantedUnits(order).get(line.product_id) ?? 0) - (order.held?.[String(line.product_id)] ?? 0),
+                              total: wantedUnits(order).get(line.product_id) ?? 0,
+                            })}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -279,6 +391,29 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       )}
 
       {showSettings && <BaseSettingsModal onClose={() => setShowSettings(false)} onSaved={refresh} />}
+      {withdrawing && (
+        <ConfirmModal
+          title={t('baseSync.withdrawTitle', { number: withdrawing.number ?? withdrawing.order_id })}
+          message={t('baseSync.withdrawMessage')}
+          confirmText={t('baseSync.withdraw')}
+          variant="danger"
+          isLoading={orderMutation.isPending}
+          onConfirm={() => orderMutation.mutate({ order: withdrawing, action: 'withdraw' })}
+          onCancel={() => setWithdrawing(null)}
+        />
+      )}
+      {choosing && (
+        <AcceptOrderModal
+          order={choosing}
+          onClose={() => setChoosing(null)}
+          onDone={() => {
+            const wasAccepted = choosing.state === 'accepted';
+            setChoosing(null);
+            refresh();
+            showToast(t(wasAccepted ? 'baseSync.toast.changed' : 'baseSync.toast.accepted'), 'success');
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -321,10 +456,15 @@ function UnmappedRow({
           </option>
         ))}
       </select>
-      <Button size="sm" disabled={disabled || productId === ''} onClick={() => productId !== '' && onMap(productId)}>
+      <Button
+        size="sm"
+        className={TOUCH}
+        disabled={disabled || productId === ''}
+        onClick={() => productId !== '' && onMap(productId)}
+      >
         {t('baseSync.map')}
       </Button>
-      <Button size="sm" variant="ghost" disabled={disabled} onClick={() => onMap(null)}>
+      <Button size="sm" variant="ghost" className={TOUCH} disabled={disabled} onClick={() => onMap(null)}>
         {t('baseSync.notPrinted')}
       </Button>
     </li>

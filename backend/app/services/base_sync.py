@@ -15,8 +15,12 @@ the sync:
    (``custom_product_skus``): a SKU is a product (times ``units``), or a SKU
    nobody prints, or not mapped yet (listed for someone to map). A new order
    waits for someone to send it to production unless orders are accepted
-   automatically; an accepted order's product orders follow its lines while
-   it stays in those statuses (a line added, a quantity changed, a SKU mapped);
+   automatically. Sending it, someone may hold products back (``held``: from
+   the shelf, made another way) and say which parts they have already (those
+   go into stock as pieces of no known printer, which the planner pairs with
+   any printer's). An accepted order's product orders follow its lines while
+   it stays in those statuses (a line added, a quantity changed, a SKU mapped),
+   less what was held back;
 4. cancels the open product orders of an order found in the cancelled status;
 5. replans every product whose orders changed (services/products.replan).
 
@@ -363,6 +367,19 @@ def wanted_products(lines: list[dict], skus: dict[str, SkuTarget]) -> dict[int, 
     return wanted
 
 
+def held_products(order: BaseOrder) -> dict[int, int]:
+    """product id -> products held back from printing for this order."""
+    result = {}
+    for key, n in (order.held or {}).items():
+        try:
+            product_id, count = int(key), int(n)
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            result[product_id] = count
+    return result
+
+
 def order_due(order: BaseOrder, config: BaseConfig) -> datetime | None:
     """When an order's products are due (naive UTC): its ship-by deadline, else after confirmation."""
     return order.ship_by or _due(order.date_confirmed, config.handling_days)
@@ -420,6 +437,8 @@ async def reconcile(
     from backend.app.models.products import Product
 
     wanted = wanted_products(order.items or [], skus)
+    held = held_products(order)
+    wanted = {pid: n - held.get(pid, 0) for pid, n in wanted.items()}
     existing_products = set((await db.execute(select(Product.id).where(Product.id.in_(wanted)))).scalars())
     wanted = {pid: n for pid, n in wanted.items() if pid in existing_products and n > 0}
     changed: set[int] = set()
@@ -645,11 +664,123 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
     return result
 
 
-async def accept(db: AsyncSession, order: BaseOrder) -> set[int]:
-    """Send an order to production. The caller replans and commits."""
+@dataclass(frozen=True)
+class ProductChoice:
+    """What to print of one product of an order, chosen line by line."""
+
+    product_id: int
+    # Products to print; the rest of what the lines want is held back.
+    units: int
+    # part id -> pieces on hand for this order, outside the stock Bambuddy
+    # counted before; the whole set for the product (a part left out is 0).
+    have: dict[int, int] = field(default_factory=dict)
+
+
+def on_hand_parts(order: BaseOrder) -> dict[int, int]:
+    """part id -> pieces on hand that were put into stock for this order."""
+    result = {}
+    for key, n in (order.on_hand or {}).items():
+        try:
+            part_id, count = int(key), int(n)
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            result[part_id] = count
+    return result
+
+
+def _adjust_on_hand(db: AsyncSession, order: BaseOrder, part_id: int, delta: int) -> None:
+    from backend.app.models.products import ProductStockAdjustment
+
+    if delta:
+        db.add(
+            ProductStockAdjustment(
+                part_id=part_id,
+                printer_id=None,
+                delta=delta,
+                note=f"{_label(order)}: on hand"[:255],
+            )
+        )
+
+
+async def _part_products(db: AsyncSession, part_ids: set[int]) -> dict[int, int]:
+    from backend.app.models.products import ProductPart
+
+    if not part_ids:
+        return {}
+    rows = await db.execute(select(ProductPart.id, ProductPart.product_id).where(ProductPart.id.in_(part_ids)))
+    return dict(rows.all())
+
+
+async def accept(db: AsyncSession, order: BaseOrder, choices: list[ProductChoice] | None = None) -> set[int]:
+    """Send an order to production (or change what it prints); returns the products changed.
+
+    Without choices every mapped line is printed in full. A choice holds back
+    the products it does not print and says which parts are on hand for the
+    order: they are in stock as pieces of no known printer (a correction noted
+    with the order). On hand is a total: changing it later puts in or takes
+    out only the difference, so saving twice never counts a piece twice. The
+    caller replans and commits.
+    """
+    from backend.app.models.products import ProductPart
+
     config = await read_config(db)
+    skus = await sku_map(db)
+    changed: set[int] = set()
+    if choices is not None:
+        wanted = wanted_products(order.items or [], skus)
+        held = held_products(order)
+        on_hand = on_hand_parts(order)
+        owner = await _part_products(db, set(on_hand))
+        for choice in choices:
+            if choice.product_id not in wanted:
+                raise ValueError(f"The order has no line for product {choice.product_id}")
+            held[choice.product_id] = max(0, wanted[choice.product_id] - max(0, choice.units))
+            parts = {
+                part.id
+                for part in (
+                    await db.execute(select(ProductPart).where(ProductPart.product_id == choice.product_id))
+                ).scalars()
+            }
+            for part_id in choice.have:
+                if part_id not in parts:
+                    raise ValueError(f"Part {part_id} is not a part of product {choice.product_id}")
+            for part_id in parts | {p for p, product_id in owner.items() if product_id == choice.product_id}:
+                before = on_hand.get(part_id, 0)
+                after = max(0, choice.have.get(part_id, 0))
+                if after != before:
+                    _adjust_on_hand(db, order, part_id, after - before)
+                    changed.add(choice.product_id)
+                if after:
+                    on_hand[part_id] = after
+                else:
+                    on_hand.pop(part_id, None)
+        order.held = {str(pid): n for pid, n in held.items() if n > 0} or None
+        order.on_hand = {str(pid): n for pid, n in on_hand.items() if n > 0} or None
     order.state = "accepted"
-    return await reconcile(db, order, await sku_map(db), config)
+    changed |= await reconcile(db, order, skus, config)
+    return changed
+
+
+async def reset(db: AsyncSession, order: BaseOrder) -> set[int]:
+    """Take a decision back: the order waits again, as it came from Base; returns the products changed.
+
+    Its open product orders are cancelled, what was held back is forgotten and
+    the pieces put into stock as on hand for it are taken out again. The
+    caller replans and commits.
+    """
+    changed = await cancel_orders_of(db, order)
+    on_hand = on_hand_parts(order)
+    owner = await _part_products(db, set(on_hand))
+    for part_id, pieces in on_hand.items():
+        _adjust_on_hand(db, order, part_id, -pieces)
+        if part_id in owner:
+            changed.add(owner[part_id])
+    order.on_hand = None
+    order.held = None
+    order.state = "new"
+    await db.flush()
+    return changed
 
 
 async def skip(db: AsyncSession, order: BaseOrder) -> set[int]:

@@ -16,7 +16,7 @@ from sqlalchemy import select
 from backend.app.models.base_sync import BaseOrder
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
-from backend.app.models.products import ProductOrder
+from backend.app.models.products import ProductJob, ProductOrder, ProductStockAdjustment
 from backend.app.services import base_sync
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
@@ -435,3 +435,101 @@ async def test_a_due_date_set_by_hand_stays(async_client: AsyncClient, db_sessio
 async def test_a_setting_stored_with_one_status_reads_as_a_list():
     assert base_sync.parse_config(f'{{"status_id": {TAKE}}}').status_ids == [TAKE]
     assert base_sync.parse_config('{"status_ids": [1, "2", 1, null]}').status_ids == [1, 2]
+
+
+async def test_an_order_is_sent_line_by_line_with_parts_on_hand(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5501, [("SKU-BOX-100-B", 3)])]
+    await _sync(async_client, {shop.printer})
+    product = (await async_client.get(f"/api/v1/products/{shop.product_id}")).json()
+    parts = {p["name"]: p["id"] for p in product["parts"]}
+
+    # Two of the three boxes are printed, and a lid for one of them is on the shelf.
+    choice = {"product_id": shop.product_id, "units": 2, "have": [{"part_id": parts["Lid"], "pieces": 1}]}
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5501/accept", json={"products": [choice]})
+    assert response.status_code == 200, response.text
+    assert response.json()["held"] == {str(shop.product_id): 1}
+    [po] = await _product_orders(db_session)
+    assert (po.quantity, po.status) == (2, "open")
+    [adjustment] = list((await db_session.execute(select(ProductStockAdjustment))).scalars())
+    assert (adjustment.part_id, adjustment.printer_id, adjustment.delta) == (parts["Lid"], None, 1)
+    assert "Base #4501" in adjustment.note
+    planned = list((await db_session.execute(select(ProductJob).where(ProductJob.status == "planned"))).scalars())
+    printed: dict[int, int] = {}
+    for job in planned:
+        for part_id, n in job.pieces.items():
+            printed[int(part_id)] = printed.get(int(part_id), 0) + n
+    # The lid on hand goes with a base from any printer: one lid and two bases to print.
+    assert printed == {parts["Lid"]: 1, parts["Base"]: 2}
+
+    # Changing it with the same lid on hand puts nothing in twice; none on hand takes it out.
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5501/accept", json={"products": [choice]})
+    assert response.json()["on_hand"] == {str(parts["Lid"]): 1}
+    deltas = [a.delta for a in (await db_session.execute(select(ProductStockAdjustment))).scalars()]
+    assert sum(deltas) == 1
+    with online, status:
+        await async_client.post(
+            "/api/v1/base-sync/orders/5501/accept",
+            json={"products": [{**choice, "have": []}]},
+        )
+    db_session.expire_all()
+    deltas = [a.delta for a in (await db_session.execute(select(ProductStockAdjustment))).scalars()]
+    assert sum(deltas) == 0
+    with online, status:
+        await async_client.post("/api/v1/base-sync/orders/5501/accept", json={"products": [choice]})
+
+    # The buyer adds a box in Base: the one held back stays held back.
+    fake_base.orders = [_order(5501, [("SKU-BOX-100-B", 4)])]
+    await _sync(async_client, {shop.printer})
+    [po] = await _product_orders(db_session)
+    assert po.quantity == 3
+
+    # Nothing printed for the order after all: its product order is cancelled.
+    with online, status:
+        response = await async_client.post(
+            "/api/v1/base-sync/orders/5501/accept", json={"products": [{"product_id": shop.product_id, "units": 0}]}
+        )
+    assert response.status_code == 200, response.text
+    [po] = await _product_orders(db_session)
+    assert po.status == "cancelled"
+
+    response = await async_client.post(
+        "/api/v1/base-sync/orders/5501/accept",
+        json={"products": [{"product_id": shop.product_id, "units": 1, "have": [{"part_id": 999999, "pieces": 1}]}]},
+    )
+    assert response.status_code == 400
+
+
+async def test_sending_an_order_can_be_taken_back(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5601, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    product = (await async_client.get(f"/api/v1/products/{shop.product_id}")).json()
+    lid = next(p["id"] for p in product["parts"] if p["name"] == "Lid")
+    online, status = _live({shop.printer})
+    with online, status:
+        await async_client.post(
+            "/api/v1/base-sync/orders/5601/accept",
+            json={"products": [{"product_id": shop.product_id, "units": 1, "have": [{"part_id": lid, "pieces": 1}]}]},
+        )
+        response = await async_client.post("/api/v1/base-sync/orders/5601/reset")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["state"], body["held"], body["on_hand"]) == ("new", {}, {})
+    [po] = await _product_orders(db_session)
+    assert po.status == "cancelled"
+    deltas = [a.delta for a in (await db_session.execute(select(ProductStockAdjustment))).scalars()]
+    assert sum(deltas) == 0
+
+
+async def test_waiting_orders_come_by_ship_by_date(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [
+        _order(5701, [("SKU-BOX-100-B", 1)], confirmed=1795111511),
+        _order(5702, [("SKU-BOX-100-B", 1)], confirmed=1795111600),
+        _order(5703, [("SKU-BOX-100-B", 1)], confirmed=1795111700),  # a shop order, no date
+    ]
+    fake_base.ship_by = {5701: datetime(2026, 11, 27, 22, 59, 59), 5702: datetime(2026, 11, 25, 22, 59, 59)}
+    await _sync(async_client, {shop.printer})
+    listed = [o["order_id"] for o in (await async_client.get("/api/v1/base-sync/orders?state=new")).json()]
+    assert listed == [5702, 5701, 5703]

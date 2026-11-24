@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -32,6 +33,7 @@ from backend.app.models.library import LibraryFile
 from backend.app.models.printer import Printer
 from backend.app.models.products import (
     Product,
+    ProductJob,
     ProductOrder,
     ProductPart,
     ProductPlate,
@@ -774,6 +776,170 @@ async def plate_file_info(
         raise HTTPException(404, "Library file not found")
     _assert_can_queue_library_file(library_file, actor)
     return _file_info(library_file)
+
+
+# --- checking finished pieces ------------------------------------------------------------
+
+
+class QcPiece(BaseModel):
+    part_id: int
+    part_name: str
+    pieces: int
+    rejected: int = 0
+
+
+class QcJobOut(BaseModel):
+    id: int
+    product_id: int
+    product_name: str
+    printer_id: int | None
+    printer_name: str | None
+    library_file_id: int | None = None
+    filename: str | None = None
+    archive_id: int | None = None
+    finished_at: UTCDatetime = None
+    checked_at: UTCDatetime = None
+    pieces: list[QcPiece]
+
+
+class QcCheckIn(BaseModel):
+    # Bad pieces per part; none (or an empty list) means all good.
+    rejected: list[PartPieces] = Field(default_factory=list, max_length=20)
+    # Where it was answered, kept with the verdict in the archive.
+    source: Literal["dialog", "plate_clear"] = "dialog"
+
+
+class QcCheckOut(BaseModel):
+    job: QcJobOut
+    # Bad pieces or a reopened order: the product was planned again.
+    replanned: bool
+    reopened_orders: list[int] = Field(default_factory=list)
+
+
+async def _qc_out(db: AsyncSession, jobs: list[ProductJob]) -> list[QcJobOut]:
+    products: dict[int, Product] = {}
+    for product_id in {job.product_id for job in jobs}:
+        product = await svc.load_product(db, product_id)
+        if product is not None:
+            products[product_id] = product
+    printer_names = dict((await db.execute(select(Printer.id, Printer.name))).all())
+    result = []
+    for job in jobs:
+        product = products.get(job.product_id)
+        if product is None:
+            continue
+        names = {part.id: part.name for part in product.parts}
+        plate = next((pl for pl in product.plates if pl.id == job.product_plate_id), None)
+        bad = svc.rejected_pieces(job)
+        result.append(
+            QcJobOut(
+                id=job.id,
+                product_id=product.id,
+                product_name=product.name,
+                printer_id=job.printer_id,
+                printer_name=printer_names.get(job.printer_id),
+                library_file_id=plate.library_file_id if plate is not None else None,
+                filename=plate.library_file.filename if plate is not None and plate.library_file else None,
+                archive_id=job.archive_id,
+                finished_at=job.finished_at,
+                checked_at=job.checked_at,
+                pieces=[
+                    QcPiece(part_id=pid, part_name=names[pid], pieces=n, rejected=bad.get(pid, 0))
+                    for pid, n in svc.job_pieces(job, set(names))
+                ],
+            )
+        )
+    return result
+
+
+@router.get("/qc", response_model=list[QcJobOut])
+async def jobs_to_check(
+    printer_id: int | None = None,
+    checked: bool = False,
+    on_plate: bool = False,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _=ReadAccess,
+):
+    """Finished product jobs nobody has checked yet (last 7 days), newest first; ``printer_id`` filters.
+
+    Their pieces count as good until someone says otherwise. ``checked``: the
+    ones checked in those 7 days instead (to correct an answer). ``on_plate``
+    (with ``printer_id``): only the job on the printer's plate now, the one
+    the question at plate clear is about.
+    """
+    return await _qc_out(db, await svc.jobs_to_check(db, printer_id, checked=checked, on_plate=on_plate))
+
+
+@router.post("/jobs/{job_id}/check", response_model=QcCheckOut)
+async def check_job(
+    job_id: int,
+    data: QcCheckIn,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+    review_required: bool = QueueReviewRequired,
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Say a finished job's pieces were checked, and how many of each part were bad.
+
+    Bad pieces leave stock and the product is planned again, so they are
+    printed anew; an order already closed with one of them opens again.
+    Checking again replaces the earlier answer.
+    """
+    job = await db.get(ProductJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    try:
+        reopened = await svc.check_job(db, job, {r.part_id: r.pieces for r in data.rejected}, source=data.source)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    replan = bool(reopened) or any(r.pieces > 0 for r in data.rejected)
+    item_ids: list[int] = []
+    if replan:
+        outcome = await svc.replan(
+            db,
+            job.product_id,
+            actor_id=actor.id if actor is not None else None,
+            manual_start=review_required,
+            printer_ids=printer_scope.printer_ids,
+        )
+        item_ids = outcome.item_ids
+    await db.commit()
+    if item_ids:
+        await svc.announce_planned(item_ids)
+    [out] = await _qc_out(db, [await db.get(ProductJob, job_id)])
+    return QcCheckOut(job=out, replanned=replan, reopened_orders=[o.id for o in reopened])
+
+
+@router.post("/jobs/{job_id}/uncheck", response_model=QcCheckOut)
+async def uncheck_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+    review_required: bool = QueueReviewRequired,
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Take a check back (undo): the job waits to be checked again; bad pieces it had count again."""
+    job = await db.get(ProductJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    had_bad = await svc.uncheck_job(db, job)
+    item_ids: list[int] = []
+    if had_bad:
+        outcome = await svc.replan(
+            db,
+            job.product_id,
+            actor_id=actor.id if actor is not None else None,
+            manual_start=review_required,
+            printer_ids=printer_scope.printer_ids,
+        )
+        item_ids = outcome.item_ids
+    await db.commit()
+    if item_ids:
+        await svc.announce_planned(item_ids)
+    [out] = await _qc_out(db, [await db.get(ProductJob, job_id)])
+    return QcCheckOut(job=out, replanned=had_bad)
 
 
 @router.post("", response_model=ProductDetail)

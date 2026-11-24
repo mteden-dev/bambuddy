@@ -212,6 +212,7 @@ import { getColorName, parseFilamentColor, isLightColor } from '../utils/colors'
 import { NumberInput } from '../components/NumberInput';
 import { getCurrencySymbol } from '../utils/currency';
 import { useUiSettings } from '../hooks/useUiSettings';
+import { usePlateClearQc } from '../hooks/usePlateClearQc';
 import { isSlicedLibraryFile, mayBeSlicedFileName } from '../utils/libraryFiles';
 import { PrinterTagChips, PrinterTagPicker } from '../components/PrinterTagPicker';
 import { printerTagsQueryKey, usePrinterTags } from '../utils/printerTags';
@@ -2952,6 +2953,8 @@ function PrinterCard({
     onError: (error: Error) => showToast(error.message || t('printers.toast.failedToResumePrint'), 'error'),
   });
 
+  // Fork (products): ask whether the products just printed are good first.
+  const plateQc = usePlateClearQc(printer.id, printer.name, hasPermission('queue:create'));
   const clearPlateMutation = useMutation({
     mutationFn: () => api.clearPlate(printer.id),
     onSuccess: () => {
@@ -3023,12 +3026,12 @@ function PrinterCard({
       )}
       <button
         type="button"
-        onClick={() => clearPlateMutation.mutate()}
-        disabled={clearPlateMutation.isPending || !hasPermission('printers:clear_plate')}
-        className="mt-2 w-full inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors text-xs font-medium disabled:opacity-50"
+        onClick={() => plateQc.beforeClear(() => clearPlateMutation.mutate())}
+        disabled={clearPlateMutation.isPending || plateQc.checking || !hasPermission('printers:clear_plate')}
+        className="mt-2 w-full inline-flex items-center justify-center gap-2 px-3 py-1.5 pointer-coarse:min-h-11 rounded-lg bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors text-xs font-medium disabled:opacity-50"
         title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('printers.plateStatus.markCleared')}
       >
-        {clearPlateMutation.isPending ? (
+        {clearPlateMutation.isPending || plateQc.checking ? (
           <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" />
         ) : (
           <PlateClearedIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
@@ -3996,6 +3999,7 @@ function PrinterCard({
       onDragLeave={handleCardDragLeave}
       onDrop={handleCardDrop}
     >
+      {plateQc.modal}
       {/* Selection mode click overlay — captures all clicks, preventing nested interactions */}
       {selectionMode && (
         <div
@@ -4090,13 +4094,13 @@ function PrinterCard({
                   {viewMode === 'compact' && showClearPlateButton && (
                     <button
                       type="button"
-                      onClick={() => clearPlateMutation.mutate()}
-                      disabled={clearPlateMutation.isPending || !hasPermission('printers:clear_plate')}
+                      onClick={() => plateQc.beforeClear(() => clearPlateMutation.mutate())}
+                      disabled={clearPlateMutation.isPending || plateQc.checking || !hasPermission('printers:clear_plate')}
                       aria-label={t('printers.plateStatus.markCleared')}
-                      className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
+                      className="inline-flex h-5 w-5 pointer-coarse:h-10 pointer-coarse:w-10 flex-shrink-0 items-center justify-center rounded-md bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
                       title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('printers.plateStatus.markCleared')}
                     >
-                      {clearPlateMutation.isPending ? (
+                      {clearPlateMutation.isPending || plateQc.checking ? (
                         <Loader2 className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] animate-spin" />
                       ) : (
                         <PlateClearedIcon className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)]" />
@@ -4124,6 +4128,8 @@ function PrinterCard({
                     </span>
                   )}
                 </p>
+                {/* Fork (products): finished prints of this printer waiting to be checked. */}
+                {plateQc.badge && <div className="mt-1">{plateQc.badge}</div>}
                 {viewMode !== 'compact' && cardTags && cardTags.tag_ids.length > 0 && (
                   <div className="mt-1 flex flex-wrap items-center gap-1" data-testid="printer-card-tags">
                     <PrinterTagChips

@@ -217,6 +217,10 @@ class BaseOrderOut(BaseModel):
     in_status: bool
     lines: list[OrderLineOut]
     product_orders: list[ProductOrderRef]
+    # product id -> products held back from printing for this order.
+    held: dict[int, int] = Field(default_factory=dict)
+    # part id -> pieces on hand put into stock for this order.
+    on_hand: dict[int, int] = Field(default_factory=dict)
     # Every product order is done: the order can be packed.
     ready: bool = False
 
@@ -276,6 +280,8 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                 in_status=row.in_status,
                 lines=lines,
                 product_orders=own,
+                held=svc.held_products(row),
+                on_hand=svc.on_hand_parts(row),
                 ready=row.state == "accepted" and bool(live) and all(r.status == "done" for r in live),
             )
         )
@@ -288,8 +294,16 @@ async def list_orders(
     db: AsyncSession = Depends(get_db, scope="function"),
     _=ReadAccess,
 ):
-    """Orders the sync found, newest first; ``state`` filters (new, accepted, skipped, cancelled)."""
-    query = select(BaseOrder).order_by(BaseOrder.date_confirmed.desc().nulls_last(), BaseOrder.order_id.desc())
+    """Orders the sync found; ``state`` filters (new, accepted, skipped, cancelled).
+
+    Waiting and accepted ones come by ship-by deadline (soonest first, those
+    without one last), the rest newest first.
+    """
+    newest = (BaseOrder.date_confirmed.desc().nulls_last(), BaseOrder.order_id.desc())
+    if state in ("new", "accepted"):
+        query = select(BaseOrder).order_by(BaseOrder.ship_by.asc().nulls_last(), *newest)
+    else:
+        query = select(BaseOrder).order_by(*newest)
     if state:
         query = query.where(BaseOrder.state == state)
     rows = list((await db.execute(query.limit(300))).scalars())
@@ -308,17 +322,72 @@ async def _replan(db: AsyncSession, product_ids: set[int]) -> None:
         await svc.replan_products(db, product_ids, await svc.read_config(db))
 
 
+class AcceptPart(BaseModel):
+    part_id: int
+    pieces: int = Field(ge=0, le=10000)
+
+
+class AcceptProduct(BaseModel):
+    product_id: int
+    # Products to print; the rest of what the order's lines want is held back.
+    units: int = Field(ge=0, le=10000)
+    # Pieces there already, outside the stock Bambuddy counts (go into stock).
+    have: list[AcceptPart] = Field(default_factory=list, max_length=20)
+
+
+class AcceptIn(BaseModel):
+    # Without products every mapped line is printed in full.
+    products: list[AcceptProduct] | None = Field(None, max_length=100)
+
+
 @router.post("/orders/{order_id}/accept", response_model=BaseOrderOut)
 async def accept_order(
+    order_id: int,
+    data: AcceptIn | None = None,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+):
+    """Send an order to production, or change what an accepted one prints, then replan.
+
+    Without a body (or without ``products``) every mapped line is printed in
+    full. Per product, ``units`` says how many to print (the rest is held back
+    and stays so when Base changes the line) and ``have`` the pieces of parts
+    someone has already: they go into stock as pieces of no known printer,
+    which pair with any printer's, so only the rest is printed.
+    """
+    row = await _get_order(db, order_id)
+    if row.state == "cancelled":
+        raise HTTPException(409, "The order was cancelled in Base")
+    choices = None
+    if data is not None and data.products is not None:
+        choices = [
+            svc.ProductChoice(p.product_id, p.units, {h.part_id: h.pieces for h in p.have if h.pieces > 0})
+            for p in data.products
+        ]
+    try:
+        changed = await svc.accept(db, row, choices)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await _replan(db, changed)
+    await db.commit()
+    return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+
+
+@router.post("/orders/{order_id}/reset", response_model=BaseOrderOut)
+async def reset_order(
     order_id: int,
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
 ):
-    """Send an order to production: its mapped lines become product orders, then replan."""
+    """Take back sending (or skipping) an order: it waits again; its product orders are cancelled.
+
+    What was held back is forgotten and the parts put into stock as on hand
+    for it are taken out again. Then replan.
+    """
     row = await _get_order(db, order_id)
     if row.state == "cancelled":
         raise HTTPException(409, "The order was cancelled in Base")
-    await _replan(db, await svc.accept(db, row))
+    await _replan(db, await svc.reset(db, row))
     await db.commit()
     return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
 

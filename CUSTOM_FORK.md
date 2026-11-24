@@ -123,8 +123,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     drukarka” (góra i dół) drukują się dla jednego produktu na jednej drukarce, bo każda drukarka
     trochę inaczej drukuje ściany. Część może mieć **czas obróbki po wydruku** (np. 60 min przy
     dole i trayu, gdy tray wkleja się do dołu i schnie godzinę): planer liczy ją dopiero po tym
-    czasie, więc takie części drukuje wcześniej, a górę w trakcie schnięcia (nie jest to twarda
-    reguła, tylko część kosztu). Produkt może mieć zdjęcie (bez niego pokazuje miniaturę
+    czasie (z obu części: klej dopiero po zdjęciu późniejszej z nich, plus godzina), więc takie
+    części drukuje wcześniej, a górę w trakcie schnięcia; na jednej drukarce kolejność to dół,
+    tray, góra (nie jest to twarda reguła, tylko część kosztu). Produkt może mieć zdjęcie (bez niego pokazuje miniaturę
     pierwszej płyty). **Zamówienie** (ilość, opcjonalny termin) od razu planuje
     wszystkie otwarte zamówienia produktu od nowa (`services/product_planner.py`): brakuje tego,
     czego chcą zamówienia, minus stan, minus to, co się drukuje. Planer układa plan tak, jak
@@ -148,7 +149,17 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     zamówienia biorą z niego po kolei (termin, potem kolejność), a zamówienie z kompletem części
     samo się zamyka. Góra bez dołu (np. po nieudanym dole) nie przepada: brakujący dół idzie na
     tę samą drukarkę. Świadomy rozjazd (góra z jednej drukarki, dół z innej) to **przeniesienie**
-    sztuk na drukarkę w korekcie stanu. Widok pokazuje zamówienia z postępem i prognozą gotowości, zadania w
+    sztuk na drukarkę w korekcie stanu. Sztuki bez drukarki (korekta bez drukarki, „mam już
+    górę”) łączą się w komplet z sztukami z dowolnej drukarki. **Kontrola jakości**: przy
+    „Płyta zdjęta” na karcie drukarki pada pytanie o płytę, która na niej leży (wadliwe na część
+    jednym tapnięciem, „Sprawdzę później”, gdy płyta jeszcze stygnie, co przy świeżej płycie jest
+    główną odpowiedzią, albo „Anuluj”, który płyty nie zdejmuje); karta drukarki i menu mają
+    licznik „do sprawdzenia”, zakładka „Do sprawdzenia” zbiera wszystko (filtr po drukarce,
+    sprawdzone z 7 dni do poprawienia, „Cofnij” po zapisie). Niesprawdzone liczą się jako dobre;
+    wadliwe wypadają ze stanu i planer dodrukowuje je od razu, a zamówienie zamknięte z taką
+    sztuką otwiera się znowu. Ocena trafia też jako werdykt do archiwum (upstreamowe pytanie o
+    wynik jest dla zadań planera wyłączone). Na ekranach dotykowych przyciski mają 44 px, liczby
+    wybiera się segmentami 0–3 albo − n +, a okna wysuwają się od dołu. Widok pokazuje zamówienia z postępem i prognozą gotowości, zadania w
     kolejce, stan części z korektą i braki, których nie ma w kolejce (np. ręcznie usunięte
     zadanie). Zamówienia mają pola `external_source`/`external_ref` na przyszłe zamówienia ze
     sklepu. **Zamówienia z Base** (base.com, zakładka „Zamówienia z Base” na stronie Produkty,
@@ -158,7 +169,13 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     (numer, źródło, data i pozycje). Pozycje łączy z produktami po SKU (produkt może mieć kilka
     SKU i zestawy, np. 3 sztuki na SKU; SKU „nie drukujemy” jest pomijane; nieprzypisane są
     wypisane do przypisania jednym kliknięciem). Nowe zamówienie czeka na „Drukuj” (albo od razu
-    idzie do produkcji, jeśli tak ustawiono), potem daje zamówienia produktów i przelicza plan;
+    idzie do produkcji, jeśli tak ustawiono): „Drukuj wszystko” od razu (z „Cofnij”) albo
+    „Wybierz…”: okno, w którym ustawia się, ile sztuk każdego produktu drukować (reszta zostaje
+    niedrukowana też przy zmianach w Base) i które części są poza stanem (idą do stanu bez
+    drukarki, jako stan na zamówienie, więc zmiana nie liczy ich podwójnie); „Zmień” robi to samo
+    dla zamówienia w produkcji, „Wycofaj z produkcji” pyta o potwierdzenie. Termin wysyłki ma
+    kolorową etykietę (dziś, jutro, po terminie), a lista jest po nim posortowana; potem daje
+    zamówienia produktów i przelicza plan;
     póki jest w tych statusach, zmiany pozycji w Base idą za nim; przestawione w Base zachowuje
     druki, a anulowane anuluje otwarte. Termin to termin wysyłki z platformy (Allegro), czytany z
     danych transakcji w Base raz na zamówienie; bez niego dni robocze od potwierdzenia. Token Base jest zapisywany tylko do zapisu. Całość jest dostępna przez API, także zdjęcie i płyty hurtem z folderu (zgadywane z

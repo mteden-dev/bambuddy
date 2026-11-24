@@ -139,7 +139,35 @@ curl -s -X POST "$BB/products/7/stock/move" -H "X-API-Key: $KEY" -H 'Content-Typ
   -d '{"part_id": 22, "from_printer_id": 2, "to_printer_id": 3, "pieces": 1}'
 ```
 
-Obie operacje przeliczają plan.
+Obie operacje przeliczają plan. Korekta bez `printer_id` to sztuki bez drukarki: łączą się w komplet
+z sztukami z dowolnej drukarki (np. luźna góra plus dół wydrukowany gdziekolwiek).
+
+## Kontrola jakości
+
+Zakończone zadania produktu czekają na sprawdzenie (do 7 dni) i do tego czasu ich sztuki liczą się jako
+dobre. Strona pyta o to przy „Płyta zdjęta” (tylko o płytę, która leży na drukarce), karta drukarki
+ma licznik „do sprawdzenia”, a zakładka „Do sprawdzenia” zbiera wszystko (także sprawdzone z 7 dni, do
+poprawienia).
+
+```bash
+# do sprawdzenia (opcjonalnie tylko z jednej drukarki); tylko płyta na drukarce; sprawdzone z 7 dni
+curl -s "$BB/products/qc?printer_id=3" -H "X-API-Key: $KEY"
+curl -s "$BB/products/qc?printer_id=3&on_plate=true" -H "X-API-Key: $KEY"
+curl -s "$BB/products/qc?checked=true" -H "X-API-Key: $KEY"
+
+# wszystko dobre / 1 wadliwa góra (id części); ponowne sprawdzenie zastępuje poprzednie
+curl -s -X POST "$BB/products/jobs/55/check" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{}'
+curl -s -X POST "$BB/products/jobs/55/check" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"rejected": [{"part_id": 21, "pieces": 1}], "source": "plate_clear"}'
+
+# cofnięcie: zadanie znowu czeka na sprawdzenie
+curl -s -X POST "$BB/products/jobs/55/uncheck" -H "X-API-Key: $KEY"
+```
+
+Wadliwe sztuki wypadają ze stanu i produkt jest planowany od nowa (`replanned: true`); zamówienie, które
+zamknęło się z wadliwą sztuką, otwiera się znowu (`reopened_orders`). Odpowiedź trafia też jako werdykt
+do archiwum wydruku (dobry, albo odrzucony, gdy wszystkie sztuki były wadliwe; `source` to skąd), więc
+statystyki Dobry/Odrzucony ją widzą; upstreamowe pytanie o wynik jest dla zadań planera wyłączone.
 
 ## Zamówienia z Base (base.com)
 
@@ -157,7 +185,15 @@ jest, data potwierdzenia i pozycje: SKU, nazwa, ilość). Logika: `backend/app/s
 - **Nowe zamówienie** czeka na zatwierdzenie (`POST /base-sync/orders/{order_id}/accept`, albo
   `/skip`), chyba że w ustawieniach jest `auto_accept`. Zatwierdzone zamówienie daje zamówienie
   produktu na każdy produkt (`external_source` `base`, `external_ref` `"<order_id>/<product_id>"`)
-  i przelicza plan. Dopóki zamówienie jest w którymś z tych statusów, zmiany pozycji w Base (ilość,
+  i przelicza plan. Bez treści drukuje wszystko; z `products` wybiera pozycja po pozycji:
+  `units` to ile sztuk produktu drukować (reszta trafia do `held` zamówienia i zostaje
+  niedrukowana także po zmianach w Base), `have` to części, które już są (idą do stanu jako
+  sztuki bez drukarki, więc drukuje się tylko reszta). `have` to stan na całe zamówienie, nie
+  dokładka: zamówienie pamięta go (`on_hand`) i kolejna zmiana dokłada lub odejmuje tylko różnicę.
+  To samo wywołanie na zatwierdzonym zamówieniu zmienia wybór (`units: 0` anuluje zamówienie
+  produktu). `POST /base-sync/orders/{order_id}/reset` cofa przyjęcie albo pominięcie (zamówienie
+  znowu czeka, części „mam” wychodzą ze stanu). Lista czekających i zatwierdzonych jest posortowana
+  po terminie wysyłki. Dopóki zamówienie jest w którymś z tych statusów, zmiany pozycji w Base (ilość,
   nowa pozycja, dopisane SKU) idą za nim. Zamówienie przestawione w Base dalej (np. „W produkcji”)
   zachowuje swoje druki; to w statusie anulowanych (`cancel_status_id`) anuluje otwarte zamówienia
   produktów.
@@ -178,6 +214,9 @@ curl -s -X POST "$BB/base-sync/test" -H "X-API-Key: $KEY" -H 'Content-Type: appl
 curl -s -X POST "$BB/base-sync/sync" -H "X-API-Key: $KEY"                    # odczyt teraz
 curl -s "$BB/base-sync/orders?state=new" -H "X-API-Key: $KEY"                # czekające
 curl -s -X POST "$BB/base-sync/orders/10000001/accept" -H "X-API-Key: $KEY"
+# 1 z 2 pudełek, a góra do niego już jest
+curl -s -X POST "$BB/base-sync/orders/10000001/accept" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"products": [{"product_id": 7, "units": 1, "have": [{"part_id": 21, "pieces": 1}]}]}'
 curl -s -X PUT "$BB/base-sync/skus/SKU-STICKER-W" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
   -d '{"product_id": null}'
 ```

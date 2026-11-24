@@ -6157,6 +6157,15 @@ async def _run_migrations(conn):
         conn,
         f"ALTER TABLE custom_base_orders ADD COLUMN ship_by {'DATETIME' if is_sqlite() else 'TIMESTAMP'}",
     )
+    # Fork (Base sync): products of an order not printed for it, chosen line by line.
+    await _safe_execute(conn, "ALTER TABLE custom_base_orders ADD COLUMN held JSON")
+    await _safe_execute(conn, "ALTER TABLE custom_base_orders ADD COLUMN on_hand JSON")
+    # Fork (products): someone checked a finished job's pieces, and the bad ones.
+    await _safe_execute(
+        conn,
+        f"ALTER TABLE custom_product_jobs ADD COLUMN checked_at {'DATETIME' if is_sqlite() else 'TIMESTAMP'}",
+    )
+    await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN rejected JSON")
 
     await _backfill_archive_run_photos(conn)
     await _migrate_h3c_queue_tray_ids(conn)

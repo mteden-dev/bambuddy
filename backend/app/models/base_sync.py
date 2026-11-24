@@ -61,6 +61,12 @@ class BaseOrder(Base):
     # [{"sku": ..., "name": ..., "quantity": n, "attributes": ...}]
     items: Mapped[list] = mapped_column(JSON, default=list)
     state: Mapped[str] = mapped_column(String(20), default="new")
+    # product id (string) -> products of it not printed for this order (sent
+    # from the shelf, made another way), chosen when it was sent to production.
+    held: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # part id (string) -> pieces on hand put into stock for this order (so a
+    # change puts in or takes out only the difference).
+    on_hand: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # The last sync found it in one of the statuses orders are taken from.
     in_status: Mapped[bool] = mapped_column(Boolean, default=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

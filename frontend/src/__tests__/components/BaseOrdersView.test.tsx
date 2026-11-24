@@ -60,16 +60,38 @@ const ORDER: BaseOrder = {
   ],
   product_orders: [],
   ready: false,
+  held: {},
+  on_hand: {},
+};
+
+const PRODUCT = {
+  id: 4,
+  name: '9mm 100 Black',
+  notes: null,
+  parts: [
+    { id: 41, name: 'Lid', quantity: 1, matched: true, finish_minutes: 0 },
+    { id: 42, name: 'Base', quantity: 1, matched: true, finish_minutes: 60 },
+  ],
+  plates: [],
+  skus: [],
+  stock: [{ part_id: 42, printer_id: 1, printer_name: 'P1S', pieces: 1 }],
+  orders: [],
+  jobs: [],
+  unplanned: [],
 };
 
 let settings: BaseSyncSettings;
-let accepted: number[];
+let accepted: { id: number; body: unknown }[];
+let resets: number[];
+let skipped: number[];
 let mapped: { sku: string; body: unknown }[];
 let saved: unknown[];
 
 beforeEach(() => {
   settings = { ...SETTINGS };
   accepted = [];
+  resets = [];
+  skipped = [];
   mapped = [];
   saved = [];
   server.use(
@@ -94,9 +116,19 @@ beforeEach(() => {
       HttpResponse.json({ mapped: [], unmapped: [{ sku: 'SKU-STICKER-W', name: 'Stickers white', orders: 1 }] }),
     ),
     http.get('/api/v1/products/', () => HttpResponse.json([{ id: 4, name: '9mm 100 Black', parts: [], plates: [], skus: [] }])),
-    http.post('/api/v1/base-sync/orders/:id/accept', ({ params }) => {
-      accepted.push(Number(params.id));
+    http.post('/api/v1/base-sync/orders/:id/accept', async ({ params, request }) => {
+      const text = await request.text();
+      accepted.push({ id: Number(params.id), body: text ? JSON.parse(text) : null });
       return HttpResponse.json({ ...ORDER, state: 'accepted' });
+    }),
+    http.get('/api/v1/products/:id', () => HttpResponse.json(PRODUCT)),
+    http.post('/api/v1/base-sync/orders/:id/reset', ({ params }) => {
+      resets.push(Number(params.id));
+      return HttpResponse.json(ORDER);
+    }),
+    http.post('/api/v1/base-sync/orders/:id/skip', ({ params }) => {
+      skipped.push(Number(params.id));
+      return HttpResponse.json({ ...ORDER, state: 'skipped' });
     }),
     http.put('/api/v1/base-sync/skus/:sku', async ({ params, request }) => {
       mapped.push({ sku: String(params.sku), body: await request.json() });
@@ -119,12 +151,73 @@ describe('BaseOrdersView', () => {
     render(<BaseOrdersView hasPermission={allowAll} />);
     expect(await screen.findByText('#1243')).toBeInTheDocument();
     expect(screen.getByText('Allegro Shop A')).toBeInTheDocument();
-    expect(screen.getByText(/^ship by /)).toBeInTheDocument();
+    // The ship-by date: a coloured label near it, the date itself further off.
+    expect(screen.queryByText(/^ship by /) ?? screen.getByTitle(/^ship by /)).toBeInTheDocument();
     // The line's product badge (the unmapped panel's product list has the name too).
     expect(screen.getAllByText('9mm 100 Black').some((el) => el.tagName === 'SPAN')).toBe(true);
     expect(screen.getAllByText('no product').length).toBeGreaterThan(0);
-    await user.click(screen.getByRole('button', { name: 'Print' }));
-    await waitFor(() => expect(accepted).toEqual([5001]));
+    // "Print all" sends the whole order at once, and can be taken back for a moment.
+    await user.click(screen.getByRole('button', { name: 'Print all' }));
+    await waitFor(() => expect(accepted).toEqual([{ id: 5001, body: null }]));
+    await user.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(resets).toEqual([5001]));
+  });
+
+  it('sends an order line by line: fewer boxes, a part on the shelf', async () => {
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Choose…' }));
+    expect(await screen.findByRole('dialog', { name: 'Print order #1243' })).toBeInTheDocument();
+    // One tap per count: segments, no keyboard.
+    const toPrint = screen.getByRole('radiogroup', { name: 'How many of 9mm 100 Black to print' });
+    expect(within(toPrint).getByRole('radio', { name: '2' })).toHaveAttribute('aria-checked', 'true');
+    await user.click(within(toPrint).getByRole('radio', { name: '1' }));
+    // Bambuddy counts one base in stock already; a lid is on the shelf.
+    const lid = await screen.findByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' });
+    await user.click(within(lid).getByRole('radio', { name: '1' }));
+    expect(screen.getByText('Printing: 1 × 9mm 100 Black')).toBeInTheDocument();
+    const send = screen.getByRole('button', { name: 'Send to production' });
+    await waitFor(() => expect(send).toBeEnabled());
+    await user.click(send);
+    await waitFor(() =>
+      expect(accepted).toEqual([
+        { id: 5001, body: { products: [{ product_id: 4, units: 1, have: [{ part_id: 41, pieces: 1 }] }] } },
+      ]),
+    );
+  });
+
+  it('changing an accepted order starts from what is on hand for it', async () => {
+    server.use(
+      http.get('/api/v1/base-sync/orders', () =>
+        HttpResponse.json([{ ...ORDER, state: 'accepted', held: { '4': 1 }, on_hand: { '41': 1 } }]),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    expect(await screen.findByText('printing 1 of 2')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Change' }));
+    const lid = await screen.findByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' });
+    expect(within(lid).getByRole('radio', { name: '1' })).toHaveAttribute('aria-checked', 'true');
+    const save = screen.getByRole('button', { name: 'Save' });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+    await waitFor(() =>
+      expect(accepted).toEqual([
+        { id: 5001, body: { products: [{ product_id: 4, units: 1, have: [{ part_id: 41, pieces: 1 }] }] } },
+      ]),
+    );
+  });
+
+  it('withdrawing an order from production asks first', async () => {
+    server.use(http.get('/api/v1/base-sync/orders', () => HttpResponse.json([{ ...ORDER, state: 'accepted' }])));
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Withdraw from production' }));
+    expect(await screen.findByText('Withdraw order #1243?')).toBeInTheDocument();
+    expect(skipped).toEqual([]);
+    const buttons = screen.getAllByRole('button', { name: 'Withdraw from production' });
+    await user.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(skipped).toEqual([5001]));
   });
 
   it('maps an unmapped SKU to a product or marks it not printed', async () => {
