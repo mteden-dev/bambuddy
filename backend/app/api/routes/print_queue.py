@@ -927,6 +927,7 @@ async def queue_forecast(
 def _forecast_staffed(turnaround) -> dict:
     """The forecast's rule for when a finished plate gets cleared, for the timeline's plan."""
     typical = turnaround.typical_week()
+    someone_at, someone_reason = turnaround.someone_there()
     return {
         "enabled": turnaround.hours.enabled,
         "windows": [{"start": a, "end": b} for a, b in turnaround.windows],
@@ -937,6 +938,8 @@ def _forecast_staffed(turnaround) -> dict:
         "typical": {"start": typical[0], "minutes": typical[1]} if typical else None,
         "away_until": turnaround.away_until,
         "present_until": turnaround.present_until,
+        "someone_there_at": someone_at,
+        "someone_there_reason": someone_reason,
     }
 
 

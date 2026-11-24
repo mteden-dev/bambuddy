@@ -356,6 +356,83 @@ describe('QueueTimelineView', () => {
       expect(within(dialog).queryByRole('button', { name: 'common.save' })).toBeNull();
     });
 
+    describe('waiting for a manual start', () => {
+      // Nobody is expected to press Start for five hours.
+      const rule = {
+        enabled: false,
+        windows: [],
+        clear_minutes: 0,
+        waits_for_plate: false,
+        someone_there_at: iso(5),
+        someone_there_reason: 'unstaffed' as const,
+      };
+      const onLane2 = (start: number) => forecast({
+        staffed: rule,
+        placements: [
+          { item_id: 1, printer_id: 1, start: iso(0), end: iso(1), projected: false },
+          { item_id: 2, printer_id: 2, start: iso(0), end: iso(1), projected: true },
+          { item_id: 4, printer_id: 2, start: iso(3), end: iso(4), projected: true },
+          { item_id: 3, printer_id: 2, start: iso(start), end: iso(start + 1), projected: true },
+        ],
+        off_timeline: [],
+      });
+
+      it('goes on its lane, marked as waiting for someone to press Start', async () => {
+        vi.mocked(api.getQueueForecast).mockResolvedValue(onLane2(5));
+        const items = [pinned, anyJob, { ...staged, waiting_reason: 'Load PETG' }, laterJob];
+        renderTimeline({ queueItems: items });
+
+        const staging = await within(lane(2)).findByTitle((title) => title.startsWith('Staged lid'));
+        expect(staging).toHaveAttribute('data-manual', 'true');
+        expect(staging).toHaveTextContent('queue.timeline.manualStart');
+        expect(staging.getAttribute('title')).toContain('queue.timeline.manualStartHelp: Load PETG');
+        expect(screen.getByTestId('legend-manual')).toHaveTextContent('queue.timeline.legend.manual');
+        expect(screen.queryByText(/queue\.timeline\.offTimeline\.title/)).not.toBeInTheDocument();
+        // A job that starts by itself carries no such mark.
+        expect(within(lane(2)).getByTitle((title) => title.startsWith('Any tray'))).not.toHaveAttribute('data-manual');
+      });
+
+      it('stays after the time someone is expected in a plan', async () => {
+        // Drawn later than that by the forecast, so the plan's own replay shows.
+        vi.mocked(api.getQueueForecast).mockResolvedValue(onLane2(7));
+        const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+          const el = this as HTMLElement;
+          const laneEl = el.closest('[data-lane]') as HTMLElement | null;
+          const index = (laneEl ? Number(laneEl.dataset.lane) : 2) - 1;
+          const isLane = el.hasAttribute('data-lane');
+          const top = index * 56 + (isLane ? 0 : 8);
+          const height = isLane ? 56 : 40;
+          const width = isLane ? 800 : 100;
+          const left = el.hasAttribute('data-bar-item') ? (parseFloat(el.style.left) / 100) * 800 : 0;
+          return { x: left, y: top, top, left, right: left + width, bottom: top + height, width, height, toJSON: () => ({}) } as DOMRect;
+        });
+        try {
+          renderTimeline({ onApplyPlan: vi.fn() });
+          const later = await within(lane(2)).findByTitle((title) => title.startsWith('Later cup'));
+
+          // Later cup goes first on printer 2: it and Any tray are done in two
+          // hours, and the staged lid waits for someone at five.
+          const fromX = later.getBoundingClientRect().left + 10;
+          fireEvent.mouseDown(later, { button: 0, clientX: fromX, clientY: 76 });
+          act(() => {
+            fireEvent.mouseMove(document, { clientX: fromX + 10, clientY: 76 });
+          });
+          act(() => {
+            fireEvent.mouseMove(document, { clientX: 0, clientY: 76 });
+          });
+          act(() => {
+            fireEvent.mouseUp(document);
+          });
+
+          expect(leftOf(bar('Any tray'))).toBeCloseTo(pctOf(Date.now() + HOUR), 0);
+          expect(leftOf(bar('Staged lid'))).toBeCloseTo(pctOf(Date.parse(rule.someone_there_at)), 1);
+        } finally {
+          rectSpy.mockRestore();
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+      });
+    });
+
     describe('learned from how long plates wait', () => {
       const learnedRule = (over: Record<string, unknown> = {}) => ({
         enabled: false,

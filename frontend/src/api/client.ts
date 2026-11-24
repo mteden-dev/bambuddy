@@ -3207,6 +3207,10 @@ export interface QueueForecast {
     away_until?: string | null;
     /** Someone cleared a plate a moment ago: a print ending before then is cleared at once. */
     present_until?: string | null;
+    /** When someone is expected to be there to start a job by hand: a job waiting
+     *  for a manual start goes on the lanes from then. */
+    someone_there_at?: string | null;
+    someone_there_reason?: 'present' | 'now' | 'unstaffed' | 'typical' | 'away' | null;
   } | null;
 }
 

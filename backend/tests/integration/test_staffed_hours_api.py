@@ -131,3 +131,43 @@ async def test_without_plate_clear_confirmation_nothing_waits(
     assert abs(datetime.fromisoformat(placement["start"]) - (now + timedelta(minutes=30))) < timedelta(minutes=1)
     assert body["plate_waits"] == []
     assert body["staffed"]["waits_for_plate"] is False
+
+
+async def test_a_job_waiting_for_a_manual_start_waits_for_the_staffed_hours(
+    async_client: AsyncClient, db_session, printer_factory, archive_factory
+):
+    printer = await printer_factory(name="P1S-A", model="P1S")
+    printer_id = printer.id
+    archive_id = (await archive_factory(printer_id, sliced_for_model="P1S")).id
+    staged = PrintQueueItem(
+        archive_id=archive_id,
+        status="pending",
+        position=1,
+        print_time_seconds=3600,
+        target_model="P1S",
+        manual_start=True,
+    )
+    after = PrintQueueItem(
+        archive_id=archive_id, status="pending", position=2, print_time_seconds=3600, target_model="P1S"
+    )
+    db_session.add_all([staged, after])
+    await db_session.commit()
+    staged_id, after_id = staged.id, after.id
+    # Nobody is there for the next two hours; plate-clear confirmation is off.
+    now = datetime.now(timezone.utc)
+    opens = (now + timedelta(hours=2)).replace(second=0, microsecond=0)
+    assert (
+        await async_client.put("/api/v1/queue/staffed-hours", json=_hours(opens, opens + timedelta(hours=3)))
+    ).status_code == 200
+
+    connected, status = _live({printer_id}, printing={})
+    with connected, status:
+        body = (await async_client.get("/api/v1/queue/forecast")).json()
+
+    starts = {p["item_id"]: datetime.fromisoformat(p["start"]) for p in body["placements"]}
+    # The automatic job behind it runs now; the staged one once someone can press Start.
+    assert abs(starts[after_id] - now) < timedelta(minutes=1)
+    assert starts[staged_id] == datetime.fromisoformat(body["staffed"]["someone_there_at"])
+    assert abs(starts[staged_id] - opens) < timedelta(minutes=1)
+    assert body["staffed"]["someone_there_reason"] == "unstaffed"
+    assert body["off_timeline"] == []

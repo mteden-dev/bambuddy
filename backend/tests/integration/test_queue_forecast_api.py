@@ -61,12 +61,14 @@ async def test_any_jobs_are_spread_over_the_free_printers(
     placed = {p["item_id"]: (p["printer_id"], p["projected"]) for p in body["placements"]}
     # A is free now and takes the pinned job first; B frees up in 30 minutes and
     # takes the first "Any" job; the second waits for A to finish the pinned one.
-    assert placed == {pinned: (a_id, False), any1: (b_id, True), any2: (a_id, True)}
+    # The job waiting for a manual start goes last: with no staffed hours,
+    # someone may press Start any time, and B is free next.
+    assert placed == {pinned: (a_id, False), any1: (b_id, True), any2: (a_id, True), staged: (b_id, True)}
     starts = {p["item_id"]: datetime.fromisoformat(p["start"]) for p in body["placements"]}
-    assert starts[pinned] < starts[any1] < starts[any2]
+    assert starts[pinned] < starts[any1] < starts[any2] < starts[staged]
 
     off = {o["item_id"]: (o["reason"], o["detail"]) for o in body["off_timeline"]}
-    assert off == {staged: ("manual_start", None), held: ("waiting", "Waiting for filament: PETG")}
+    assert off == {held: ("waiting", "Waiting for filament: PETG")}
 
     lanes = {p["printer_id"]: p for p in body["printers"]}
     assert lanes[b_id]["external_print"] is True  # RUNNING with no queue job printing

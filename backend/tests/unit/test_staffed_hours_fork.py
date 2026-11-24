@@ -114,3 +114,17 @@ class TestForecast:
 
         # b waits for the morning on printer 1, after c starts at 06:00 on printer 2.
         assert order == [1, 3, 2]
+
+    def test_the_plan_starts_a_manual_job_once_someone_is_there(self):
+        turnaround = PlateTurnaround.build(_warsaw(clear=5), waits_for_plate=False, now=_at(23, 23))
+        printers = [ForecastPrinter(id=1, model="P1S"), ForecastPrinter(id=2, model="P1S")]
+        someone, _ = turnaround.someone_there()
+        a = ForecastJob(id=1, target_model="P1S", duration_s=HOUR, manual_start_from=someone)
+        b = ForecastJob(id=2, target_model="P1S", duration_s=HOUR)
+        lanes = [(printers[0], [a]), (printers[1], [b])]
+
+        order = planned_order(lanes, {1: 0, 2: 1}, _at(23, 23), turnaround.ready_after)
+
+        # Printer 1 stands until the morning shift; b starts at once on printer 2.
+        assert someone == _at(24, 7)
+        assert order == [2, 1]

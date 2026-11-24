@@ -49,8 +49,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     Prognozę liczy backend (`GET /queue/forecast`, `services/queue_forecast.py`): drukarka, która
     zwolni się pierwsza, bierze pierwsze pasujące zadanie w kolejności schedulera (SJF, kolejność
     wyboru drukarek, lokalizacja, tagi drukarek, drukarki twórcy, offline bez wtyczki Auto On).
-    Zadania wstrzymane (ręczny start, brak filamentu itp.) są pod osią z powodem; przypięte,
+    Zadania wstrzymane (brak filamentu itp.) są pod osią z powodem; przypięte,
     które czekają tylko na potwierdzenie czystego stołu, zostają na pasie swojej drukarki.
+    Zadanie z ręcznym startem stoi na pasie od chwili, gdy ktoś ma być na miejscu i kliknąć
+    Start (`PlateTurnaround.someone_there`: godziny obsady, typowe czekanie płyty, „chyba nikogo
+    nie ma”), z ikoną dłoni; do tego czasu nie blokuje zadań za nim, jak zadanie zaplanowane.
     **Tryb planu**: przeciąganie nierozpoczętego zadania niczego nie zapisuje, tylko układa plan
     (znacznik pokazuje szczelinę; zadanie wchodzi przed kafelek po prawej, na swoim pasie albo
     innej drukarki, kolejne na tym pasie się przesuwają, reszta stoi). Pasek planu: liczba zmian,

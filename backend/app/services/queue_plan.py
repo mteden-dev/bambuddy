@@ -34,6 +34,7 @@ from backend.app.services.queue_forecast import (
     _aware,
     build_queue_forecast,
     duration_on,
+    earliest_start,
     load_forecast_inputs,
     place_jobs,
     reservation_refusal,
@@ -67,15 +68,16 @@ def planned_order(
 
     ``lanes`` pairs each printer with its forecast jobs, in the plan's order. A
     lane starts when its printer is free and runs its jobs back to back, a job
-    scheduled for later waiting for its time, and each waiting for the plate
-    before it to be cleared (``ready_after``). Equal starts go in the order an
+    scheduled for later, or waiting for someone to start it by hand, waiting
+    for its time, and each waiting for the plate before it to be cleared
+    (``ready_after``). Equal starts go in the order an
     "Any" job picks among free printers, as the forecast breaks them.
     """
     starts: list[tuple[datetime, int, int, int]] = []
     for printer, jobs in lanes:
         t = max(_aware(printer.free_at) or now, now)
         for index, job in enumerate(jobs):
-            scheduled = _aware(job.scheduled_time)
+            scheduled = earliest_start(job)
             if scheduled is not None and scheduled > t:
                 t = scheduled
             starts.append((t, rank[printer.id], index, job.id))

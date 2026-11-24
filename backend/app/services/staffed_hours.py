@@ -283,6 +283,28 @@ class PlateTurnaround:
             ready, reason = self.away_until, "away"
         return ready, reason
 
+    def someone_there(self) -> tuple[datetime, str]:
+        """When someone is expected to be at the printers from now, to start a job by hand,
+        and why then.
+
+        The reason is ``present`` (someone cleared a plate a moment ago), ``now``
+        (no telling otherwise), ``unstaffed`` (nobody is there until the staffed
+        hours), ``typical`` (as long as a plate finished now usually waits) or
+        ``away`` (nobody seems to be there now). Staffed hours count with
+        plate-clear confirmation off too; what is learned only exists with it on.
+        """
+        now = self.now or datetime.now(timezone.utc)
+        if self.present_until is not None and now < self.present_until:
+            return now, "present"
+        at = self.next_staffed(now)
+        reason = "unstaffed" if at > now else "now"
+        typical = self.typical_at(now)
+        if typical is not None and now + typical > at:
+            at, reason = now + typical, "typical"
+        if self.away_until is not None and self.away_until > at:
+            at, reason = self.away_until, "away"
+        return at, reason
+
     def ready_after(self, print_end: datetime) -> datetime:
         """When the next job can start on a printer whose print ends at ``print_end``."""
         return self.explain(print_end)[0]

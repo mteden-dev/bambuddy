@@ -23,6 +23,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Hand,
   Layers,
   Lock,
   Moon,
@@ -251,6 +252,10 @@ function TimelineBar({
     isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null,
     ev.projected && models.length > 0 ? `${t('queue.filter.any')} ${models.join(' / ')}` : null,
     ev.item.batch_name ? `batch: ${ev.item.batch_name}` : null,
+    // Placed from when someone is expected to be there to press Start.
+    !isPrinting && ev.item.manual_start
+      ? [t('queue.timeline.manualStartHelp'), ev.item.waiting_reason].filter(Boolean).join(': ')
+      : null,
   ].filter(Boolean).join(' · ');
   return (
     <button
@@ -262,6 +267,7 @@ function TimelineBar({
       data-bar-item={ev.item.id}
       data-kind={isPrinting ? 'printing' : ev.reserved ? 'reserved' : ev.projected ? 'projected' : 'pinned'}
       data-moved={ev.moved ? 'true' : undefined}
+      data-manual={!isPrinting && ev.item.manual_start ? 'true' : undefined}
       className={`absolute rounded-md transition-[filter,opacity] hover:brightness-110 hover:z-10 overflow-hidden flex items-center gap-1.5 px-1.5 text-left ${barClasses(ev)} ${
         ev.moved ? 'ring-2 ring-amber-300/80 ring-offset-1 ring-offset-bambu-dark-secondary' : ''
       } ${draggable ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging || dimmed ? 'opacity-40' : ''}`}
@@ -294,7 +300,9 @@ function BarContent({ ev, t }: { ev: ScheduleEvent; t: QueueTimelineViewProps['t
   const thumbnailUrl = queueJobThumbnailUrl(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
   const printTime = queueJobPrintTime(ev.item, ev.variant);
+  const manual = !isPrinting && ev.item.manual_start;
   const second = [
+    manual ? t('queue.timeline.manualStart') : null,
     anyModelLabel(ev, t),
     printTime ? formatDuration(printTime) : null,
     isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null,
@@ -306,7 +314,9 @@ function BarContent({ ev, t }: { ev: ScheduleEvent; t: QueueTimelineViewProps['t
       )}
       <div className="min-w-0 flex-1">
         <div className="text-xs text-white font-medium truncate leading-tight flex items-center gap-1">
-          {!isPrinting && (ev.reserved
+          {!isPrinting && (manual
+            ? <Hand className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />
+            : ev.reserved
             ? <Lock className="w-3 h-3 shrink-0 text-amber-300" aria-hidden />
             : ev.projected
               ? <Shuffle className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />
@@ -667,6 +677,8 @@ export function QueueTimelineView({
   const typicalStartMs = parseUTCDate(typical?.start)?.getTime() ?? null;
   const awayUntilMs = parseUTCDate(staffed?.away_until)?.getTime() ?? null;
   const presentUntilMs = parseUTCDate(staffed?.present_until)?.getTime() ?? null;
+  // When someone is expected to be there to press Start (PlateTurnaround.someone_there).
+  const someoneThereMs = parseUTCDate(staffed?.someone_there_at)?.getTime() ?? null;
   const generatedMs = parseUTCDate(forecast?.generated_at)?.getTime() ?? nowMs;
   // When a printer whose print ends at `endMs` can start the next one, and why
   // then, as the forecast has it (PlateTurnaround.explain).
@@ -728,6 +740,8 @@ export function QueueTimelineView({
           const variant = variantOn(item, printer);
           const scheduled = parseUTCDate(item.scheduled_time)?.getTime();
           if (scheduled != null && scheduled > t) t = scheduled;
+          // A manual start waits for someone to be there, as the forecast has it.
+          if (item.manual_start && someoneThereMs != null && someoneThereMs > t) t = someoneThereMs;
           const duration = (variant?.print_time_seconds ?? item.print_time_seconds ?? 3600) * 1000;
           const moved = draft.moved.includes(id);
           const reservation = forecast?.reservations?.[String(id)];
@@ -777,6 +791,10 @@ export function QueueTimelineView({
     // variantOn and explainWait read forecast and staffedWindows, which are listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planLanes, draft, printers, lanePrinterState, nowMs, itemsById, forecast, staffedWindows]);
+  const hasManualStart = useMemo(
+    () => Array.from(queuedByPrinter.values()).some((evs) => evs.some((ev) => ev.item.manual_start)),
+    [queuedByPrinter],
+  );
 
   // The stretches of the window nobody is there, shaded on the lanes.
   const unstaffed = useMemo(() => {
@@ -1184,6 +1202,12 @@ export function QueueTimelineView({
           <span className="inline-flex w-5 h-3.5 rounded-sm bg-blue-500/30 border border-blue-400/60" />
           {t('queue.timeline.legend.printing')}
         </span>
+        {hasManualStart && (
+          <span className="flex items-center gap-1.5" data-testid="legend-manual">
+            <Hand className="w-3 h-3" aria-hidden />
+            {t('queue.timeline.legend.manual')}
+          </span>
+        )}
         {staffed?.waits_for_plate && (
           <span className="flex items-center gap-1.5">
             <span className="inline-flex w-5 h-3.5 rounded-sm border border-dashed border-bambu-gray/50" style={{ backgroundImage: PLATE_WAIT_PATTERN }} />

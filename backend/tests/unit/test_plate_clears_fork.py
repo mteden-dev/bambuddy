@@ -143,3 +143,31 @@ class TestWhoIsThere:
             assert turnaround.away_until is None
             assert turnaround.present_until is None
             assert turnaround.waiting == {}
+
+
+class TestSomeoneThere:
+    """When someone is expected to be there to start a job by hand."""
+
+    def test_no_telling_is_now(self):
+        turnaround = PlateTurnaround.build(_hours(), False, _at(23, 15))
+        assert turnaround.someone_there() == (_at(23, 15), "now")
+
+    def test_nobody_until_the_staffed_hours_also_without_plate_clear_confirmation(self):
+        turnaround = PlateTurnaround.build(_hours(enabled=True), False, _at(24, 2))
+        assert turnaround.someone_there() == (_at(24, 7), "unstaffed")
+
+    def test_as_long_as_a_plate_finished_now_usually_waits(self):
+        turnaround = PlateTurnaround.build(_hours(), True, _at(28, 3), learned=_learned())
+        assert turnaround.someone_there() == (_at(28, 9), "typical")
+
+    def test_nobody_seems_to_be_there(self):
+        turnaround = PlateTurnaround.build(
+            _hours(), True, _at(23, 15), learned=_learned(), waiting_since={1: _at(23, 14)}
+        )
+        assert turnaround.someone_there() == (_at(23, 20), "away")
+
+    def test_someone_who_just_cleared_a_plate_is_there_now(self):
+        turnaround = PlateTurnaround.build(
+            _hours(enabled=True), True, _at(24, 2), learned=_learned(), last_clear=_at(24, 1, 50)
+        )
+        assert turnaround.someone_there() == (_at(24, 2), "present")

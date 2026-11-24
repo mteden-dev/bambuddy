@@ -290,6 +290,45 @@ class TestForecast:
         [placement] = [p for p in body["placements"] if p["item_id"] == item_id]
         assert datetime.fromisoformat(placement["start"]) == away_until
 
+    async def test_a_job_waiting_for_a_manual_start_goes_on_its_lane_once_someone_is_there(
+        self, async_client: AsyncClient, db_session, printer_factory, archive_factory
+    ):
+        printer = await printer_factory(name="P1S-A", model="P1S")
+        printer_id = printer.id
+        archive_id = (await archive_factory(printer_id, sliced_for_model="P1S")).id
+        item = PrintQueueItem(
+            archive_id=archive_id,
+            printer_id=printer_id,
+            status="pending",
+            position=1,
+            print_time_seconds=3600,
+            manual_start=True,
+        )
+        now = datetime.now(timezone.utc)
+        db_session.add_all(
+            [
+                item,
+                Settings(key="require_plate_clear", value="true"),
+                *_plates(printer_id, now, timedelta(minutes=20)),
+                # Its plate has waited three hours where twenty minutes is usual.
+                PlateClear(printer_id=printer_id, finished_at=_naive(now - timedelta(hours=3)), queue_waiting=True),
+            ]
+        )
+        await db_session.commit()
+        item_id = item.id
+
+        connected, status, awaiting = _live({printer_id}, printing={}, awaiting={printer_id})
+        with connected, status, awaiting:
+            body = (await async_client.get("/api/v1/queue/forecast")).json()
+
+        assert body["off_timeline"] == []
+        [placement] = [p for p in body["placements"] if p["item_id"] == item_id]
+        staffed = body["staffed"]
+        assert staffed["someone_there_reason"] == "away"
+        assert staffed["someone_there_at"] == staffed["away_until"]
+        assert placement["printer_id"] == printer_id
+        assert datetime.fromisoformat(placement["start"]) == datetime.fromisoformat(staffed["away_until"])
+
     async def test_what_was_learned_for_the_staffed_hours_dialog(
         self, async_client: AsyncClient, db_session, printer_factory
     ):

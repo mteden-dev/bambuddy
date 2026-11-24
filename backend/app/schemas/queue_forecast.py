@@ -36,7 +36,7 @@ class QueueForecastPlacement(BaseModel):
 
 class QueueForecastOffTimeline(BaseModel):
     item_id: int
-    # manual_start | waiting | no_printer | unassigned | starting
+    # waiting | no_printer | unassigned | starting (manual_start from older forecasts)
     reason: str
     detail: str | None = None
 
@@ -101,6 +101,11 @@ class QueueForecastStaffed(BaseModel):
     away_until: datetime | None = None
     # Someone cleared a plate a moment ago: a print ending before then is cleared at once.
     present_until: datetime | None = None
+    # When someone is expected to be there to start a job by hand
+    # (PlateTurnaround.someone_there): a job waiting for a manual start goes on
+    # the lanes from then. The reason is present | now | unstaffed | typical | away.
+    someone_there_at: datetime | None = None
+    someone_there_reason: str | None = None
 
 
 class QueueForecastReservation(BaseModel):

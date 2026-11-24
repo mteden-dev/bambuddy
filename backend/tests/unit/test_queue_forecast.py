@@ -73,6 +73,26 @@ def test_a_job_scheduled_for_later_lets_the_jobs_behind_it_go_first():
     assert _where(placements) == {11: (1, 0), 10: (1, 2)}
 
 
+def test_a_job_waiting_for_a_manual_start_lets_the_jobs_behind_it_go_first():
+    # Nobody is expected to press Start for two hours.
+    jobs = [_any(10, manual_start_from=NOW + timedelta(hours=2)), _any(11)]
+
+    placements, _ = place_jobs(jobs, [_p1s(1)], NOW)
+
+    assert _where(placements) == {11: (1, 0), 10: (1, 2)}
+
+
+def test_a_manual_start_after_its_scheduled_time_goes_by_the_later_of_the_two():
+    jobs = [
+        _any(10, scheduled_time=NOW + timedelta(hours=1), manual_start_from=NOW + timedelta(hours=3)),
+        _any(11, scheduled_time=NOW + timedelta(hours=4), manual_start_from=NOW + timedelta(hours=2)),
+    ]
+
+    placements, _ = place_jobs(jobs, [_p1s(1)], NOW)
+
+    assert _where(placements) == {10: (1, 3), 11: (1, 4)}
+
+
 def test_a_naive_scheduled_time_is_read_as_utc():
     jobs = [_any(10, scheduled_time=(NOW + timedelta(hours=1)).replace(tzinfo=None))]
 

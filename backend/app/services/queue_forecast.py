@@ -12,6 +12,10 @@ plate-clear prompt, a printer's last print failing). Jobs held for one of those
 reasons carry a waiting reason, and like the timeline before, they are left off
 the lanes and listed apart with that reason.
 
+A job that waits for someone to press Start goes on the lanes from when someone
+is expected to be there (``PlateTurnaround.someone_there``): like a job
+scheduled for later, it holds back no job behind it until then.
+
 ``placement_refusal`` is the one answer to "may this job go on that printer",
 for the forecast's "Any" jobs and for the timeline's drag and drop alike.
 """
@@ -94,6 +98,8 @@ class ForecastJob:
     # (and print time) a printer gets.
     variants: tuple[ForecastVariant, ...] = ()
     scheduled_time: datetime | None = None
+    # Waits for someone to press Start: not before someone is expected there.
+    manual_start_from: datetime | None = None
     duration_s: int = DEFAULT_DURATION_S
     # Printers rules outside this module refuse it on, such as printer tags.
     blocked: Mapping[int, Refusal] = field(default_factory=dict)
@@ -180,6 +186,12 @@ def _aware(value: datetime | None) -> datetime | None:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
+def earliest_start(job: ForecastJob) -> datetime | None:
+    """The soonest ``job`` may start: its scheduled time, or someone there to start it by hand."""
+    times = [t for t in (_aware(job.scheduled_time), _aware(job.manual_start_from)) if t is not None]
+    return max(times) if times else None
+
+
 def place_jobs(
     jobs: list[ForecastJob],
     printers: list[ForecastPrinter],
@@ -191,7 +203,8 @@ def place_jobs(
     ``jobs`` come in dispatch order and ``printers`` in the order an "Any" job
     picks among free ones (Settings > Queue > printer order). Whichever printer
     is free first takes the first job that may run on it and whose scheduled
-    time has come; ties go to the printer earlier in that order. A pinned job
+    time has come (or someone is there to start it by hand); ties go to the
+    printer earlier in that order. A pinned job
     waits for its printer even when the printer is offline, so it stays on its
     lane; an "Any" job only counts printers that can take work, and one the
     timeline's plan reserved only its printer. ``ready_after`` says when a
@@ -227,10 +240,10 @@ def place_jobs(
         if not fits:
             open_printers.discard(printer_id)
             continue
-        ready = next((job for job in fits if (_aware(job.scheduled_time) or t) <= t), None)
+        ready = next((job for job in fits if (earliest_start(job) or t) <= t), None)
         if ready is None:
             # Only jobs scheduled for later fit: the printer idles until the first.
-            free_at[printer_id] = min(_aware(job.scheduled_time) for job in fits)  # type: ignore[type-var]
+            free_at[printer_id] = min(earliest_start(job) for job in fits)  # type: ignore[type-var]
             continue
         # A job with alternatives prints the first whose model this printer is,
         # as the scheduler walks them, and takes that file's print time.
@@ -256,7 +269,8 @@ class OffTimeline:
     """A pending job the forecast does not place, and why."""
 
     item_id: int
-    # manual_start | waiting | no_printer | unassigned | starting
+    # waiting | no_printer | unassigned | starting (manual_start, before such
+    # jobs went on the lanes)
     reason: str
     detail: str | None = None
 
@@ -511,6 +525,7 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
     reservations: dict[int, tuple[int, bool]] = {}
     schedulable: list[ForecastJob] = []
     off_timeline: list[OffTimeline] = []
+    manual_start_from = turnaround.someone_there()[0]
     for item in pending:
         variant_models = tuple(v.target_model for v in item.variants if v.target_model)
         variants = _forecast_variants(item)
@@ -547,10 +562,14 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
             if holds:
                 job.reserved_printer_id = reserved_for
 
+        if item.manual_start:
+            # Whatever else it waits for (filament to load, #1496/#2799), someone
+            # has to be there to press Start.
+            job.manual_start_from = manual_start_from
         if item.dispatching_at is not None and item.printer_id is None:
             off_timeline.append(OffTimeline(item.id, "starting"))
         elif item.manual_start:
-            off_timeline.append(OffTimeline(item.id, "manual_start"))
+            schedulable.append(job)
         elif item.waiting_reason and not _is_busy_only(item.waiting_reason) and not _waits_only_for_its_plate(item):
             off_timeline.append(OffTimeline(item.id, "waiting", item.waiting_reason))
         elif item.printer_id is None and not item.target_model and not variant_models:
