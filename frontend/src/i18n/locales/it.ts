@@ -9243,6 +9243,8 @@ export default {
       sourcesHint: 'Niente selezionato: tutte le provenienze.',
       poll: 'Leggi ogni (min)',
       handling: 'Scadenza: giorni lavorativi dopo la conferma (0 = nessuna)',
+      since: 'Prendi gli ordini confermati dal',
+      sinceHint: 'Gli ordini precedenti non vengono letti. Vuoto: tutti quelli che Base restituisce (gli ultimi 3 mesi).',
       enabled: 'Leggi Base automaticamente',
       enabledHint: 'Ogni pochi minuti, come impostato sopra; «Leggi ora» funziona comunque.',
       autoAccept: 'Manda subito in produzione i nuovi ordini',

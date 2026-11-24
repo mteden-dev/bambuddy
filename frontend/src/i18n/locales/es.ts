@@ -9266,6 +9266,8 @@ export default {
       sourcesHint: 'Nada marcado: todos los orígenes.',
       poll: 'Leer cada (min)',
       handling: 'Fecha límite: días laborables tras la confirmación (0 = ninguna)',
+      since: 'Tomar pedidos confirmados desde',
+      sinceHint: 'Los pedidos anteriores no se leen. Vacío: todos los que devuelve Base (sus últimos 3 meses).',
       enabled: 'Leer Base automáticamente',
       enabledHint: 'Cada pocos minutos, según lo indicado arriba; «Leer ahora» funciona igualmente.',
       autoAccept: 'Enviar pedidos nuevos a producción al momento',

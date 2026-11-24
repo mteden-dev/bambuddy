@@ -20,6 +20,7 @@ const SETTINGS: BaseSyncSettings = {
   auto_accept: false,
   manual_start: false,
   handling_days: 0,
+  since: null,
   token_set: true,
   last_run_at: null,
   last_ok_at: '2026-11-24T10:00:00Z',
@@ -149,5 +150,21 @@ describe('BaseOrdersView', () => {
     await waitFor(() => expect(saved).toHaveLength(1));
     expect(saved[0]).toMatchObject({ status_id: 128256, cancel_status_id: 90587, auto_accept: true, enabled: true });
     expect(saved[0]).not.toHaveProperty('api_token');
+    // No date stored and none entered: every order Base returns.
+    expect(saved[0]).toMatchObject({ clear_since: true });
+  });
+
+  it('starts a new setup from now on', async () => {
+    settings = { ...SETTINGS, status_id: null, cancel_status_id: null, enabled: false };
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Base settings' }));
+    const status = await screen.findByLabelText('Take orders from status');
+    await user.selectOptions(status, '128256');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    const body = saved[0] as { since?: string; clear_since?: boolean };
+    expect(body.clear_since).toBeUndefined();
+    expect(Math.abs(Date.now() - new Date(body.since ?? 0).getTime())).toBeLessThan(120_000);
   });
 });

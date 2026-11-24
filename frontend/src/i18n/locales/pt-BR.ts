@@ -9243,6 +9243,8 @@ export default {
       sourcesHint: 'Nada marcado: todas as origens.',
       poll: 'Ler a cada (min)',
       handling: 'Prazo: dias úteis após a confirmação (0 = nenhum)',
+      since: 'Pegar pedidos confirmados desde',
+      sinceHint: 'Pedidos mais antigos não são lidos. Vazio: todos os que o Base devolve (os últimos 3 meses).',
       enabled: 'Ler o Base automaticamente',
       enabledHint: 'A cada poucos minutos, como definido acima; "Ler agora" funciona mesmo sem isso.',
       autoAccept: 'Mandar pedidos novos direto para a produção',

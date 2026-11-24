@@ -9311,6 +9311,8 @@ export default {
       sourcesHint: 'None ticked: every source.',
       poll: 'Read every (min)',
       handling: 'Due date: working days after confirmation (0 = none)',
+      since: 'Take orders confirmed from',
+      sinceHint: 'Older orders are not read. Empty: every order Base returns (its last 3 months).',
       enabled: 'Read Base automatically',
       enabledHint: 'Every few minutes, as set above; "Read now" works without it.',
       autoAccept: 'Send new orders to production at once',

@@ -9241,6 +9241,8 @@ export default {
       sourcesHint: '未勾選任何項：所有來源。',
       poll: '讀取間隔（分鐘）',
       handling: '截止日期：確認後的工作日數（0 = 無）',
+      since: '取得此時間之後確認的訂單',
+      sinceHint: '更早的訂單不會讀取。留空：Base 回傳的所有訂單（最近 3 個月）。',
       enabled: '自動讀取 Base',
       enabledHint: '依上方設定每隔幾分鐘讀取；「立即讀取」不受此影響。',
       autoAccept: '新訂單立即進入生產',

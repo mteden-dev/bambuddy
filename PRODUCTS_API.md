@@ -176,8 +176,11 @@ curl -s -X PUT "$BB/base-sync/skus/ABZ-20.1000.W" -H "X-API-Key: $KEY" -H 'Conte
 Ustawienia (`GET/PUT /base-sync/settings`): `enabled`, `status_id`, `cancel_status_id`, `sources`
 (lista `"źródło:id"`, np. `"allegro:7697"`; pusta = wszystkie), `poll_minutes` (od 2), `auto_accept`,
 `manual_start` (zadania czekają na ręczny start), `handling_days` (termin = potwierdzenie + tyle dni
-roboczych; 0 = bez terminu), `api_token` (tylko zapis; odpowiedź ma `token_set`, `last_ok_at`,
-`last_error`). Zmiana ustawień i test połączenia wymagają uprawnienia do ustawień (konto, nie klucz).
+roboczych; 0 = bez terminu), `since` (tylko zamówienia potwierdzone od tej chwili, UTC; ustawiane
+samo na „teraz” przy pierwszym wyborze statusu, `clear_since: true` bierze wszystkie, czyli ostatnie
+3 miesiące, które zwraca Base), `api_token` (tylko zapis; odpowiedź ma `token_set`, `last_ok_at`,
+`last_error`). Każdy odczyt czyta znów zamówienia ze statusu (żeby widzieć zmiany), ale zamówienie
+jest zapisane pod numerem z Base, więc nigdy nie dubluje się ani ono, ani jego druki. Zmiana ustawień i test połączenia wymagają uprawnienia do ustawień (konto, nie klucz).
 
 ## Ustawienia
 

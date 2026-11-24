@@ -9244,6 +9244,8 @@ export default {
       sourcesHint: 'Rien de coché : toutes les origines.',
       poll: 'Lire toutes les (min)',
       handling: 'Échéance : jours ouvrés après confirmation (0 = aucune)',
+      since: 'Prendre les commandes confirmées depuis',
+      sinceHint: 'Les commandes plus anciennes ne sont pas lues. Vide : toutes celles que Base renvoie (ses 3 derniers mois).',
       enabled: 'Lire Base automatiquement',
       enabledHint: 'Toutes les quelques minutes, comme réglé ci-dessus ; « Lire maintenant » marche aussi sans.',
       autoAccept: 'Envoyer les nouvelles commandes en production tout de suite',

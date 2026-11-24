@@ -4679,6 +4679,8 @@ export interface BaseSyncSettings {
   auto_accept: boolean;
   manual_start: boolean;
   handling_days: number;
+  /** Only orders confirmed from then on (UTC); null for every order Base returns (3 months). */
+  since: string | null;
   token_set: boolean;
   last_run_at: string | null;
   last_ok_at: string | null;
@@ -4695,6 +4697,8 @@ export interface BaseSyncSettingsUpdate {
   auto_accept?: boolean;
   manual_start?: boolean;
   handling_days?: number;
+  since?: string | null;
+  clear_since?: boolean;
   /** Write-only: omitted keeps it, "" clears it. */
   api_token?: string;
 }

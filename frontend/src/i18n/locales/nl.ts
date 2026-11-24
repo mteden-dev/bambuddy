@@ -9309,6 +9309,8 @@ export default {
       sourcesHint: 'Niets aangevinkt: alle bronnen.',
       poll: 'Lezen elke (min)',
       handling: 'Deadline: werkdagen na bevestiging (0 = geen)',
+      since: 'Bestellingen nemen bevestigd vanaf',
+      sinceHint: 'Oudere bestellingen worden niet gelezen. Leeg: alle die Base teruggeeft (de laatste 3 maanden).',
       enabled: 'Base automatisch lezen',
       enabledHint: 'Om de paar minuten, zoals hierboven ingesteld; „Nu lezen” werkt ook zonder.',
       autoAccept: 'Nieuwe bestellingen meteen in productie',

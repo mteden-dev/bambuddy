@@ -18,7 +18,7 @@ beforeEach(() => {
     http.get('/api/v1/base-sync/settings', () =>
       HttpResponse.json({
         enabled: false, status_id: null, cancel_status_id: null, sources: [], poll_minutes: 5,
-        auto_accept: false, manual_start: false, handling_days: 0, token_set: false,
+        auto_accept: false, manual_start: false, handling_days: 0, since: null, token_set: false,
         last_run_at: null, last_ok_at: null, last_error: null,
       }),
     ),

@@ -4,7 +4,8 @@ Read-only: Bambuddy reads orders in one Base status ("Przyjęte do
 realizacji", say) and never writes to Base. Every few minutes the sync:
 
 1. reads the orders in that status (``getOrders``, 100 a call, paged by
-   confirmation time), from the order sources chosen (all by default);
+   confirmation time), from the order sources chosen (all by default) and
+   confirmed since the date set (by default the moment the sync was set up);
 2. keeps each order's Base id, number, source, confirmation time and product
    lines (SKU, name, quantity) in ``custom_base_orders`` -- nothing about the
    buyer;
@@ -73,6 +74,10 @@ class BaseConfig:
     manual_start: bool = False
     # Due date: confirmation + this many working days; 0 for none.
     handling_days: int = 0
+    # Only orders confirmed at this moment or later (naive UTC); None for every
+    # order Base returns (its last 3 months). Set when the sync is first set up,
+    # so orders handled before do not turn up.
+    since: datetime | None = None
 
     def to_json(self) -> dict:
         return {
@@ -84,6 +89,7 @@ class BaseConfig:
             "auto_accept": self.auto_accept,
             "manual_start": self.manual_start,
             "handling_days": self.handling_days,
+            "since": self.since.isoformat() if self.since else None,
         }
 
 
@@ -111,7 +117,18 @@ def parse_config(raw: str | None) -> BaseConfig:
         auto_accept=bool(data.get("auto_accept")),
         manual_start=bool(data.get("manual_start")),
         handling_days=max(0, min(60, opt_int(data.get("handling_days")) or 0)),
+        since=_parse_time(data.get("since")),
     )
+
+
+def _parse_time(value) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
 
 
 async def read_config(db: AsyncSession) -> BaseConfig:
@@ -469,7 +486,7 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
             raise BaseApiError("Enter the Base API token")
         client = BaseClient(token)
 
-    fetched = await fetch_orders(client, config.status_id)
+    fetched = await fetch_orders(client, config.status_id, since=config.since)
     if config.sources:
         allowed = set(config.sources)
         fetched = [o for o in fetched if _source_key(o) in allowed]
@@ -512,7 +529,9 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
             changed |= await reconcile(db, row, skus, config)
 
     for order_id, row in tracked.items():
-        if order_id not in seen_ids and row.in_status:
+        # One confirmed before ``since`` is not asked for any more: not seen is no news.
+        older = config.since is not None and row.date_confirmed is not None and row.date_confirmed < config.since
+        if order_id not in seen_ids and row.in_status and not older:
             row.in_status = False
 
     if config.cancel_status_id is not None:

@@ -9311,6 +9311,8 @@ export default {
       sourcesHint: 'Nic nie zaznaczone: wszystkie źródła.',
       poll: 'Odczyt co (min)',
       handling: 'Termin: dni robocze od potwierdzenia (0 = bez terminu)',
+      since: 'Bierz zamówienia potwierdzone od',
+      sinceHint: 'Starsze zamówienia nie są pobierane. Puste: wszystkie, które zwraca Base (ostatnie 3 miesiące).',
       enabled: 'Czytaj Base automatycznie',
       enabledHint: 'Co kilka minut, jak ustawiono wyżej; „Odczytaj teraz” działa i bez tego.',
       autoAccept: 'Nowe zamówienia od razu do produkcji',

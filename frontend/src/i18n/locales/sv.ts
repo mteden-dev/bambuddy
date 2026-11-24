@@ -9340,6 +9340,8 @@ errors: {
       sourcesHint: 'Inget markerat: alla källor.',
       poll: 'Läs var (min)',
       handling: 'Förfallodag: arbetsdagar efter bekräftelse (0 = ingen)',
+      since: 'Ta beställningar bekräftade från',
+      sinceHint: 'Äldre beställningar läses inte. Tomt: alla som Base returnerar (de senaste 3 månaderna).',
       enabled: 'Läs Base automatiskt',
       enabledHint: 'Med några minuters mellanrum enligt ovan; ”Läs nu” fungerar ändå.',
       autoAccept: 'Skicka nya beställningar till produktion direkt',

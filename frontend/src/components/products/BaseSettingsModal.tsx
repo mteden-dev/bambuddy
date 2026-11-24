@@ -7,6 +7,7 @@ import type { BaseConnectionInfo, BaseSyncSettingsUpdate } from '../../api/clien
 import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
 import { NumberInput } from '../NumberInput';
+import { parseUTCDate, toDateTimeLocalValue } from '../../utils/date';
 import { useToast } from '../../contexts/ToastContext';
 
 interface BaseSettingsModalProps {
@@ -26,6 +27,8 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
   const [token, setToken] = useState('');
   const [info, setInfo] = useState<BaseConnectionInfo | null>(null);
   const [draft, setDraft] = useState<BaseSyncSettingsUpdate | null>(null);
+  // Local date and time in the field; empty takes every order (Base's 3 months).
+  const [since, setSince] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings && draft === null) {
@@ -39,6 +42,9 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
         manual_start: settings.manual_start,
         handling_days: settings.handling_days,
       });
+      const stored = parseUTCDate(settings.since);
+      // A new setup starts from now, so orders handled before do not turn up.
+      setSince(stored ? toDateTimeLocalValue(stored) : settings.status_id == null ? toDateTimeLocalValue(new Date()) : '');
     }
   }, [settings, draft]);
 
@@ -81,6 +87,8 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
         body.clear_cancel_status = true;
       }
       if (token.trim()) body.api_token = token.trim();
+      if (since) body.since = new Date(since).toISOString();
+      else body.clear_since = true;
       return api.updateBaseSyncSettings(body);
     },
     onSuccess: (saved) => {
@@ -194,6 +202,17 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
                   </fieldset>
                 </>
               )}
+
+              <label className="block">
+                <span className="block text-sm text-bambu-gray mb-1">{t('baseSync.settings.since')}</span>
+                <input
+                  type="datetime-local"
+                  className={inputClass}
+                  value={since ?? ''}
+                  onChange={(e) => setSince(e.target.value)}
+                />
+                <span className="block text-xs text-bambu-gray mt-1">{t('baseSync.settings.sinceHint')}</span>
+              </label>
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">

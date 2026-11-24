@@ -9185,6 +9185,8 @@ export default {
       sourcesHint: 'Hiçbiri işaretli değil: tüm kaynaklar.',
       poll: 'Okuma aralığı (dk)',
       handling: 'Son tarih: onaydan sonraki iş günü (0 = yok)',
+      since: 'Şu tarihten itibaren onaylanan siparişleri al',
+      sinceHint: 'Daha eski siparişler okunmaz. Boş: Base\'in döndürdüğü tüm siparişler (son 3 ay).',
       enabled: 'Base\'i otomatik oku',
       enabledHint: 'Yukarıda ayarlandığı gibi birkaç dakikada bir; "Şimdi oku" bu olmadan da çalışır.',
       autoAccept: 'Yeni siparişleri hemen üretime gönder',

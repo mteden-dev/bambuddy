@@ -20,7 +20,7 @@ from backend.app.models.base_sync import BaseOrder, ProductSku
 from backend.app.models.products import Product, ProductOrder
 from backend.app.models.user import User
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
-from backend.app.schemas.print_queue import UTCDatetime
+from backend.app.schemas.print_queue import NaiveUTCDatetime, UTCDatetime
 from backend.app.services import base_sync as svc
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,9 @@ class BaseSettingsIn(IgnoresNullForRequiredColumns):
     auto_accept: bool | None = None
     manual_start: bool | None = None
     handling_days: int | None = Field(None, ge=0, le=60)
+    # Only orders confirmed from then on; clear_since takes every order (3 months).
+    since: NaiveUTCDatetime = None
+    clear_since: bool = False
     # Write-only: omitted keeps it, "" clears it.
     api_token: str | None = Field(None, max_length=200)
 
@@ -65,6 +68,7 @@ class BaseSettingsOut(BaseModel):
     auto_accept: bool
     manual_start: bool
     handling_days: int
+    since: UTCDatetime = None
     token_set: bool
     last_run_at: UTCDatetime = None
     last_ok_at: UTCDatetime = None
@@ -74,7 +78,7 @@ class BaseSettingsOut(BaseModel):
 async def _settings_out(db: AsyncSession) -> BaseSettingsOut:
     config = await svc.read_config(db)
     return BaseSettingsOut(
-        **config.to_json(),
+        **{**config.to_json(), "since": config.since},
         token_set=bool(await svc.read_token(db)),
         last_run_at=_utc(svc.state.last_run_at),
         last_ok_at=_utc(svc.state.last_ok_at),
@@ -93,8 +97,14 @@ async def put_settings(
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SETTINGS_UPDATE),
 ):
-    """Change the sync's settings; the token is write-only (``token_set`` says if one is stored)."""
+    """Change the sync's settings; the token is write-only (``token_set`` says if one is stored).
+
+    Setting the status for the first time without a date sets ``since`` to now:
+    orders already in the status before are not taken. ``clear_since`` takes
+    every order Base returns instead (its last 3 months).
+    """
     config = await svc.read_config(db)
+    first_setup = config.status_id is None
     sent = data.model_fields_set
     for name in ("enabled", "status_id", "poll_minutes", "auto_accept", "manual_start", "handling_days"):
         value = getattr(data, name)
@@ -106,6 +116,12 @@ async def put_settings(
         config.cancel_status_id = data.cancel_status_id
     if "sources" in sent and data.sources is not None:
         config.sources = [s.strip() for s in data.sources if s.strip()]
+    if data.clear_since:
+        config.since = None
+    elif "since" in sent and data.since is not None:
+        config.since = data.since
+    elif first_setup and config.status_id is not None and config.since is None:
+        config.since = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
     await svc.write_config(db, config)
     if "api_token" in sent and data.api_token is not None:
         await svc.write_token(db, data.api_token)

@@ -127,7 +127,13 @@ async def shop(async_client: AsyncClient, db_session, printer_factory, fake_base
     product = response.json()
     response = await async_client.put(
         "/api/v1/base-sync/settings",
-        json={"api_token": "secret-token", "status_id": TAKE, "cancel_status_id": CANCELLED, "enabled": True},
+        json={
+            "api_token": "secret-token",
+            "status_id": TAKE,
+            "cancel_status_id": CANCELLED,
+            "enabled": True,
+            "clear_since": True,
+        },
     )
     assert response.status_code == 200, response.text
     return SimpleNamespace(product_id=product["id"], printer=printer.id)
@@ -299,3 +305,37 @@ async def test_parse_order_drops_buyer_data():
     assert data is not None
     assert [line.sku for line in data.lines] == ["X"]
     assert not any(hasattr(data, field) for field in ("email", "phone", "delivery_fullname"))
+
+
+async def test_setting_up_takes_orders_from_now_on(async_client: AsyncClient, db_session, printer_factory, fake_base):
+    from datetime import datetime, timezone
+
+    response = await async_client.put("/api/v1/base-sync/settings", json={"api_token": "t", "status_id": TAKE})
+    since = response.json()["since"]
+    assert since is not None
+    when = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    assert abs((datetime.now(timezone.utc) - when).total_seconds()) < 60
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    fake_base.orders = [
+        _order(7001, [("AB-9x19.100.B", 1)], confirmed=now - 86400),  # before the sync was set up
+        _order(7002, [("AB-9x19.100.B", 1)], confirmed=now + 60),
+    ]
+    result = await _sync(async_client, set())
+    assert result["seen"] == 1
+    assert await db_session.get(BaseOrder, 7001) is None
+    assert await db_session.get(BaseOrder, 7002) is not None
+    # Base was asked from that moment on.
+    [(_, parameters)] = [c for c in fake_base.calls if c[0] == "getOrders"]
+    assert parameters["date_confirmed_from"] == int(when.timestamp())
+
+
+async def test_a_date_can_be_set_or_cleared(async_client: AsyncClient, shop):
+    response = await async_client.put("/api/v1/base-sync/settings", json={"since": "2026-11-01T00:00:00Z"})
+    assert response.json()["since"] == "2026-11-01T00:00:00Z"
+    response = await async_client.put("/api/v1/base-sync/settings", json={"clear_since": True})
+    assert response.json()["since"] is None
+    # Changing other settings leaves it alone.
+    await async_client.put("/api/v1/base-sync/settings", json={"since": "2026-11-01T00:00:00Z"})
+    response = await async_client.put("/api/v1/base-sync/settings", json={"poll_minutes": 10})
+    assert response.json()["since"] == "2026-11-01T00:00:00Z"

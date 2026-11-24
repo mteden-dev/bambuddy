@@ -8881,6 +8881,8 @@ export default {
       sourcesHint: '아무것도 선택하지 않으면 모든 출처.',
       poll: '읽기 간격(분)',
       handling: '기한: 확인 후 영업일 수(0 = 없음)',
+      since: '이 시점 이후 확인된 주문 가져오기',
+      sinceHint: '그보다 오래된 주문은 읽지 않습니다. 비워 두면 Base가 주는 모든 주문(최근 3개월).',
       enabled: 'Base 자동으로 읽기',
       enabledHint: '위에서 설정한 대로 몇 분마다. \'지금 읽기\'는 이것 없이도 됩니다.',
       autoAccept: '새 주문을 바로 생산으로 보내기',

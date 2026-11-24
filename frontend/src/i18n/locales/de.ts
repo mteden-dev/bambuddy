@@ -9258,6 +9258,8 @@ export default {
       sourcesHint: 'Nichts angehakt: alle Quellen.',
       poll: 'Lesen alle (Min.)',
       handling: 'Fälligkeit: Werktage nach Bestätigung (0 = keine)',
+      since: 'Bestellungen bestätigt ab',
+      sinceHint: 'Ältere Bestellungen werden nicht gelesen. Leer: alle, die Base liefert (die letzten 3 Monate).',
       enabled: 'Base automatisch lesen',
       enabledHint: 'Alle paar Minuten wie oben eingestellt; „Jetzt lesen“ geht auch ohne.',
       autoAccept: 'Neue Bestellungen sofort in die Produktion',

@@ -9241,6 +9241,8 @@ export default {
       sourcesHint: '未勾选任何项：所有来源。',
       poll: '读取间隔（分钟）',
       handling: '截止日期：确认后的工作日数（0 = 无）',
+      since: '获取此时间之后确认的订单',
+      sinceHint: '更早的订单不会读取。留空：Base 返回的所有订单（最近 3 个月）。',
       enabled: '自动读取 Base',
       enabledHint: '按上面的设置每隔几分钟读取；“立即读取”不受此影响。',
       autoAccept: '新订单立即进入生产',

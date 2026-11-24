@@ -153,7 +153,8 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     zadanie). Zamówienia mają pola `external_source`/`external_ref` na przyszłe zamówienia ze
     sklepu. **Zamówienia z Base** (base.com, zakładka „Zamówienia z Base” na stronie Produkty,
     `services/base_sync.py`): co kilka minut Bambuddy czyta zamówienia z wybranego statusu
-    (np. „Przyjęte do realizacji”) i wybranych źródeł, tylko do odczytu, bez danych kupującego
+    (np. „Przyjęte do realizacji”) i wybranych źródeł, potwierdzone od ustawionej daty (domyślnie
+    od chwili konfiguracji, żeby nie wpadły zamówienia zrobione wcześniej), tylko do odczytu, bez danych kupującego
     (numer, źródło, data i pozycje). Pozycje łączy z produktami po SKU (produkt może mieć kilka
     SKU i zestawy, np. 3 sztuki na SKU; SKU „nie drukujemy” jest pomijane; nieprzypisane są
     wypisane do przypisania jednym kliknięciem). Nowe zamówienie czeka na „Drukuj” (albo od razu
