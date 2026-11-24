@@ -121,7 +121,7 @@ const slotSpool = {
   data_origin: 'slot_quick',
 };
 
-function setup({ spoolman = false } = {}) {
+function setup({ spoolman = false, prompt = true, spool = slotSpool } = {}) {
   const sent: { method: string; path: string }[] = [];
   server.use(
     http.get('/api/v1/printers/', () => HttpResponse.json([mockPrinter])),
@@ -144,16 +144,18 @@ function setup({ spoolman = false } = {}) {
           tray_id: 1,
           fingerprint_color: 'FF0000FF',
           fingerprint_type: 'PLA',
-          spool: slotSpool,
+          spool,
           configured: true,
           created_at: '2024-01-01T00:00:00Z',
         },
       ]),
     ),
     http.get('/api/v1/slot-spools/prompts', () =>
-      HttpResponse.json([
-        { printer_id: PRINTER_ID, ams_id: 0, tray_id: 1, spool_id: 77, created_at: '2026-11-23T10:00:00' },
-      ]),
+      HttpResponse.json(
+        prompt
+          ? [{ printer_id: PRINTER_ID, ams_id: 0, tray_id: 1, spool_id: 77, created_at: '2026-11-23T10:00:00' }]
+          : [],
+      ),
     ),
     http.get('/api/v1/slot-spools/restorable', () => HttpResponse.json([])),
     http.post('/api/v1/slot-spools/prompts/:pid/:aid/:tid/same', ({ request }) => {
@@ -223,6 +225,34 @@ describe('printer card slot spools', () => {
 
     expect(await screen.findByText('How many grams of filament are left on this roll?')).toBeInTheDocument();
     expect(screen.getByLabelText('Grams on the roll')).toHaveValue(650);
+  });
+
+  it('a counted slot offers a new roll even when the swap went unseen', async () => {
+    // The backend asks "same roll?" only when it saw the slot empty; a restart
+    // or a quick swap hides that, and the slot must not be stuck on its old spool.
+    const user = userEvent.setup();
+    setup({ prompt: false });
+    const all = await slots();
+    await waitFor(() => expect(screen.getAllByTestId('slot-spool-badge-new')).toHaveLength(1));
+    expect(screen.queryByTestId('slot-spool-badge-check')).toBeNull();
+
+    await user.click(await hover(all[1], 'New roll…'));
+
+    expect(await screen.findByText('Roll in this slot')).toBeInTheDocument();
+  });
+
+  it('lights a used-up slot spool with a roll in it as new', async () => {
+    setup({ prompt: false, spool: { ...slotSpool, weight_used: 998 } });
+    await slots();
+    await waitFor(() => expect(screen.getAllByTestId('slot-spool-badge-new')).toHaveLength(2));
+  });
+
+  it('offers no new roll on a Bambu RFID roll', async () => {
+    setup();
+    const all = await slots();
+    // The slot's menu is open: it offers to re-read the tag, not a new roll.
+    await hover(all[2], 'Re-read RFID');
+    expect(screen.queryByRole('button', { name: 'New roll…' })).toBeNull();
   });
 
   it('lights nothing in Spoolman mode', async () => {

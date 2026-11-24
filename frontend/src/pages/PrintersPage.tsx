@@ -189,7 +189,7 @@ import { HeaterHistoryModal } from '../components/HeaterHistoryModal';
 import type { HeaterSensorKind } from '../api/client';
 import { SlotSpoolActions, SlotSpoolAdjustModal, SlotSpoolBadge } from '../components/slotSpool/SlotSpoolSlotUi';
 import { useKeepSameRoll, useSlotSpoolPrompts } from '../hooks/useSlotSpools';
-import { SLOT_SPOOL_ORIGIN, slotSpoolRingClass, slotSpoolState } from '../utils/slotSpools';
+import { SLOT_SPOOL_ORIGIN, canLoadSlotRoll, slotSpoolRingClass, slotSpoolState, spoolGramsLeft } from '../utils/slotSpools';
 import { FilamentHoverCard, EmptySlotHoverCard } from '../components/FilamentHoverCard';
 import { AssignSpoolModal } from '../components/AssignSpoolModal';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
@@ -2558,14 +2558,17 @@ function PrinterCard({
   const [slotSpoolAdjust, setSlotSpoolAdjust] = useState<InventorySpool | null>(null);
   const slotSpoolView = (amsId: number, slotId: number, tray: AMSTray | undefined, savedPresetId: string | undefined) => {
     const assignment = onGetAssignment?.(printer.id, amsId, slotId);
+    const slotSpool = slotSpoolsEnabled && assignment?.spool?.data_origin === SLOT_SPOOL_ORIGIN ? assignment.spool : null;
+    const enabled = slotSpoolsEnabled && hasPermission('printers:control');
+    const isBambuSpool = !!tray && isBambuLabSpool(tray);
     const state = slotSpoolState({
-      enabled: slotSpoolsEnabled && hasPermission('printers:control'),
+      enabled,
       tray,
       hasAssignment: !!assignment,
-      isBambuSpool: !!tray && isBambuLabSpool(tray),
+      isBambuSpool,
       hasPrompt: hasSlotSpoolPrompt(printer.id, amsId, slotId),
+      slotSpoolLeft: slotSpool ? spoolGramsLeft(slotSpool) : null,
     });
-    const slotSpool = slotSpoolsEnabled && assignment?.spool?.data_origin === SLOT_SPOOL_ORIGIN ? assignment.spool : null;
     return {
       ring: slotSpoolRingClass(state),
       badge: <SlotSpoolBadge state={state} />,
@@ -2573,6 +2576,7 @@ function PrinterCard({
         <SlotSpoolActions
           state={state}
           slotSpool={slotSpool}
+          canLoad={canLoadSlotRoll({ enabled, tray, isBambuSpool })}
           busy={keepSameRoll.isPending}
           onSameRoll={() => keepSameRoll.mutate({ printerId: printer.id, amsId, trayId: slotId })}
           onAdjust={setSlotSpoolAdjust}

@@ -108,6 +108,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     opróżniony i napełniony, zanim szpula się odpięła (szybka podmiana, dołożenie po runoucie w
     trakcie druku), pyta „Ta sama szpula?” (pomarańczowa ramka, „?”): „Ta sama szpula” liczy dalej,
     „Nowa szpula…” zakłada nową. Śledzona szpula slotu ma w karcie „Popraw pozostałą ilość”.
+    Zużyta szpula slotu (≤ 5 g) z rolką w slocie też świeci jako „NOWY”, a „Nowa szpula…” jest
+    w karcie każdego slotu z rolką (poza RFID Bambu), świecącego czy nie: podmiany w czasie
+    restartu backendu (Redeploy) albo zbyt szybkiej, by AMS zgłosił pusty slot, serwer nie widzi.
     Kontrola braków dostała dwa ustawienia (Ustawienia → Kontrola filamentu): **każdy slot
     osobno** (nie liczy szpul, na które przełączyłby AMS Filament Backup, bo przełączenie zostawia
     ślad na wydruku; sam backup na drukarce zostaje) i **zapas** w procentach ponad gramy z pliku

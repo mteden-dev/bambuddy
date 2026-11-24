@@ -35,10 +35,11 @@ const actionClass =
   'w-full px-2 py-1.5 text-left text-xs flex items-center gap-2 rounded transition-colors text-white hover:bg-bambu-dark-tertiary disabled:opacity-50';
 const iconClass = 'w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)]';
 
-/** The slot card's actions for a lit or counted slot. */
+/** The slot card's actions for a lit, counted or loadable slot. */
 export function SlotSpoolActions({
   state,
   slotSpool,
+  canLoad = false,
   onNewRoll,
   onSameRoll,
   onAdjust,
@@ -47,13 +48,15 @@ export function SlotSpoolActions({
   state: SlotSpoolState;
   /** The slot's slot spool, when it has one: offers "correct the amount". */
   slotSpool?: InventorySpool | null;
+  /** A roll is in the slot and may be loaded by hand, lit or not: a swap the backend missed is never stuck. */
+  canLoad?: boolean;
   onNewRoll: () => void;
   onSameRoll: () => void;
   onAdjust: (spool: InventorySpool) => void;
   busy?: boolean;
 }) {
   const { t } = useTranslation();
-  if (!state && !slotSpool) return null;
+  if (!state && !slotSpool && !canLoad) return null;
   return (
     <>
       {state === 'check' && (
@@ -76,7 +79,7 @@ export function SlotSpoolActions({
           {t('slotSpool.actionSame')}
         </button>
       )}
-      {state && (
+      {(state || canLoad) && (
         <button
           type="button"
           className={actionClass}
@@ -85,7 +88,7 @@ export function SlotSpoolActions({
             onNewRoll();
           }}
         >
-          {state === 'new' ? <PackagePlus className={iconClass} /> : <CircleHelp className={iconClass} />}
+          {state === 'check' ? <CircleHelp className={iconClass} /> : <PackagePlus className={iconClass} />}
           {t('slotSpool.actionNew')}
         </button>
       )}

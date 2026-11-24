@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  canLoadSlotRoll,
   slotHasRoll,
   slotSpoolAmountRequest,
   slotSpoolAmountValid,
@@ -45,8 +46,29 @@ describe('slotSpoolState', () => {
     expect(slotSpoolState({ ...base, hasAssignment: true, hasPrompt: true, tray })).toBe('check');
   });
 
+  it('lights a used-up slot spool with a roll in it as new', () => {
+    const tray = { exists: true, tray_type: 'PETG' };
+    expect(slotSpoolState({ ...base, hasAssignment: true, slotSpoolLeft: 3, tray })).toBe('new');
+    expect(slotSpoolState({ ...base, hasAssignment: true, slotSpoolLeft: -40, tray })).toBe('new');
+    expect(slotSpoolState({ ...base, hasAssignment: true, slotSpoolLeft: 120, tray })).toBeNull();
+    // Taken out and not back yet: nothing to set.
+    expect(slotSpoolState({ ...base, hasAssignment: true, slotSpoolLeft: 0, tray: { exists: false } })).toBeNull();
+    // "Same roll?" still wins over used up.
+    expect(slotSpoolState({ ...base, hasAssignment: true, hasPrompt: true, slotSpoolLeft: 0, tray })).toBe('check');
+  });
+
   it('lights nothing when disabled (Spoolman mode, no permission)', () => {
     expect(slotSpoolState({ ...base, enabled: false, tray: { exists: true } })).toBeNull();
+  });
+});
+
+describe('canLoadSlotRoll', () => {
+  it('lets any roll but a Bambu RFID one be loaded by hand', () => {
+    const tray = { exists: true, tray_type: 'PETG' };
+    expect(canLoadSlotRoll({ enabled: true, isBambuSpool: false, tray })).toBe(true);
+    expect(canLoadSlotRoll({ enabled: true, isBambuSpool: true, tray })).toBe(false);
+    expect(canLoadSlotRoll({ enabled: true, isBambuSpool: false, tray: { exists: false } })).toBe(false);
+    expect(canLoadSlotRoll({ enabled: false, isBambuSpool: false, tray })).toBe(false);
   });
 });
 
