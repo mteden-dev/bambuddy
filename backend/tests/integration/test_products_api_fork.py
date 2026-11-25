@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
-from backend.app.models.products import ProductJob
+from backend.app.models.products import ProductJob, ProductOrder
 from backend.app.models.queue_reservations import QueueReservation
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
@@ -1206,3 +1206,24 @@ async def test_a_plate_printed_again_goes_where_it_went_or_to_the_printer_that_p
     [reprint] = await _queue(db_session)
     assert (reprint.printer_id, reprint.target_model, reprint.library_file_id) == (box.b, None, box.files[("lid", 2)])
     assert reprint.ams_mapping is None
+
+
+async def test_replanning_the_whole_queue_keeps_what_fits_and_drops_what_no_order_needs(
+    async_client: AsyncClient, db_session, box
+):
+    connected = {box.a, box.b}
+    assert (await _post(async_client, "/api/v1/products/replan", None, connected))["products"] == 0
+    order = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    assert order["planned_jobs"] == 3
+
+    result = await _post(async_client, "/api/v1/products/replan", None, connected)
+    assert (result["products"], result["kept"], result["created"], result["replaced"]) == (1, 3, 0, 0)
+    assert len(await _queue(db_session)) == 3
+
+    # The order goes (cancelled in Base, say): its waiting jobs leave with the replan.
+    row = (await db_session.execute(select(ProductOrder).where(ProductOrder.product_id == box.id))).scalar_one()
+    row.status = "cancelled"
+    await db_session.commit()
+    result = await _post(async_client, "/api/v1/products/replan", None, connected)
+    assert (result["products"], result["replaced"], result["failed"]) == (1, 3, [])
+    assert await _queue(db_session) == []

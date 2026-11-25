@@ -269,3 +269,63 @@ def test_on_one_printer_the_tray_prints_before_the_lid():
     ]
     # Base 10-12, tray 12-14 (+1 h: 15:00), lid 14-16: ready at 16:00, not 17:00.
     assert result.ready_at[10] == NOW + timedelta(hours=6)
+
+
+# A box as one P1S prints it: base 1h19, lid 1h02 and tray 27 min on plates of
+# their own, or all three on one plate. The base and the tray are glued and dry
+# an hour.
+GLUED_BOX = [PartSpec(LID, 1, True), PartSpec(BASE, 1, True, finish_s=H), PartSpec(TRAY, 1, False, finish_s=H)]
+
+
+def _box_plates(all_in_one_min: int) -> list[PlateOption]:
+    return [
+        PlateOption(60, "p1s", 79 * 60, ((BASE, 1),)),
+        PlateOption(61, "p1s", 62 * 60, ((LID, 1),)),
+        PlateOption(62, "p1s", 27 * 60, ((TRAY, 1),)),
+        PlateOption(63, "p1s", all_in_one_min * 60, ((LID, 1), (BASE, 1), (TRAY, 1))),
+    ]
+
+
+def test_overnight_one_plate_with_the_whole_box_beats_a_lid_waiting_for_the_morning():
+    # The all-in-one plate takes longer than the base and lid plates together,
+    # so a package of lid and base alone never picked it; overnight the lid on
+    # a plate of its own waits for someone to clear the base, and the one plate
+    # with all three is the better plan.
+    night = datetime(2026, 11, 24, 0, 30, tzinfo=timezone.utc)
+    result = plan(
+        _inputs(
+            [OrderNeed(10, 1)],
+            now=night,
+            parts=GLUED_BOX,
+            options=_box_plates(165),
+            printers=[PlannerPrinter(1, "p1s", night), PlannerPrinter(2, "p1s", night)],
+            ready_after=_staffed_7_to_19,
+        )
+    )
+    assert [p.option.id for p in result.plates] == [63]
+    assert result.packing == "whole"
+    assert set(result.alternatives) == {"cheapest", "whole", "own"}
+    assert result.alternatives["whole"] < result.alternatives["cheapest"]
+
+
+def test_in_the_day_separate_plates_let_the_glue_dry_while_the_lid_prints():
+    # The all-in-one plate is the quickest way to print the box, but the base
+    # and the tray then dry after everything is printed. Base first with the
+    # tray on the other printer, then the lid while they dry, is an hour sooner.
+    result = plan(
+        _inputs(
+            [OrderNeed(10, 1)],
+            parts=GLUED_BOX,
+            options=_box_plates(150),
+            printers=[PlannerPrinter(1, "p1s", NOW), PlannerPrinter(2, "p1s", NOW)],
+        )
+    )
+    assert sorted(p.option.id for p in result.plates) == [60, 61, 62]
+    assert result.packing == "own"
+    # Base 10:00-11:19 dries until 12:19, the lid prints 11:19-12:21.
+    assert result.ready_at[10] == NOW + timedelta(minutes=79 + 62)
+
+
+def test_plates_of_one_part_each_are_planned_one_way_only():
+    result = plan(_inputs([OrderNeed(10, 1)], h2s=False))
+    assert set(result.alternatives) == {"cheapest"}

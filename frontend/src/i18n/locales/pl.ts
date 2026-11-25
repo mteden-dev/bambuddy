@@ -1915,6 +1915,17 @@ export default {
         release: 'Zwolnij',
         releasedToast: 'Zwolniono: zadanie weźmie dowolna drukarka tego modelu',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Przelicz kolejkę',
+        title: 'Zaplanuj od nowa otwarte zamówienia wszystkich produktów',
+        confirmTitle: 'Przeliczyć kolejkę?',
+        confirmMessage: 'Planer ułoży od nowa zlecenia wszystkich produktów z otwartymi zamówieniami, zaczynając od najpilniejszych. Trwające wydruki oraz zlecenia dodane lub przesunięte ręcznie zostają bez zmian; pozostałe czekające zlecenia planera mogą zostać zastąpione.',
+        confirm: 'Przelicz',
+        done: 'Kolejka przeliczona – produkty: {{products}}, nowe zlecenia: {{created}}, bez zmian: {{kept}}, usunięte: {{replaced}}',
+        failed: 'Nie udało się przeliczyć kolejki: {{error}}',
+        partial: 'Nie przeliczono (szczegóły w logu): produkty {{ids}}',
+      },
       staffed: {
         title: 'Godziny obsady',
         button: 'Godziny obsady',

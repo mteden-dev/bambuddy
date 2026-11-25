@@ -4674,6 +4674,16 @@ export interface ProductWrite {
 }
 
 /** Fork (products): the plan after an order, a change or a replan. */
+export interface ProductReplanAllResult {
+  products: number;
+  created: number;
+  kept: number;
+  replaced: number;
+  held: number;
+  // Products whose plan failed (the others are planned).
+  failed: number[];
+}
+
 export interface ProductPlanResult {
   product: ProductDetail;
   /** Plates in the queue for the plan: new jobs plus waiting jobs it kept. */
@@ -8036,6 +8046,8 @@ export const api = {
   cancelProductOrder: (orderId: number) =>
     request<ProductPlanResult>(`/products/orders/${orderId}/cancel`, { method: 'POST' }),
   replanProduct: (productId: number) => request<ProductPlanResult>(`/products/${productId}/replan`, { method: 'POST' }),
+  // Fork: every product's open orders planned again, the soonest due first (the timeline's "Replan queue").
+  replanAllProducts: () => request<ProductReplanAllResult>('/products/replan', { method: 'POST' }),
   adjustProductStock: (
     productId: number,
     data: { part_id: number; printer_id?: number | null; delta: number; note?: string | null },

@@ -2100,6 +2100,35 @@ export function QueuePage() {
       showToast(`${t('queue.timeline.plan.failed')}: ${error.message}`, 'error');
     },
   });
+  // Fork: "Replan queue" on the timeline: every product's open orders planned
+  // again, after a confirmation.
+  const [replanConfirm, setReplanConfirm] = useState(false);
+  const replanQueueMutation = useMutation({
+    mutationFn: () => api.replanAllProducts(),
+    onSuccess: (result) => {
+      setReplanConfirm(false);
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      showToast(
+        t('queue.timeline.replan.done', {
+          products: result.products,
+          created: result.created,
+          kept: result.kept,
+          replaced: result.replaced,
+        }),
+        'success',
+      );
+      if (result.failed.length > 0) {
+        showToast(t('queue.timeline.replan.partial', { ids: result.failed.join(', ') }), 'warning');
+      }
+    },
+    onError: (error: Error) => {
+      setReplanConfirm(false);
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      showToast(t('queue.timeline.replan.failed', { error: error.message }), 'error');
+    },
+  });
+
   const timelineReleaseMutation = useMutation({
     mutationFn: (item: PrintQueueItem) => api.releaseQueueReservation(item.id),
     onSuccess: () => {
@@ -3040,6 +3069,8 @@ export function QueuePage() {
           }
           onReleaseReservation={(item) => timelineReleaseMutation.mutate(item)}
           canEditStaffedHours={hasPermission('settings:update')}
+          onReplanQueue={hasPermission('queue:create') ? () => setReplanConfirm(true) : undefined}
+          replanning={replanQueueMutation.isPending}
           onPinItem={(item, target) => timelineMoveMutation.mutate({ item, target })}
           canModifyItem={(item) => canModify('queue', 'update', item.created_by_id)}
           onEditItem={setEditItem}
@@ -3339,6 +3370,18 @@ export function QueuePage() {
           archiveName={queueItemDisplayName(requeueItem, (n) => t('common.plusNMore', { count: n }))}
           preselectPlateId={requeueItem.plate_id}
           onClose={() => setRequeueItem(null)}
+        />
+      )}
+
+      {replanConfirm && (
+        <ConfirmModal
+          title={t('queue.timeline.replan.confirmTitle')}
+          message={t('queue.timeline.replan.confirmMessage')}
+          confirmText={t('queue.timeline.replan.confirm')}
+          variant="warning"
+          isLoading={replanQueueMutation.isPending}
+          onConfirm={() => replanQueueMutation.mutate()}
+          onCancel={() => setReplanConfirm(false)}
         />
       )}
 

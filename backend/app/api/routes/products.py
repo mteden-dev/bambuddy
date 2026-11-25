@@ -1302,6 +1302,63 @@ async def cancel_order(
     return await _plan_response(db, order.product_id, actor, review_required, printer_scope)
 
 
+class ReplanAllOut(BaseModel):
+    # Products planned again (open orders, or waiting jobs to take out).
+    products: int
+    created: int = 0
+    kept: int = 0
+    replaced: int = 0
+    held: int = 0
+    # Products whose plan failed; the others are planned.
+    failed: list[int] = Field(default_factory=list)
+
+
+@router.post("/replan", response_model=ReplanAllOut)
+async def replan_all(
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+    review_required: bool = QueueReviewRequired,
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Plan every product's open orders again, the soonest due first (the timeline's "replan the queue").
+
+    Each product is planned as ``POST /{id}/replan`` plans it and committed on
+    its own, so one that fails leaves the others planned.
+    """
+    out = ReplanAllOut(products=0)
+    for product_id in await svc.products_to_replan(db):
+        try:
+            outcome = await svc.replan(
+                db,
+                product_id,
+                actor_id=actor.id if actor is not None else None,
+                manual_start=review_required,
+                printer_ids=printer_scope.printer_ids,
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception("[PRODUCTS] Could not replan product %s with the whole queue", product_id)
+            out.failed.append(product_id)
+            continue
+        await svc.announce_planned(outcome.item_ids)
+        out.products += 1
+        out.created += len(outcome.item_ids)
+        out.kept += outcome.kept
+        out.replaced += outcome.replaced
+        out.held += outcome.held
+    logger.info(
+        "[PRODUCTS] Replanned the queue: %s products, %s new jobs, %s kept, %s replaced, failed %s",
+        out.products,
+        out.created,
+        out.kept,
+        out.replaced,
+        out.failed,
+    )
+    return out
+
+
 @router.post("/{product_id}/replan", response_model=PlanOut)
 async def replan_product(
     product_id: int,

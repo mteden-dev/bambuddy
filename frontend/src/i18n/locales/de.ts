@@ -1896,6 +1896,17 @@ export default {
         release: 'Freigeben',
         releasedToast: 'Freigegeben: Jeder Drucker des Modells kann den Auftrag nehmen',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Warteschlange neu planen',
+        title: 'Offene Bestellungen aller Produkte neu planen',
+        confirmTitle: 'Warteschlange neu planen?',
+        confirmMessage: 'Der Planer legt die Aufträge aller Produkte mit offenen Bestellungen neu an, die dringendsten zuerst. Laufende Drucke und von Hand eingereihte oder verschobene Aufträge bleiben unverändert; die übrigen wartenden Aufträge des Planers können ersetzt werden.',
+        confirm: 'Neu planen',
+        done: 'Warteschlange neu geplant – Produkte: {{products}}, neue Aufträge: {{created}}, unverändert: {{kept}}, entfernt: {{replaced}}',
+        failed: 'Warteschlange konnte nicht neu geplant werden: {{error}}',
+        partial: 'Nicht neu geplant (siehe Protokoll): Produkte {{ids}}',
+      },
       staffed: {
         title: 'Besetzte Zeiten',
         button: 'Besetzte Zeiten',

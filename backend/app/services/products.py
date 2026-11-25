@@ -202,6 +202,28 @@ async def open_orders(db: AsyncSession, product_id: int) -> list[ProductOrder]:
     return sorted(rows, key=order_sort_key)
 
 
+async def products_to_replan(db: AsyncSession) -> list[int]:
+    """Products the planner has work for: open orders, or waiting jobs to take out again.
+
+    The soonest due open order first (undated after dated), so the most urgent
+    product takes its places in the queue first; then by id.
+    """
+    due: dict[int, datetime | None] = {}
+    rows = (
+        await db.execute(select(ProductOrder.product_id, ProductOrder.due_date).where(ProductOrder.status == "open"))
+    ).all()
+    for product_id, due_date in rows:
+        when = _aware(due_date)
+        current = due.get(product_id)
+        if product_id not in due or (when is not None and (current is None or when < current)):
+            due[product_id] = when
+    waiting = await db.execute(select(ProductJob.product_id).where(ProductJob.status == "planned").distinct())
+    for product_id in waiting.scalars():
+        due.setdefault(product_id, None)
+    never = datetime.max.replace(tzinfo=timezone.utc)
+    return sorted(due, key=lambda pid: (due[pid] or never, pid))
+
+
 async def active_jobs(db: AsyncSession, product_id: int) -> list[ProductJob]:
     return list(
         (
@@ -991,6 +1013,42 @@ class PlanOutcome:
     skipped_plates: list[tuple[int, str]] = field(default_factory=list)
 
 
+def _log_plan(
+    product_id: int,
+    result: planner.Plan,
+    planned: list[planner.PlannedPlate],
+    plates_by_id: dict[int, ProductPlate],
+    skipped: list[tuple[int, str]],
+) -> None:
+    """One line on what the planner chose and what the other ways of packing would have cost.
+
+    The answer to "why did it split this product over three plates": the
+    packings are compared by the same cost (minutes until each order can be
+    picked up, lateness, a cost per plate), see services/product_planner.
+    """
+
+    def name(plate_id: int) -> str:
+        plate = plates_by_id.get(plate_id)
+        filename = plate.library_file.filename if plate is not None and plate.library_file is not None else ""
+        return f"{plate_id}:{filename}" if filename else str(plate_id)
+
+    plates = ", ".join(
+        f"{name(p.option.id)}@{p.printer_id} {p.start:%d %H:%M}-{p.end:%H:%M}" + (" pinned" if p.pinned else "")
+        for p in planned
+    )
+    others = ", ".join(f"{packing} {cost / 60:.0f}" for packing, cost in sorted(result.alternatives.items()))
+    logger.info(
+        "[PRODUCTS] Planned product %s: %s plan, cost %.0f min (by packing: %s); plates: %s%s%s",
+        product_id,
+        result.packing,
+        result.cost / 60,
+        others or "-",
+        plates or "none",
+        f"; short {result.short}" if result.short else "",
+        f"; skipped plates {skipped}" if skipped else "",
+    )
+
+
 async def _file_tag_ids(db: AsyncSession, file_ids: set[int]) -> dict[int, frozenset[int]]:
     if not file_ids:
         return {}
@@ -1341,6 +1399,7 @@ async def replan(
 
     rank = {p.id: i for i, p in enumerate(inputs.printers)}
     planned = sorted(result.plates, key=lambda p: (p.start, rank.get(p.printer_id, 0)))
+    _log_plan(product.id, result, planned, plates_by_id, skipped)
     outcome = PlanOutcome(plan=result, skipped_plates=skipped, held=len(held))
     if not planned:
         outcome.replaced = await _remove_waiting_jobs(db, waiting + unneeded)

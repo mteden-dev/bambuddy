@@ -1913,6 +1913,17 @@ export default {
         release: 'Släpp',
         releasedToast: 'Släppt: vilken skrivare av modellen som helst kan ta jobbet',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Planera om kön',
+        title: 'Planera om de öppna beställningarna för alla produkter',
+        confirmTitle: 'Planera om kön?',
+        confirmMessage: 'Planeraren lägger om jobben för alla produkter med öppna beställningar, de mest brådskande först. Pågående utskrifter och jobb som du lagt till eller flyttat för hand ligger kvar; planerarens övriga väntande jobb kan ersättas.',
+        confirm: 'Planera om',
+        done: 'Kön omplanerad – produkter: {{products}}, nya jobb: {{created}}, oförändrade: {{kept}}, borttagna: {{replaced}}',
+        failed: 'Kunde inte planera om kön: {{error}}',
+        partial: 'Inte omplanerade (se loggen): produkter {{ids}}',
+      },
       staffed: {
         title: 'Bemannade timmar',
         button: 'Bemannade timmar',

@@ -1896,6 +1896,17 @@ export default {
         release: 'Liberar',
         releasedToast: 'Liberado: cualquier impresora de su modelo puede tomar el trabajo',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Replanificar cola',
+        title: 'Volver a planificar los pedidos abiertos de todos los productos',
+        confirmTitle: '¿Replanificar la cola?',
+        confirmMessage: 'El planificador vuelve a organizar los trabajos de todos los productos con pedidos abiertos, primero los más urgentes. Las impresiones en curso y los trabajos añadidos o movidos a mano se mantienen; los demás trabajos en espera del planificador pueden sustituirse.',
+        confirm: 'Replanificar',
+        done: 'Cola replanificada – productos: {{products}}, trabajos nuevos: {{created}}, sin cambios: {{kept}}, eliminados: {{replaced}}',
+        failed: 'No se pudo replanificar la cola: {{error}}',
+        partial: 'No replanificados (ver el registro): productos {{ids}}',
+      },
       staffed: {
         title: 'Horario con personal',
         button: 'Horario con personal',

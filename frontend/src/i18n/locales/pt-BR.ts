@@ -1896,6 +1896,17 @@ export default {
         release: 'Liberar',
         releasedToast: 'Liberado: qualquer impressora do modelo pode pegar o trabalho',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Replanejar fila',
+        title: 'Replanejar os pedidos abertos de todos os produtos',
+        confirmTitle: 'Replanejar a fila?',
+        confirmMessage: 'O planejador reorganiza os trabalhos de todos os produtos com pedidos abertos, os mais urgentes primeiro. Impressões em andamento e trabalhos adicionados ou movidos à mão permanecem como estão; os demais trabalhos em espera do planejador podem ser substituídos.',
+        confirm: 'Replanejar',
+        done: 'Fila replanejada – produtos: {{products}}, novos trabalhos: {{created}}, sem alteração: {{kept}}, removidos: {{replaced}}',
+        failed: 'Não foi possível replanejar a fila: {{error}}',
+        partial: 'Não replanejados (veja o log): produtos {{ids}}',
+      },
       staffed: {
         title: 'Horário com equipe',
         button: 'Horário com equipe',

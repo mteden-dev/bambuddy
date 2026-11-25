@@ -1896,6 +1896,17 @@ export default {
         release: '釋放',
         releasedToast: '已釋放：同型號的任何印表機都可以接收此工作',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: '重新規劃佇列',
+        title: '重新規劃所有產品的未完成訂單',
+        confirmTitle: '重新規劃佇列？',
+        confirmMessage: '規劃器將依截止時間由近到遠，重新安排所有有未完成訂單的產品的工作。正在列印的工作以及手動新增或移動的工作維持不變；規劃器的其他等待工作可能會被取代。',
+        confirm: '重新規劃',
+        done: '佇列已重新規劃 – 產品：{{products}}，新工作：{{created}}，未變：{{kept}}，已移除：{{replaced}}',
+        failed: '無法重新規劃佇列：{{error}}',
+        partial: '未重新規劃（見日誌）：產品 {{ids}}',
+      },
       staffed: {
         title: '值守時間',
         button: '值守時間',

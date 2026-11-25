@@ -1896,6 +1896,17 @@ export default {
         release: 'Serbest bırak',
         releasedToast: 'Serbest bırakıldı: modelin herhangi bir yazıcısı işi alabilir',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Kuyruğu yeniden planla',
+        title: 'Tüm ürünlerin açık siparişlerini yeniden planla',
+        confirmTitle: 'Kuyruk yeniden planlansın mı?',
+        confirmMessage: 'Planlayıcı, açık siparişi olan tüm ürünlerin işlerini en acil olandan başlayarak yeniden dizer. Süren baskılar ve elle eklediğiniz ya da taşıdığınız işler olduğu gibi kalır; planlayıcının bekleyen diğer işleri değiştirilebilir.',
+        confirm: 'Yeniden planla',
+        done: 'Kuyruk yeniden planlandı – ürünler: {{products}}, yeni işler: {{created}}, değişmeyen: {{kept}}, kaldırılan: {{replaced}}',
+        failed: 'Kuyruk yeniden planlanamadı: {{error}}',
+        partial: 'Yeniden planlanmadı (günlüğe bakın): ürünler {{ids}}',
+      },
       staffed: {
         title: 'Personel saatleri',
         button: 'Personel saatleri',

@@ -1895,6 +1895,17 @@ export default {
         release: '解除',
         releasedToast: '解除しました: 同じ機種のどのプリンターでもジョブを取れます',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'キューを再計画',
+        title: 'すべての製品の未完了の注文を再計画します',
+        confirmTitle: 'キューを再計画しますか？',
+        confirmMessage: 'プランナーが未完了の注文があるすべての製品のジョブを、期限の近いものから並べ直します。印刷中のジョブと手動で追加・移動したジョブはそのまま残り、プランナーのその他の待機中ジョブは置き換えられる場合があります。',
+        confirm: '再計画',
+        done: 'キューを再計画しました – 製品: {{products}}、新規ジョブ: {{created}}、変更なし: {{kept}}、削除: {{replaced}}',
+        failed: 'キューを再計画できませんでした: {{error}}',
+        partial: '再計画されませんでした（ログを参照）: 製品 {{ids}}',
+      },
       staffed: {
         title: '在席時間',
         button: '在席時間',

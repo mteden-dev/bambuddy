@@ -1896,6 +1896,17 @@ export default {
         release: 'Libérer',
         releasedToast: 'Libérée : toute imprimante du modèle peut prendre la tâche',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Replanifier la file',
+        title: 'Replanifier les commandes ouvertes de tous les produits',
+        confirmTitle: 'Replanifier la file ?',
+        confirmMessage: 'Le planificateur réorganise les travaux de tous les produits ayant des commandes ouvertes, les plus urgents d\'abord. Les impressions en cours et les travaux ajoutés ou déplacés à la main restent tels quels ; les autres travaux en attente du planificateur peuvent être remplacés.',
+        confirm: 'Replanifier',
+        done: 'File replanifiée – produits : {{products}}, nouveaux travaux : {{created}}, inchangés : {{kept}}, retirés : {{replaced}}',
+        failed: 'Impossible de replanifier la file : {{error}}',
+        partial: 'Non replanifiés (voir le journal) : produits {{ids}}',
+      },
       staffed: {
         title: 'Heures de présence',
         button: 'Heures de présence',

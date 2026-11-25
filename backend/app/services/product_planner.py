@@ -24,7 +24,12 @@ The planner:
    the printers) to all of them at once. Each plan is tried a second time with
    every printer's plates of parts that need work after printing (a base and
    a tray glued together) moved before the rest, so the glue can dry while
-   the lid prints;
+   the lid prints. When a plate prints several parts, each plan is built three
+   ways: every package on its cheapest plates for its own parts (the default),
+   every package covering whole products (its other parts too, so a plate
+   printing a lid, its base and the tray together counts for all three), and
+   every package on plates printing its own parts only (so the tray can print
+   on another printer while the base dries);
 3. scores each plan and keeps the cheapest: how long until each order can be
    picked up (its last print's end, moved to when someone clears the plate),
    lateness against due dates, a cost per plate, and pieces made beyond the
@@ -52,6 +57,10 @@ CAP_STEPS = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64)
 # Every cap combination is tried up to this many, each built twice; above it
 # the caps are tuned one at a time.
 MAX_CAP_COMBINATIONS = 1000
+# How a package's plates are chosen (see ``_build``).
+PACK_CHEAPEST = "cheapest"
+PACK_WHOLE = "whole"
+PACK_OWN = "own"
 
 # part id -> printer id -> pieces
 Pool = dict[int, dict[int, int]]
@@ -156,6 +165,10 @@ class Plan:
     extra: dict[int, int] = field(default_factory=dict)
     # (model, "matched" or "loose") -> the most products one package holds
     caps: dict[tuple[str, str], int] = field(default_factory=dict)
+    # How its packages chose plates (PACK_*).
+    packing: str = PACK_CHEAPEST
+    # Packing -> the cheapest plan's cost built that way, for the log.
+    alternatives: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -453,9 +466,14 @@ class _Covers:
         return self._usable[key]
 
     def cover(
-        self, printer: PlannerPrinter, needs: tuple[tuple[int, int], ...], *, matched: bool
+        self, printer: PlannerPrinter, needs: tuple[tuple[int, int], ...], *, matched: bool, own: bool = False
     ) -> tuple[PlateOption, ...] | None:
+        """The cheapest plates for ``needs``; ``own``: only plates printing nothing else."""
         usable, ids = self._usable_on(printer, matched)
+        if own:
+            wanted = {pid for pid, _ in needs}
+            usable = tuple(o for o in usable if all(pid in wanted for pid, n in o.pieces if n))
+            ids = tuple(o.id for o in usable)
         key = (ids, needs)
         if key not in self._memo:
             self._memo[key] = _cheapest_cover(usable, needs, self._inputs.plate_cost_s)
@@ -491,7 +509,19 @@ def _cap_values(inputs: PlanInputs, wanted: int) -> list[int]:
     return sorted({c for c in CAP_STEPS if c < top} | {top})
 
 
-def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _Covers) -> Plan:
+def _build(
+    inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _Covers, packing: str = PACK_CHEAPEST
+) -> Plan:
+    """One plan for ``caps``.
+
+    ``packing`` chooses a package's plates. PACK_CHEAPEST: the cheapest for the
+    group's own parts, a plate printing other parts too costed as if they were
+    waste. PACK_WHOLE: the package covers whole products, the parts still
+    missing for its products besides the group's own, and the matched group
+    goes first. PACK_OWN: only plates printing nothing but the group's parts.
+    """
+    whole = packing == PACK_WHOLE
+    own = packing == PACK_OWN
     now = inputs.now
     matched = [p for p in inputs.parts if p.matched]
     loose = [p for p in inputs.parts if not p.matched]
@@ -554,11 +584,21 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
                 if part_id in missing:
                     missing[part_id] -= n
 
+    def loose_needs(units: float, skip: int | None = None) -> tuple[tuple[int, int], ...]:
+        """The loose parts still missing for ``units`` products (``whole`` packages)."""
+        return tuple(
+            (p.id, max(0, min(missing[p.id], math.ceil(units * p.per_unit))))
+            for p in loose
+            if p.id != skip and missing[p.id] > 0
+        )
+
     def matched_package(printer: PlannerPrinter, units: int) -> tuple[PlateOption, ...] | None:
         needs = tuple(
             (m.id, max(0, units * m.per_unit - leftover[m.id].get(printer.id, 0) - wild[m.id])) for m in matched
         )
-        return covers.cover(printer, needs, matched=True)
+        if whole:
+            needs += loose_needs(units)
+        return covers.cover(printer, needs, matched=True, own=own)
 
     def take_matched(printer: PlannerPrinter, units: int, chosen: tuple[PlateOption, ...]) -> None:
         nonlocal missing_units
@@ -593,18 +633,20 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
         # The group with the most print time left goes first (matched parts on
         # a tie), on the printer that has a package of it ready soonest per
         # product: a faster or bigger printer free a little later may win.
-        groups: list[tuple[float, int, int, str, int]] = []
+        # With ``whole`` packages the matched group goes first: its packages
+        # take the loose parts along.
+        groups: list[tuple[int, float, int, int, str, int]] = []
         if missing_units > 0:
             left_s = missing_units * sum(m.per_unit * piece_time.get(m.id, 0.0) for m in matched)
             left_s += max(m.finish_s for m in matched)
-            groups.append((left_s, 1, 0, "matched", 0))
+            groups.append((int(whole), left_s, 1, 0, "matched", 0))
         for index, part in enumerate(loose):
             if missing[part.id] > 0:
                 left_s = missing[part.id] * piece_time.get(part.id, 0.0) + part.finish_s
-                groups.append((left_s, 0, -index, "loose", part.id))
+                groups.append((0, left_s, 0, -index, "loose", part.id))
         groups.sort(reverse=True)
         placed = False
-        for _, _, _, kind, part_id in groups:
+        for *_, kind, part_id in groups:
             best_key = None
             best = None
             for printer in inputs.printers:
@@ -616,9 +658,12 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
                 else:
                     part = next(p for p in loose if p.id == part_id)
                     target = min(missing[part_id], cap * part.per_unit)
-                    chosen = covers.cover(printer, ((part_id, target),), matched=False)
-                    units = target
                     products = target / part.per_unit
+                    needs = ((part_id, target),)
+                    if whole:
+                        needs += loose_needs(products, skip=part_id)
+                    chosen = covers.cover(printer, needs, matched=False, own=own)
+                    units = target
                 if chosen is None or (not chosen and kind != "matched"):
                     continue
                 done_at = finish(printer, chosen)
@@ -689,7 +734,7 @@ def _build(inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _C
         for key, cap in caps.items()
         if any(p.option.model == key[0] and p.pinned == (key[1] == "matched") for p in plates)
     }
-    return Plan(plates=plates, ready_at=ready_at, cost=cost, short=short, extra=extra, caps=used_caps)
+    return Plan(plates=plates, ready_at=ready_at, cost=cost, short=short, extra=extra, caps=used_caps, packing=packing)
 
 
 def plan(inputs: PlanInputs) -> Plan:
@@ -708,10 +753,18 @@ def plan(inputs: PlanInputs) -> Plan:
     values = _cap_values(inputs, max(1, wanted))
     tried: dict[tuple, Plan] = {}
 
+    # The packings only differ when a plate prints several parts.
+    multi = any(sum(1 for _, n in o.pieces if n) > 1 for o in inputs.options)
+    packings = (PACK_CHEAPEST, PACK_WHOLE, PACK_OWN) if multi else (PACK_CHEAPEST,)
+
+    alternatives: dict[str, float] = {}
+
     def best_of(caps: Caps) -> Plan:
         signature = tuple(sorted(caps.items()))
         if signature not in tried:
-            builds = [_build(inputs, caps, first, covers) for first in (True, False)]
+            builds = [_build(inputs, caps, first, covers, packing) for packing in packings for first in (True, False)]
+            for build in builds:
+                alternatives[build.packing] = min(alternatives.get(build.packing, math.inf), build.cost)
             tried[signature] = min(builds, key=lambda p: (p.cost, len(p.plates)))
         return tried[signature]
 
@@ -740,4 +793,5 @@ def plan(inputs: PlanInputs) -> Plan:
                     if better(candidate, best):
                         best, best_caps = candidate, caps
     assert best is not None  # there is always at least one cap combination
+    best.alternatives = dict(alternatives)
     return best

@@ -192,6 +192,42 @@ describe('QueuePage tabs (fork)', () => {
   });
 });
 
+describe('QueuePage wiring: replan the queue (fork)', () => {
+  function onTimeline() {
+    vi.mocked(localStorage.getItem).mockImplementation(() => null);
+    server.use(
+      http.get('*/api/v1/queue/forecast', () => HttpResponse.json({ error: 'not in this test' }, { status: 500 })),
+      http.post('*/api/v1/products/replan', async ({ request }) => {
+        await capture(request);
+        return HttpResponse.json({ products: 2, created: 3, kept: 1, replaced: 2, held: 0, failed: [] });
+      }),
+    );
+  }
+
+  it('asks first, and cancelling sends nothing', async () => {
+    const user = userEvent.setup();
+    onTimeline();
+    render(<QueuePage />);
+    await user.click(await screen.findByTestId('timeline-replan'));
+    const title = await screen.findByText('Replan the queue?');
+    await user.click(within(dialogOf(title)).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText('Replan the queue?')).toBeNull());
+    expect(mutationCalls()).toEqual([]);
+  });
+
+  it('Replan -> POST /products/replan and a summary', async () => {
+    const user = userEvent.setup();
+    onTimeline();
+    render(<QueuePage />);
+    await user.click(await screen.findByTestId('timeline-replan'));
+    const title = await screen.findByText('Replan the queue?');
+    await user.click(within(dialogOf(title)).getByRole('button', { name: 'Replan' }));
+    await waitFor(() => expect(mutationCalls()).toEqual([{ method: 'POST', path: '/api/v1/products/replan', search: '', body: undefined }]));
+    expect(await screen.findByText(/Queue replanned – products: 2, new jobs: 3, unchanged: 1, removed: 2/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Replan the queue?')).toBeNull());
+  });
+});
+
 describe('QueuePage wiring: row actions', () => {
   it('Stop on a printing item -> confirm -> POST /queue/{id}/stop for that item', async () => {
     const user = userEvent.setup();

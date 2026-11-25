@@ -31,6 +31,7 @@ import {
   PencilRuler,
   Pin,
   Printer as PrinterIcon,
+  RefreshCw,
   Shuffle,
   Undo2,
   UserX,
@@ -191,6 +192,9 @@ interface QueueTimelineViewProps {
   onReleaseReservation?: (item: PrintQueueItem) => void;
   /** May change when someone is there to clear plates (settings:update). */
   canEditStaffedHours?: boolean;
+  /** Fork: plan every product's open orders again; the caller asks first. Hidden when absent. */
+  onReplanQueue?: () => void;
+  replanning?: boolean;
   /** Pin a job to a printer, or hand it back to any printer of a model. */
   onPinItem?: (item: PrintQueueItem, target: QueueMoveTarget) => void;
   /** Whether the user may change this job (its owner or queue:update_all). */
@@ -585,6 +589,8 @@ export function QueueTimelineView({
   canReorder = true,
   onReleaseReservation,
   canEditStaffedHours = false,
+  onReplanQueue,
+  replanning = false,
   onPinItem,
   canModifyItem,
   onEditItem,
@@ -1387,6 +1393,20 @@ export function QueueTimelineView({
             <CalendarClock className="w-4 h-4" />
             {t('queue.timeline.staffed.button')}
           </Button>
+          {onReplanQueue && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onReplanQueue}
+              disabled={replanning}
+              className="text-xs"
+              title={t('queue.timeline.replan.title')}
+              data-testid="timeline-replan"
+            >
+              <RefreshCw className={`w-4 h-4 ${replanning ? 'animate-spin' : ''}`} />
+              {t('queue.timeline.replan.button')}
+            </Button>
+          )}
         </div>
         {awayUntilMs != null && awayUntilMs > nowMs && (
           <span

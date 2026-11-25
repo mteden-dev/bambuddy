@@ -1896,6 +1896,17 @@ export default {
         release: 'Libera',
         releasedToast: 'Liberato: qualsiasi stampante del modello può prendere il lavoro',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Ripianifica coda',
+        title: 'Ripianifica gli ordini aperti di tutti i prodotti',
+        confirmTitle: 'Ripianificare la coda?',
+        confirmMessage: 'Il pianificatore riorganizza i lavori di tutti i prodotti con ordini aperti, prima i più urgenti. Le stampe in corso e i lavori aggiunti o spostati a mano restano invariati; gli altri lavori in attesa del pianificatore possono essere sostituiti.',
+        confirm: 'Ripianifica',
+        done: 'Coda ripianificata – prodotti: {{products}}, nuovi lavori: {{created}}, invariati: {{kept}}, rimossi: {{replaced}}',
+        failed: 'Impossibile ripianificare la coda: {{error}}',
+        partial: 'Non ripianificati (vedi il registro): prodotti {{ids}}',
+      },
       staffed: {
         title: 'Orari presidiati',
         button: 'Orari presidiati',

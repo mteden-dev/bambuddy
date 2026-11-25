@@ -151,7 +151,14 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     (koniec wydruku przesunięty do zdjęcia płyty), spóźnienie wobec terminu ×4, **koszt płyty**
     w minutach (przycisk Planowanie, domyślnie 15) i nadwyżka (dozwolona, trafia na stan). Dwa
     zamówienia złożone przed startem druku mogą więc dostać większe płyty, a wieczorem drukarka
-    bierze jedną większą płytę zamiast czekać do rana. Zadania planera to zwykłe zadania kolejki:
+    bierze jedną większą płytę zamiast czekać do rana. Gdy produkt ma płytę z kilkoma częściami
+    (np. dół, góra i tray razem), każdy wariant jest liczony na trzy sposoby: paczka na
+    najtańszych płytach dla swoich części, paczka obejmująca całe produkty (płyta „wszystko” liczy
+    się za wszystkie części, a nie jako dół+góra z odpadem) i paczka tylko na płytach z jej
+    częściami (tray na drugiej drukarce, góra w trakcie schnięcia). Wygrywa najtańszy; log
+    `[PRODUCTS] Planned product …` podaje wybrany sposób, koszt każdego sposobu i płyty z
+    drukarkami. **Przelicz kolejkę** na osi czasu (z potwierdzeniem) liczy od nowa plan wszystkich
+    produktów z otwartymi zamówieniami, najpilniejsze pierwsze (`POST /products/replan`). Zadania planera to zwykłe zadania kolejki:
     części parowane są przypięte do drukarki, pozostałe to „Dowolna <model>” z rezerwacją na
     drukarce z planu; obowiązują tagi drukarek, drukarki użytkownika i ręczny start. Plan liczy
     się od nowa przy nowym, zmienionym lub anulowanym zamówieniu, korekcie stanu, „Przelicz plan”

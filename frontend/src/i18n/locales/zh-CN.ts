@@ -1896,6 +1896,17 @@ export default {
         release: '释放',
         releasedToast: '已释放：同型号的任何打印机都可以接收此任务',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: '重新规划队列',
+        title: '重新规划所有产品的未完成订单',
+        confirmTitle: '重新规划队列？',
+        confirmMessage: '规划器将按截止时间由近到远，重新安排所有有未完成订单的产品的任务。正在打印的任务以及手动添加或移动的任务保持不变；规划器的其他等待任务可能会被替换。',
+        confirm: '重新规划',
+        done: '队列已重新规划 – 产品：{{products}}，新任务：{{created}}，未变：{{kept}}，已移除：{{replaced}}',
+        failed: '无法重新规划队列：{{error}}',
+        partial: '未重新规划（见日志）：产品 {{ids}}',
+      },
       staffed: {
         title: '值守时间',
         button: '值守时间',

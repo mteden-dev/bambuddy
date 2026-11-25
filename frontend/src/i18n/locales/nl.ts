@@ -1913,6 +1913,17 @@ export default {
         release: 'Vrijgeven',
         releasedToast: 'Vrijgegeven: elke printer van het model kan de taak nemen',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Wachtrij herplannen',
+        title: 'De open bestellingen van alle producten opnieuw plannen',
+        confirmTitle: 'Wachtrij herplannen?',
+        confirmMessage: 'De planner zet de taken van alle producten met open bestellingen opnieuw neer, de meest dringende eerst. Lopende prints en taken die je met de hand hebt toegevoegd of verplaatst blijven zoals ze zijn; de andere wachtende taken van de planner kunnen worden vervangen.',
+        confirm: 'Herplannen',
+        done: 'Wachtrij herpland – producten: {{products}}, nieuwe taken: {{created}}, ongewijzigd: {{kept}}, verwijderd: {{replaced}}',
+        failed: 'Kon de wachtrij niet herplannen: {{error}}',
+        partial: 'Niet herpland (zie het logboek): producten {{ids}}',
+      },
       staffed: {
         title: 'Bemande uren',
         button: 'Bemande uren',

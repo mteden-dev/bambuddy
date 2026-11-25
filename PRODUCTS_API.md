@@ -118,6 +118,9 @@ curl -s -X POST "$BB/products/7/orders" -H "X-API-Key: $KEY" -H 'Content-Type: a
 curl -s -X PATCH "$BB/products/orders/15" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"quantity": 4}'
 curl -s -X POST "$BB/products/orders/15/cancel" -H "X-API-Key: $KEY"
 curl -s -X POST "$BB/products/7/replan" -H "X-API-Key: $KEY"
+# cała kolejka: plan wszystkich produktów z otwartymi zamówieniami, najpilniejsze pierwsze
+# -> {"products", "created", "kept", "replaced", "held", "failed": [id produktu, ...]}
+curl -s -X POST "$BB/products/replan" -H "X-API-Key: $KEY"
 curl -s "$BB/products/7" -H "X-API-Key: $KEY"   # stan, zamówienia z postępem i prognozą, zadania
 ```
 

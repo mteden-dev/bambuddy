@@ -1804,6 +1804,17 @@ export default {
         release: '해제',
         releasedToast: '해제됨: 같은 모델의 어떤 프린터든 작업을 가져갈 수 있습니다',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: '대기열 재계획',
+        title: '모든 제품의 미완료 주문을 다시 계획합니다',
+        confirmTitle: '대기열을 재계획할까요?',
+        confirmMessage: '플래너가 미완료 주문이 있는 모든 제품의 작업을 마감이 가까운 순서로 다시 배치합니다. 진행 중인 출력과 직접 추가하거나 옮긴 작업은 그대로 유지되며, 플래너의 다른 대기 작업은 교체될 수 있습니다.',
+        confirm: '재계획',
+        done: '대기열 재계획 완료 – 제품: {{products}}, 새 작업: {{created}}, 변경 없음: {{kept}}, 제거됨: {{replaced}}',
+        failed: '대기열을 재계획하지 못했습니다: {{error}}',
+        partial: '재계획되지 않음(로그 참조): 제품 {{ids}}',
+      },
       staffed: {
         title: '상주 시간',
         button: '상주 시간',

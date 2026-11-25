@@ -1915,6 +1915,17 @@ export default {
         release: 'Release',
         releasedToast: 'Released: any printer of its model can take the job',
       },
+      // Fork: plan every product's open orders again from the timeline.
+      replan: {
+        button: 'Replan queue',
+        title: 'Plan every product\'s open orders again',
+        confirmTitle: 'Replan the queue?',
+        confirmMessage: 'The planner lays out the jobs of every product with open orders again, the soonest due first. Prints running now and jobs you queued or moved by hand stay as they are; the planner\'s other waiting jobs may be replaced.',
+        confirm: 'Replan',
+        done: 'Queue replanned – products: {{products}}, new jobs: {{created}}, unchanged: {{kept}}, removed: {{replaced}}',
+        failed: 'Could not replan the queue: {{error}}',
+        partial: 'Not replanned (see the log): products {{ids}}',
+      },
       staffed: {
         title: 'Staffed hours',
         button: 'Staffed hours',
