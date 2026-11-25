@@ -9328,6 +9328,9 @@ errors: {
       printerBadge: 'att kontrollera: {{count}}',
     },
     undo: 'Ångra',
+    byHand: 'tillagd för hand',
+    movedByHand: 'flyttad för hand',
+    handHint: 'Ditt: en plan låter det vara som det är (en flyttad försvinner om ingen beställning behöver den).',
     orderLabel: {
       forStock: 'till lager',
       forStockTitle: 'Till lager: ingen öppen beställning behöver dessa delar.',

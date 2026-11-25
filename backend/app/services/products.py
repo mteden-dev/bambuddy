@@ -388,6 +388,22 @@ async def withdraw_orders(db: AsyncSession, product_order_ids: list[int]) -> Wit
 # --- stock and orders ------------------------------------------------------------
 
 
+def piece_printer(job: ProductJob) -> int:
+    """The printer a job's pieces count on: the one that prints them, or none known.
+
+    Matched parts pair by printer. A pinned job someone moved to another
+    printer than the plan's was moved knowingly, as a stock move is: its pieces
+    pair with any printer's.
+    """
+    moved = (
+        job.pinned
+        and job.planned_printer_id is not None
+        and job.printer_id is not None
+        and job.printer_id != job.planned_printer_id
+    )
+    return planner.UNKNOWN_PRINTER if moved else (job.printer_id or planner.UNKNOWN_PRINTER)
+
+
 async def stock_pool(db: AsyncSession, product: Product) -> planner.Pool:
     """Pieces in stock now: printed (less the ones found bad), corrected, minus what done orders took."""
     part_ids = {p.id for p in product.parts}
@@ -396,7 +412,7 @@ async def stock_pool(db: AsyncSession, product: Product) -> planner.Pool:
         await db.execute(select(ProductJob).where(ProductJob.product_id == product.id, ProductJob.status == "done"))
     ).scalars()
     for job in done:
-        planner.pool_add(pool, job.printer_id or planner.UNKNOWN_PRINTER, good_pieces(job, part_ids))
+        planner.pool_add(pool, piece_printer(job), good_pieces(job, part_ids))
     if part_ids:
         rows = await db.execute(
             select(
@@ -516,6 +532,49 @@ class JobOrders:
     for_stock: bool = False
 
 
+def serve_in_order(
+    specs: list[planner.PartSpec], pool: planner.Pool, orders: list[ProductOrder], jobs: list[planner.Pieces]
+) -> list[list[ProductOrder]]:
+    """Which orders each job's pieces go to, the jobs in the order they print.
+
+    The pieces in ``pool`` go to the orders first (as when orders close), then
+    each job's pieces to the orders still short of that part, in ``orders``'
+    order (soonest due first). A job serving none prints for stock.
+    """
+    allocation = planner.allocate(specs, pool, needs_of(orders))
+    short = {
+        o.id: {p.id: o.quantity * p.per_unit - allocation.pieces.get(o.id, {}).get(p.id, 0) for p in specs}
+        for o in orders
+    }
+    result = []
+    for pieces in jobs:
+        served: list[ProductOrder] = []
+        for part_id, n in pieces:
+            left = n
+            for order in orders:
+                if left <= 0:
+                    break
+                take = min(left, short[order.id].get(part_id, 0))
+                if take > 0:
+                    short[order.id][part_id] -= take
+                    left -= take
+                    if order not in served:
+                        served.append(order)
+        result.append(served)
+    return result
+
+
+def earliest_due(orders: list[ProductOrder]) -> datetime | None:
+    """The soonest due date among orders (aware); None when none has one."""
+    dues = [due for due in (_aware(o.due_date) for o in orders) if due is not None]
+    return min(dues) if dues else None
+
+
+def earliest_due_tags(tags: list[OrderTag]) -> datetime | None:
+    dues = [due for due in (_aware(t.due) for t in tags) if due is not None]
+    return min(dues) if dues else None
+
+
 async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, JobOrders]]:
     """Which open orders each waiting or printing job prints for: by queue job, and by printer printing.
 
@@ -544,29 +603,16 @@ async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, 
             continue
         specs = part_specs(product)
         part_ids = {p.id for p in specs}
-        allocation = planner.allocate(specs, await stock_pool(db, product), needs_of(orders))
-        short = {
-            o.id: {p.id: o.quantity * p.per_unit - allocation.pieces.get(o.id, {}).get(p.id, 0) for p in specs}
-            for o in orders
-        }
         tags = await _order_tag_lookup(db, orders)
         own = sorted(
             (j for j in jobs if j.product_id == product_id),
             key=lambda j: (j.status != "printing", positions.get(j.queue_item_id, 10**9), j.id),
         )
-        for job in own:
-            served: list[OrderTag] = []
-            for part_id, n in job_pieces(job, part_ids):
-                left = n
-                for order in orders:
-                    if left <= 0:
-                        break
-                    take = min(left, short[order.id].get(part_id, 0))
-                    if take > 0:
-                        short[order.id][part_id] -= take
-                        left -= take
-                        if tags[order.id] not in served:
-                            served.append(tags[order.id])
+        serving = serve_in_order(
+            specs, await stock_pool(db, product), orders, [job_pieces(job, part_ids) for job in own]
+        )
+        for job, served_orders in zip(own, serving, strict=True):
+            served = [tags[order.id] for order in served_orders]
             entry = JobOrders(served, for_stock=not served)
             if job.queue_item_id is not None:
                 by_item[job.queue_item_id] = entry
@@ -768,6 +814,7 @@ async def check_job(
 
 async def refresh_product(db: AsyncSession, product: Product) -> tuple[planner.Pool, list[ProductJob]]:
     """Follow the queue and close finished orders; returns the stock and the jobs that just failed."""
+    await link_hand_jobs(db, product=product)
     failed = await sync_jobs(db, await active_jobs(db, product.id))
     await db.flush()
     pool = await stock_pool(db, product)
@@ -787,6 +834,8 @@ class PlanOutcome:
     kept: int = 0
     # Waiting jobs it took out of the queue.
     replaced: int = 0
+    # Waiting jobs queued or moved by hand that it kept as they are.
+    held: int = 0
     # Plates it could not use: (plate id, why).
     skipped_plates: list[tuple[int, str]] = field(default_factory=list)
 
@@ -858,6 +907,135 @@ async def _remove_waiting_jobs(db: AsyncSession, jobs: list[ProductJob]) -> int:
     return removed
 
 
+async def link_hand_jobs(
+    db: AsyncSession, *, product: Product | None = None, item_ids: list[int] | None = None
+) -> list[ProductJob]:
+    """Link queue jobs someone queued by hand that print a product plate's file, so their pieces count.
+
+    A plate's file printed from the library, the history or a printer card is
+    an ordinary queue job: without this its pieces would not reach the stock,
+    its orders would not close, and the next plan would print them again. A
+    job is linked when exactly one product plate is its file and plate (from
+    the job, or the archive it reprints). With ``product`` its plates' waiting
+    and printing jobs are looked at; with ``item_ids`` those queue jobs, in any
+    state (one that just finished). The caller commits.
+    """
+    from sqlalchemy import or_
+
+    from backend.app.models.products import ProductPlatePart
+
+    if product is not None:
+        plates = [plate for plate in product.plates if plate_usable(plate)]
+    else:
+        plates = list((await db.execute(select(ProductPlate).options(selectinload(ProductPlate.pieces)))).scalars())
+    by_file: dict[int, list[ProductPlate]] = {}
+    for plate in plates:
+        by_file.setdefault(plate.library_file_id, []).append(plate)
+    if not by_file or (item_ids is not None and not item_ids):
+        return []
+    query = select(PrintQueueItem, PrintArchive.library_file_id, PrintArchive.plate_id).outerjoin(
+        PrintArchive, PrintArchive.id == PrintQueueItem.archive_id
+    )
+    if item_ids is not None:
+        query = query.where(PrintQueueItem.id.in_(item_ids))
+    else:
+        files = list(by_file)
+        query = query.where(
+            PrintQueueItem.status.in_(("pending", "printing")),
+            or_(PrintQueueItem.library_file_id.in_(files), PrintArchive.library_file_id.in_(files)),
+        )
+    rows = (await db.execute(query)).all()
+    if not rows:
+        return []
+    known = (
+        await db.execute(
+            select(ProductJob.queue_item_id, ProductJob.item_created_at).where(
+                ProductJob.queue_item_id.in_([item.id for item, _, _ in rows])
+            )
+        )
+    ).all()
+    linked: list[ProductJob] = []
+    for item, archive_file, archive_plate in rows:
+        if any(
+            item_id == item.id and _same_item(ProductJob(item_created_at=created), item) for item_id, created in known
+        ):
+            continue
+        file_id = item.library_file_id or archive_file
+        plate_no = item.plate_id or archive_plate
+        matches = [p for p in by_file.get(file_id, []) if p.plate_id is None or p.plate_id == plate_no]
+        if len(matches) != 1:
+            continue
+        plate = matches[0]
+        pieces: list[ProductPlatePart] = [piece for piece in plate.pieces if piece.pieces > 0]
+        if not pieces:
+            continue
+        job = ProductJob(
+            product_id=plate.product_id,
+            product_plate_id=plate.id,
+            queue_item_id=item.id,
+            item_created_at=item.created_at,
+            printer_id=item.printer_id,
+            planned_printer_id=item.printer_id,
+            pinned=item.printer_id is not None,
+            by_hand=True,
+            status="printing" if item.status == "printing" else "planned",
+            pieces={str(piece.part_id): piece.pieces for piece in pieces},
+        )
+        db.add(job)
+        linked.append(job)
+    if linked:
+        await db.flush()
+        logger.info(
+            "[PRODUCTS] Linked queue jobs %s queued by hand to product plates", [j.queue_item_id for j in linked]
+        )
+    return linked
+
+
+async def _placed_on(db: AsyncSession, jobs: list[ProductJob], items: dict[int, PrintQueueItem]) -> dict[int, int]:
+    """Job id -> the printer a waiting job is on now: pinned to, else held for on the timeline, else the plan's."""
+    from backend.app.models.queue_reservations import QueueReservation
+
+    reserved: dict[int, int] = {}
+    ids = [j.queue_item_id for j in jobs if j.queue_item_id is not None]
+    if ids:
+        rows = (await db.execute(select(QueueReservation).where(QueueReservation.queue_item_id.in_(ids)))).scalars()
+        for row in rows:
+            item = items.get(row.queue_item_id)
+            if item is not None and _same_item(ProductJob(item_created_at=row.item_created_at), item):
+                reserved[row.queue_item_id] = row.printer_id
+    result = {}
+    for job in jobs:
+        item = items.get(job.queue_item_id or -1)
+        planned = job.planned_printer_id if job.planned_printer_id is not None else job.printer_id
+        if item is not None and item.printer_id is not None:
+            result[job.id] = item.printer_id
+        elif job.queue_item_id in reserved:
+            result[job.id] = reserved[job.queue_item_id]
+        elif planned is not None:
+            result[job.id] = planned
+    return result
+
+
+async def placed_by_hand(db: AsyncSession, jobs: list[ProductJob]) -> tuple[dict[int, int], set[int]]:
+    """For the waiting ones of ``jobs``: job id -> the printer it is on now, and the ids moved by hand."""
+    waiting = await _waiting_jobs(db, jobs)
+    if not waiting:
+        return {}, set()
+    items = {
+        item.id: item
+        for item in (
+            await db.execute(select(PrintQueueItem).where(PrintQueueItem.id.in_([j.queue_item_id for j in waiting])))
+        ).scalars()
+    }
+    placed_on = await _placed_on(db, waiting, items)
+    return placed_on, {j.id for j in waiting if _moved_by_hand(j, placed_on.get(j.id))}
+
+
+def _moved_by_hand(job: ProductJob, placed_on: int | None) -> bool:
+    planned = job.planned_printer_id if job.planned_printer_id is not None else job.printer_id
+    return placed_on is not None and planned is not None and placed_on != planned
+
+
 async def replan(
     db: AsyncSession,
     product_id: int,
@@ -868,22 +1046,29 @@ async def replan(
 ) -> PlanOutcome:
     """Plan the product's open orders again and put the plates in the queue.
 
-    Started jobs stay and count as coming. A waiting job the new plan has too
-    (the same plate on the same printer) is kept, with whatever was changed
-    on it in the queue (filament mapping, options), and moved to its place in
-    the plan; the other waiting jobs leave the queue. ``printer_ids`` limits
-    the printers (the user's printer scope); ``manual_start`` makes new jobs
-    wait for someone to press Start. The caller commits.
+    Started jobs stay and count as coming. So do the waiting jobs that are the
+    user's: one queued by hand (linked here first, see ``link_hand_jobs``) and
+    one moved by hand to another printer (pinned, or held for it on the
+    timeline); a moved one the orders no longer need leaves the queue. A
+    waiting job the new plan has too (the same plate on the same printer) is
+    kept where it is in the queue, with whatever was changed on it (filament
+    mapping, options); the other waiting jobs leave the queue. New jobs go in
+    before the first waiting job of another product due later than the orders
+    they print for (after the plan's earlier plates), else at the end.
+    ``printer_ids`` limits the printers (the user's printer scope);
+    ``manual_start`` makes new jobs wait for someone to press Start. The
+    caller commits.
     """
     from backend.app.services.print_defaults import default_print_options
     from backend.app.services.printer_tags import NO_TAGS, read_printer_tags
     from backend.app.services.queue_forecast import load_forecast_inputs, place_jobs
-    from backend.app.services.queue_position import lock_queue_positions, max_queue_position
+    from backend.app.services.queue_position import lock_queue_positions
     from backend.app.services.queue_reservations import reserve
 
     product = await load_product(db, product_id)
     if product is None:
         return PlanOutcome(plan=None)
+    await link_hand_jobs(db, product=product)
     jobs = await active_jobs(db, product.id)
     await sync_jobs(db, jobs)
     await db.flush()
@@ -892,7 +1077,36 @@ async def replan(
     orders = await open_orders(db, product.id)
     jobs = await active_jobs(db, product.id)
     waiting = await _waiting_jobs(db, jobs)
-    waiting_items = {job.queue_item_id for job in waiting}
+    items = {
+        item.id: item
+        for item in (
+            await db.execute(select(PrintQueueItem).where(PrintQueueItem.id.in_([j.queue_item_id for j in waiting])))
+        ).scalars()
+    }
+    # The user's waiting jobs: queued or moved by hand. They stay as they are
+    # while the orders need them; the plan goes around them.
+    placed_on = await _placed_on(db, waiting, items)
+    held = sorted(
+        (j for j in waiting if j.by_hand or _moved_by_hand(j, placed_on.get(j.id))),
+        key=lambda j: (items[j.queue_item_id].position or 0, j.id),
+    )
+    for job in held:
+        if job.planned_printer_id is None:
+            # A job from before the plan's printer was kept: remember it, so the
+            # move is still a move at the next plan.
+            job.planned_printer_id = job.printer_id
+        job.printer_id = placed_on.get(job.id, job.printer_id)
+    specs = part_specs(product)
+    part_ids = {p.id for p in product.parts}
+    printing = [job for job in jobs if job.status == "printing"]
+    coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
+    for job in printing:
+        planner.pool_add(coming, piece_printer(job), job_pieces(job, part_ids))
+    needed = serve_in_order(specs, coming, orders, [job_pieces(job, part_ids) for job in held])
+    unneeded = [job for job, served in zip(held, needed, strict=True) if not served and not job.by_hand]
+    held = [job for job in held if job not in unneeded]
+    waiting = [job for job in waiting if job not in held and job not in unneeded]
+    waiting_items = {job.queue_item_id for job in waiting} | {job.queue_item_id for job in unneeded}
 
     inputs = await load_forecast_inputs(db)
     now = inputs.now
@@ -907,16 +1121,18 @@ async def replan(
         lane_end[placement.printer_id] = max(lane_end[placement.printer_id], end)
     printer_free = {p.id: max(_aware(p.free_at) or now, now) for p in inputs.printers}
 
-    part_ids = {p.id for p in product.parts}
     arriving = [
-        planner.Arrival(
-            printer_free.get(job.printer_id or 0, now),
-            job.printer_id or planner.UNKNOWN_PRINTER,
-            job_pieces(job, part_ids),
-        )
-        for job in jobs
-        if job.status == "printing"
+        planner.Arrival(printer_free.get(job.printer_id or 0, now), piece_printer(job), job_pieces(job, part_ids))
+        for job in printing
     ]
+    placed = {placement.item_id: placement for placement in placements}
+    for job in held:
+        placement = placed.get(job.queue_item_id)
+        if placement is not None:
+            at = ready_after(placement.end) if ready_after is not None else placement.end
+        else:
+            at = lane_end.get(job.printer_id or 0, now)
+        arriving.append(planner.Arrival(at, piece_printer(job), job_pieces(job, part_ids)))
 
     # Printers that can take work now; when none can (all switched off for the
     # night, no Auto On plug), every enabled one, so an order still gets planned.
@@ -961,7 +1177,7 @@ async def replan(
     result = planner.plan(
         planner.PlanInputs(
             now=now,
-            parts=part_specs(product),
+            parts=specs,
             options=options,
             printers=printers,
             orders=needs_of(orders),
@@ -974,9 +1190,9 @@ async def replan(
 
     rank = {p.id: i for i, p in enumerate(inputs.printers)}
     planned = sorted(result.plates, key=lambda p: (p.start, rank.get(p.printer_id, 0)))
-    outcome = PlanOutcome(plan=result, skipped_plates=skipped)
+    outcome = PlanOutcome(plan=result, skipped_plates=skipped, held=len(held))
     if not planned:
-        outcome.replaced = await _remove_waiting_jobs(db, waiting)
+        outcome.replaced = await _remove_waiting_jobs(db, waiting + unneeded)
         return outcome
 
     from backend.app.api.routes.library_variants import normalize_model_name
@@ -991,26 +1207,59 @@ async def replan(
     printer_models = dict((await db.execute(select(Printer.id, Printer.model))).all())
     defaults = await default_print_options(db)
     await lock_queue_positions(db)
-    position = await max_queue_position(db) + 1
     filament_types: dict[tuple[int, int | None], list[str]] = {}
     reusable: dict[tuple[int | None, int | None, bool], list[ProductJob]] = {}
     for job in waiting:
         reusable.setdefault((job.product_plate_id, job.printer_id, bool(job.pinned)), []).append(job)
-    items = {
-        item.id: item
-        for item in (await db.execute(select(PrintQueueItem).where(PrintQueueItem.id.in_(waiting_items)))).scalars()
-    }
     for queue in reusable.values():
         queue.sort(key=lambda j: (items[j.queue_item_id].position or 0, j.id))
-    for planned_plate in planned:
+
+    # Where new jobs go: by the soonest due order each plate prints for,
+    # against the other products' waiting jobs (the stock, the prints running
+    # and the held jobs serve the orders first).
+    for job in held:
+        planner.pool_add(coming, piece_printer(job), job_pieces(job, part_ids))
+    plate_dues = [
+        earliest_due(served) for served in serve_in_order(specs, coming, orders, [p.option.pieces for p in planned])
+    ]
+    own_items = {job.queue_item_id for job in jobs}
+    other_dues: dict[int, datetime] = {}
+    for item_id, entry in (await order_tags(db))[0].items():
+        due = earliest_due_tags(entry.orders)
+        if item_id not in own_items and due is not None:
+            other_dues[item_id] = due
+    queue = list(
+        (
+            await db.execute(
+                select(PrintQueueItem)
+                .where(PrintQueueItem.status == "pending")
+                .order_by(PrintQueueItem.position, PrintQueueItem.id)
+            )
+        ).scalars()
+    )
+
+    def place(due: datetime | None, after: int) -> int:
+        """A position for a new job, making room for it; never at or before ``after``."""
+        if due is not None:
+            for other in sorted(queue, key=lambda i: (i.position or 0, i.id)):
+                at = other.position or 0
+                if at > after and other.id in other_dues and other_dues[other.id] > due:
+                    for moved in queue:
+                        if (moved.position or 0) >= at:
+                            moved.position = (moved.position or 0) + 1
+                    return at
+        return max([after, *(i.position or 0 for i in queue)]) + 1
+
+    after = 0
+    for planned_plate, due in zip(planned, plate_dues, strict=True):
         plate = plates_by_id[planned_plate.option.id]
         pinned = planned_plate.pinned
         kept_jobs = reusable.get((plate.id, planned_plate.printer_id, pinned))
         if kept_jobs:
+            # Kept where it is in the queue.
             job = kept_jobs.pop(0)
             item = items[job.queue_item_id]
-            item.position = position
-            position += 1
+            after = max(after, item.position or 0)
             job.pieces = {str(part_id): n for part_id, n in planned_plate.option.pieces}
             if not pinned:
                 await reserve(db, item, planned_plate.printer_id)
@@ -1043,15 +1292,16 @@ async def replan(
             print_time_seconds=planned_plate.option.duration_s,
             estimated_cost=cost,
             manual_start=manual_start,
-            position=position,
+            position=place(due, after),
             status="pending",
             created_by_id=actor_id,
             **defaults,
         )
-        position += 1
+        after = item.position
         db.add(item)
         await db.flush()
         await db.refresh(item, ["created_at"])
+        queue.append(item)
         if not pinned:
             await reserve(db, item, planned_plate.printer_id)
         db.add(
@@ -1061,6 +1311,7 @@ async def replan(
                 queue_item_id=item.id,
                 item_created_at=item.created_at,
                 printer_id=planned_plate.printer_id,
+                planned_printer_id=planned_plate.printer_id,
                 pinned=pinned,
                 status="planned",
                 pieces={str(part_id): n for part_id, n in planned_plate.option.pieces},
@@ -1068,7 +1319,7 @@ async def replan(
         )
         outcome.item_ids.append(item.id)
     await db.flush()
-    outcome.replaced = await _remove_waiting_jobs(db, waiting)
+    outcome.replaced = await _remove_waiting_jobs(db, waiting + unneeded)
     return outcome
 
 
@@ -1109,7 +1360,7 @@ async def order_estimates(
         pieces = job_pieces(job, part_ids)
         if job.status == "printing":
             arrivals.append(
-                planner.Arrival(max(free_at.get(job.printer_id or 0, now), now), job.printer_id or 0, pieces)
+                planner.Arrival(max(free_at.get(job.printer_id or 0, now), now), piece_printer(job), pieces)
             )
         elif job.queue_item_id in placed:
             p = placed[job.queue_item_id]
@@ -1151,6 +1402,8 @@ async def after_queue_items_changed(db: AsyncSession, queue_item_ids: list[int])
     """
     if not queue_item_ids:
         return
+    # A plate's file queued by hand that just finished (or failed) counts too.
+    await link_hand_jobs(db, item_ids=queue_item_ids)
     jobs = list(
         (
             await db.execute(

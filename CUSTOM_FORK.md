@@ -152,8 +152,15 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     zamówienie” (wybrane zamówienia, dla których drukuje); potwierdzenie Stop mówi, że plan
     wydrukuje go jeszcze raz. Czekające zadanie,
     które nowy plan też ma (ta sama płyta na tej samej drukarce), zostaje razem ze zmianami
-    zrobionymi w kolejce (np. mapowanie filamentu) i tylko zmienia miejsce; pozostałe czekające
-    znikają, rozpoczęte zostają i liczą się jako w drodze. Przy włączonym „najkrótsze najpierw”
+    zrobionymi w kolejce (np. mapowanie filamentu) i na swoim miejscu w kolejce; nowe wchodzą
+    przed pierwsze czekające zadanie innego produktu z późniejszym terminem (inaczej na koniec);
+    pozostałe czekające znikają, rozpoczęte zostają i liczą się jako w drodze. Zadanie
+    przesunięte ręcznie na inną drukarkę (przypięte albo zarezerwowane na osi czasu) plan
+    zostawia tam, gdzie jest, i planuje wokół niego (część parowana przesunięta ręcznie paruje się z
+    każdą drukarką); znika dopiero, gdy żadne zamówienie go nie potrzebuje. Plik płyty wydrukowany
+    ręcznie (z biblioteki, z historii, z karty drukarki) jest dołączany do produktu: jego części
+    liczą się na stan, plan go nie usuwa i nie drukuje drugi raz; karta produktu oznacza takie
+    zadania „dodane ręcznie” / „przesunięte ręcznie”. Przy włączonym „najkrótsze najpierw”
     strona ostrzega, że kolejka może nie trzymać kolejności z planu. **Stan części** jest liczony
     na drukarkę (zakończone zadania + korekty − to, co zabrały zrealizowane zamówienia);
     zamówienia biorą z niego po kolei (termin, potem kolejność), a zamówienie z kompletem części

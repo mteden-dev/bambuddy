@@ -4650,6 +4650,9 @@ export interface ProductJob {
   product_plate_id: number | null;
   filename: string | null;
   print_time_seconds: number | null;
+  /** The user's, kept as it is by a plan: queued by hand, or moved by hand to another printer. */
+  by_hand: boolean;
+  moved: boolean;
 }
 
 export interface ProductDetail extends Product {

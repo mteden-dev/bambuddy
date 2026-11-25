@@ -334,6 +334,10 @@ class JobOut(BaseModel):
     product_plate_id: int | None
     filename: str | None
     print_time_seconds: int | None
+    # The user's, kept as it is by a plan: queued by hand (a plate's file
+    # printed outside the planner), or moved by hand to another printer.
+    by_hand: bool = False
+    moved: bool = False
 
 
 class ProductDetail(ProductOut):
@@ -347,12 +351,14 @@ class ProductDetail(ProductOut):
 
 class PlanOut(BaseModel):
     product: ProductDetail
-    # Plates in the queue for the plan: new jobs plus waiting jobs it kept.
+    # Plates in the queue for the plan: new jobs, waiting jobs it kept and ones kept as moved or queued by hand.
     planned_jobs: int
     created: int = 0
     kept: int = 0
     # Waiting jobs it took out of the queue.
     replaced: int
+    # Waiting jobs queued or moved by hand that it kept as they are (counted in planned_jobs).
+    held: int = 0
     # order id -> when the plan expects it ready
     ready_at: dict[int, UTCDatetime] = Field(default_factory=dict)
     finish_at: UTCDatetime = None
@@ -495,20 +501,24 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
     orders += [_order_out(order) for order in closed]
 
     jobs_rows = await svc.active_jobs(db, product.id)
+    placed_on, moved = await svc.placed_by_hand(db, jobs_rows)
     plates = {plate.id: plate for plate in product.plates}
     jobs = []
     coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
     for job in jobs_rows:
         pieces = svc.job_pieces(job, part_ids)
-        planner.pool_add(coming, job.printer_id or planner.UNKNOWN_PRINTER, pieces)
+        planner.pool_add(coming, svc.piece_printer(job), pieces)
         plate = plates.get(job.product_plate_id or -1)
+        printer_id = placed_on.get(job.id, job.printer_id)
         jobs.append(
             JobOut(
                 id=job.id,
                 queue_item_id=job.queue_item_id,
                 status=job.status,
-                printer_id=job.printer_id,
-                printer_name=printer_names.get(job.printer_id),
+                printer_id=printer_id,
+                printer_name=printer_names.get(printer_id),
+                by_hand=bool(job.by_hand),
+                moved=job.id in moved,
                 pinned=job.pinned,
                 pieces=[PartPieces(part_id=pid, pieces=n) for pid, n in pieces],
                 product_plate_id=job.product_plate_id,
@@ -701,10 +711,11 @@ async def _plan_response(
     )
     return PlanOut(
         product=await _detail(db, product),
-        planned_jobs=len(outcome.item_ids) + outcome.kept,
+        planned_jobs=len(outcome.item_ids) + outcome.kept + outcome.held,
         created=len(outcome.item_ids),
         kept=outcome.kept,
         replaced=outcome.replaced,
+        held=outcome.held,
         ready_at={k: _utc(v) for k, v in (plan.ready_at if plan else {}).items() if v is not None},
         finish_at=_utc(max((p.ready for p in plates), default=None)),
         short=[PartPieces(part_id=k, pieces=v) for k, v in sorted((plan.short if plan else {}).items())],

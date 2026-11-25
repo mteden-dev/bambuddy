@@ -9173,6 +9173,9 @@ export default {
       printerBadge: 'kontrol edilecek: {{count}}',
     },
     undo: 'Geri al',
+    byHand: 'elle eklendi',
+    movedByHand: 'elle taşındı',
+    handHint: 'Sizin: plan onu olduğu gibi bırakır (taşınan, hiçbir sipariş gerekmiyorsa çıkar).',
     orderLabel: {
       forStock: 'stok için',
       forStockTitle: 'Stok için: açık hiçbir siparişin bu parçalara ihtiyacı yok.',

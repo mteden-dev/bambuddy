@@ -9299,6 +9299,9 @@ export default {
       printerBadge: 'to check: {{count}}',
     },
     undo: 'Undo',
+    byHand: 'queued by hand',
+    movedByHand: 'moved by hand',
+    handHint: 'Yours: a plan keeps it as it is (one moved by hand leaves when no order needs it).',
     orderLabel: {
       forStock: 'for stock',
       forStockTitle: 'For stock: no open order needs these pieces.',

@@ -9231,6 +9231,9 @@ export default {
       printerBadge: 'a conferir: {{count}}',
     },
     undo: 'Desfazer',
+    byHand: 'adicionado à mão',
+    movedByHand: 'movido à mão',
+    handHint: 'Seu: o plano o deixa como está (um movido sai se nenhum pedido precisar dele).',
     orderLabel: {
       forStock: 'para estoque',
       forStockTitle: 'Para estoque: nenhum pedido aberto precisa destas peças.',

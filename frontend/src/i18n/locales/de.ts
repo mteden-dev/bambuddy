@@ -9246,6 +9246,9 @@ export default {
       printerBadge: 'zu prüfen: {{count}}',
     },
     undo: 'Rückgängig',
+    byHand: 'von Hand eingereiht',
+    movedByHand: 'von Hand verschoben',
+    handHint: 'Deins: Ein Plan lässt es, wie es ist (ein verschobenes verschwindet, wenn keine Bestellung es braucht).',
     orderLabel: {
       forStock: 'auf Lager',
       forStockTitle: 'Auf Lager: Keine offene Bestellung braucht diese Teile.',

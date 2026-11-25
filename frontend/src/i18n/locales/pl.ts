@@ -9299,6 +9299,9 @@ export default {
       printerBadge: 'do sprawdzenia: {{count}}',
     },
     undo: 'Cofnij',
+    byHand: 'dodane ręcznie',
+    movedByHand: 'przesunięte ręcznie',
+    handHint: 'Twoje: plan zostawia je tak, jak są (przesunięte znika, gdy żadne zamówienie go nie potrzebuje).',
     orderLabel: {
       forStock: 'na stan',
       forStockTitle: 'Na stan: żadne otwarte zamówienie nie potrzebuje tych sztuk.',

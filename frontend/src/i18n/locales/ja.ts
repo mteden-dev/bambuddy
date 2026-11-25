@@ -9245,6 +9245,9 @@ export default {
       printerBadge: '確認待ち：{{count}}',
     },
     undo: '元に戻す',
+    byHand: '手動で追加',
+    movedByHand: '手動で移動',
+    handHint: 'ユーザーのもの：プランはそのまま残します（移動したものは、どの注文にも不要になると外れます）。',
     orderLabel: {
       forStock: '在庫用',
       forStockTitle: '在庫用：未完了の注文はこれらの部品を必要としていません。',

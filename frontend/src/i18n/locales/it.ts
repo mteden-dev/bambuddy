@@ -9231,6 +9231,9 @@ export default {
       printerBadge: 'da controllare: {{count}}',
     },
     undo: 'Annulla',
+    byHand: 'aggiunto a mano',
+    movedByHand: 'spostato a mano',
+    handHint: 'Tuo: il piano lo lascia com\'è (uno spostato esce se nessun ordine ne ha bisogno).',
     orderLabel: {
       forStock: 'per magazzino',
       forStockTitle: 'Per magazzino: nessun ordine aperto ha bisogno di questi pezzi.',

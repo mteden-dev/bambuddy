@@ -124,8 +124,12 @@ curl -s "$BB/products/7" -H "X-API-Key: $KEY"   # stan, zamówienia z postępem 
 Para `external_source` + `external_ref` jest unikalna: ponowione utworzenie tego samego zamówienia ze
 sklepu dostaje 409 zamiast drugiego zamówienia. Odpowiedź planu: `planned_jobs` (płyty w kolejce dla
 planu), `created` (nowe zadania), `kept` (czekające zadania zostawione bez zmian, z ręcznymi
-zmianami w kolejce), `replaced` (usunięte), `ready_at`, `finish_at`, `short` (części, dla których
-żadna drukarka nie ma płyty).
+zmianami w kolejce i na swoim miejscu), `held` (zadania dodane albo przesunięte ręcznie, zostawione
+tak, jak są), `replaced` (usunięte), `ready_at`, `finish_at`, `short` (części, dla których żadna
+drukarka nie ma płyty). Nowe zadania wchodzą przed pierwsze czekające zadanie innego produktu z
+późniejszym terminem, inaczej na koniec. Zadanie w kolejce z plikiem i płytą, które są płytą
+dokładnie jednego produktu, jest do niego dołączane (`by_hand` w `jobs` produktu): jego części idą
+na stan; `moved` oznacza zadanie planera przesunięte ręcznie na inną drukarkę.
 
 ### Wydruk zamówienia anulowany w kolejce
 

@@ -9297,6 +9297,9 @@ export default {
       printerBadge: 'te controleren: {{count}}',
     },
     undo: 'Ongedaan maken',
+    byHand: 'handmatig toegevoegd',
+    movedByHand: 'handmatig verplaatst',
+    handHint: 'Van jou: een plan laat het zoals het is (een verplaatste verdwijnt als geen bestelling het nodig heeft).',
     orderLabel: {
       forStock: 'voor voorraad',
       forStockTitle: 'Voor voorraad: geen open bestelling heeft deze stuks nodig.',

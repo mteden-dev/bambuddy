@@ -403,6 +403,7 @@ NON_FK_ID_REFERENCES: dict[str, tuple[tuple[str, str], ...]] = {
         ("notification_lock_screen_widgets", "printer_id"),
         # Fork: products. Which printer made a part's pieces is history.
         ("custom_product_jobs", "printer_id"),
+        ("custom_product_jobs", "planned_printer_id"),
         ("custom_product_stock", "printer_id"),
     ),
     "api_keys": (("auth_ephemeral_tokens", "api_key_id"),),
@@ -6170,6 +6171,13 @@ async def _run_migrations(conn):
         f"ALTER TABLE custom_product_jobs ADD COLUMN checked_at {'DATETIME' if is_sqlite() else 'TIMESTAMP'}",
     )
     await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN rejected JSON")
+    # Fork (products): where the plan put a job (one elsewhere was moved by hand),
+    # and a plate's file queued by hand, linked so its pieces count.
+    await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN planned_printer_id INTEGER")
+    await _safe_execute(
+        conn,
+        f"ALTER TABLE custom_product_jobs ADD COLUMN by_hand BOOLEAN NOT NULL DEFAULT {'0' if is_sqlite() else 'FALSE'}",
+    )
 
     await _backfill_archive_run_photos(conn)
     await _migrate_h3c_queue_tray_ids(conn)

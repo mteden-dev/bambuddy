@@ -8869,6 +8869,9 @@ export default {
       printerBadge: '확인 대기: {{count}}',
     },
     undo: '실행 취소',
+    byHand: '직접 추가',
+    movedByHand: '직접 이동',
+    handHint: '사용자 항목: 계획이 그대로 둡니다(이동한 항목은 필요한 주문이 없으면 빠집니다).',
     orderLabel: {
       forStock: '재고용',
       forStockTitle: '재고용: 열린 주문 중 이 부품이 필요한 것이 없습니다.',

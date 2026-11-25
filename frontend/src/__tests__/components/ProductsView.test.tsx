@@ -86,6 +86,36 @@ const DETAIL: ProductDetail = {
       product_plate_id: 10,
       filename: 'lid_x2.gcode.3mf',
       print_time_seconds: 7200,
+      by_hand: false,
+      moved: false,
+    },
+    {
+      id: 31,
+      queue_item_id: 301,
+      status: 'planned',
+      printer_id: 8,
+      printer_name: 'P1S-B',
+      pinned: false,
+      pieces: [{ part_id: 2, pieces: 1 }],
+      product_plate_id: 11,
+      filename: 'base_x1.gcode.3mf',
+      print_time_seconds: 3600,
+      by_hand: false,
+      moved: true,
+    },
+    {
+      id: 32,
+      queue_item_id: 302,
+      status: 'planned',
+      printer_id: null,
+      printer_name: null,
+      pinned: false,
+      pieces: [{ part_id: 3, pieces: 1 }],
+      product_plate_id: 12,
+      filename: 'tray_x1.gcode.3mf',
+      print_time_seconds: 1800,
+      by_hand: true,
+      moved: false,
     },
   ],
   unplanned: [{ part_id: 3, pieces: 1 }],
@@ -151,6 +181,16 @@ describe('ProductsView', () => {
     expect(screen.getByText('2× Lid')).toBeInTheDocument();
     expect(screen.getByText(/1× Tray · P1S-A/)).toBeInTheDocument();
     expect(screen.getByText('Not in the queue: 1× Tray. Replan to queue them again.')).toBeInTheDocument();
+  });
+
+  it('marks the jobs queued or moved by hand, which a plan keeps', async () => {
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByText('9mm box'));
+    const moved = await screen.findByText('moved by hand');
+    expect(moved).toHaveAttribute('title', expect.stringMatching(/a plan keeps it as it is/));
+    expect(screen.getByText('queued by hand')).toBeInTheDocument();
+    expect(screen.getAllByText(/by hand$/)).toHaveLength(2);
   });
 
   it('posts an order and reports the plan', async () => {

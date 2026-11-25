@@ -9229,6 +9229,9 @@ export default {
       printerBadge: '待檢查：{{count}}',
     },
     undo: '復原',
+    byHand: '手動加入',
+    movedByHand: '手動移動',
+    handHint: '你的：計畫會保持原樣（手動移動的在沒有訂單需要時會移除）。',
     orderLabel: {
       forStock: '備庫存',
       forStockTitle: '備庫存：沒有未完成的訂單需要這些零件。',

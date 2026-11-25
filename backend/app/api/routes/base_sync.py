@@ -464,7 +464,7 @@ async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, P
         part_ids = {spec.id for spec in specs}
         for job in await product_service.queued_jobs(db, product_id):
             planner.pool_add(
-                coming, job.printer_id or planner.UNKNOWN_PRINTER, product_service.job_pieces(job, part_ids)
+                coming, product_service.piece_printer(job), product_service.job_pieces(job, part_ids)
             )
         with_queue = planner.allocate(specs, coming, needs)
         estimates = {}
@@ -835,7 +835,7 @@ async def _withdraw_preview(db: AsyncSession, row: BaseOrder, return_done: bool)
             coming = await product_service.stock_pool(db, product)
             for job in await product_service.queued_jobs(db, product.id):
                 planner.pool_add(
-                    coming, job.printer_id or planner.UNKNOWN_PRINTER, product_service.job_pieces(job, ids)
+                    coming, product_service.piece_printer(job), product_service.job_pieces(job, ids)
                 )
             needs = product_service.needs_of(await product_service.open_orders(db, product.id))
             taken = planner.allocate(specs, coming, needs)

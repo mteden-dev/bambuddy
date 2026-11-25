@@ -881,3 +881,221 @@ async def test_only_a_waiting_job_the_planner_made_is_cancelled_with_a_follow_up
     await db_session.commit()
     response = await async_client.post(f"/api/v1/products/queue-items/{tray.id}/cancel", json={"then": "replan"})
     assert response.status_code == 409
+
+
+# --- stage 3: queue places, jobs moved by hand, plates printed by hand ----------------------
+
+
+async def _positions(db_session) -> dict[int, int]:
+    db_session.expire_all()
+    rows = await db_session.execute(
+        select(PrintQueueItem.id, PrintQueueItem.position).where(PrintQueueItem.status == "pending")
+    )
+    return dict(rows.all())
+
+
+def _queued_pieces(product: dict) -> dict[str, int]:
+    """Part name -> pieces of the product's jobs in the queue."""
+    names = {p["id"]: p["name"] for p in product["parts"]}
+    counts: dict[str, int] = {}
+    for job in product["jobs"]:
+        for piece in job["pieces"]:
+            counts[names[piece["part_id"]]] = counts.get(names[piece["part_id"]], 0) + piece["pieces"]
+    return counts
+
+
+async def _add_by_hand(db_session, library_file_id: int, position: int, printer_id: int | None = None) -> int:
+    item = PrintQueueItem(library_file_id=library_file_id, printer_id=printer_id, status="pending", position=position)
+    db_session.add(item)
+    await db_session.commit()
+    return item.id
+
+
+async def test_a_replan_keeps_waiting_jobs_where_they_are_in_the_queue(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1, "notes": "first"}, connected)
+    first = await _positions(db_session)
+    # Someone queues something else after them.
+    other_file = await _file(db_session, "keychain", "P1S", 600)
+    other = await _add_by_hand(db_session, other_file, max(first.values()) + 1)
+
+    result = await _post(
+        async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1, "notes": "second"}, connected
+    )
+    after = await _positions(db_session)
+    kept = {item_id: pos for item_id, pos in first.items() if item_id in after}
+    assert kept and len(kept) == result["kept"]
+    # The first box's prints did not go behind the keychain.
+    assert all(after[item_id] == pos < after[other] for item_id, pos in kept.items())
+    # The second box's new prints, for an order with no date, go to the end.
+    new = [item_id for item_id in after if item_id not in first and item_id != other]
+    assert new and all(after[item_id] > after[other] for item_id in new)
+
+
+async def test_new_jobs_go_before_another_products_jobs_due_later(
+    async_client: AsyncClient, db_session, box, printer_factory
+):
+    from datetime import datetime, timedelta, timezone
+
+    connected = {box.a, box.b}
+    later_file = await _file(db_session, "magnet", "P1S", 1800)
+    response = await async_client.post(
+        "/api/v1/products/",
+        json={
+            "name": "Magnet",
+            "parts": [{"name": "Magnet"}],
+            "plates": [{"library_file_id": later_file, "pieces": [{"part": 0, "pieces": 1}]}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    magnet = response.json()["id"]
+    now = datetime.now(timezone.utc)
+    await _post(
+        async_client,
+        f"/api/v1/products/{magnet}/orders",
+        {"quantity": 1, "due_date": (now + timedelta(days=3)).isoformat()},
+        connected,
+    )
+    [magnet_job] = (await _positions(db_session)).keys()
+
+    await _post(
+        async_client,
+        f"/api/v1/products/{box.id}/orders",
+        {"quantity": 1, "due_date": (now + timedelta(days=1)).isoformat()},
+        connected,
+    )
+    positions = await _positions(db_session)
+    box_jobs = [item_id for item_id in positions if item_id != magnet_job]
+    assert len(box_jobs) == 3
+    # The box ships first: its prints go before the magnet's.
+    assert all(positions[item_id] < positions[magnet_job] for item_id in box_jobs)
+
+
+async def test_an_any_job_moved_to_another_printer_on_the_timeline_stays_there(
+    async_client: AsyncClient, db_session, box
+):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    tray = next(i for i in await _queue(db_session) if i.printer_id is None)
+    reservation = await db_session.get(QueueReservation, tray.id)
+    moved_to = box.a if reservation.printer_id == box.b else box.b
+    reservation.printer_id = moved_to  # the timeline's plan, applied
+    tray_id = tray.id
+    await db_session.commit()
+
+    result = await _post(async_client, f"/api/v1/products/{box.id}/replan", None, connected)
+    assert result["held"] == 1
+    db_session.expire_all()
+    assert (await db_session.get(QueueReservation, tray_id)).printer_id == moved_to
+    assert tray_id in await _positions(db_session)
+    # The plan may move the other plates around it, but prints nothing twice.
+    assert _queued_pieces(result["product"]) == {"Lid": 1, "Base": 1, "Tray": 1}
+
+
+async def test_a_matched_part_moved_by_hand_is_kept_and_still_pairs(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    items = await _queue(db_session)
+    lid = next(i for i in items if i.library_file_id == box.files[("lid", 1)])
+    lid_id = lid.id
+    lid.printer_id = box.a if lid.printer_id == box.b else box.b  # moved to the other printer
+    moved_to = lid.printer_id
+    await db_session.commit()
+
+    result = await _post(async_client, f"/api/v1/products/{box.id}/replan", None, connected)
+    # Nothing printed twice: the moved lid pairs with a base from any printer.
+    assert result["held"] == 1
+    assert _queued_pieces(result["product"]) == {"Lid": 1, "Base": 1, "Tray": 1}
+    db_session.expire_all()
+    assert await db_session.scalar(select(PrintQueueItem.printer_id).where(PrintQueueItem.id == lid_id)) == moved_to
+
+
+async def test_a_job_moved_by_hand_leaves_when_its_order_is_cancelled(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    result = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    [order] = [o for o in result["product"]["orders"] if o["status"] == "open"]
+    tray = next(i for i in await _queue(db_session) if i.printer_id is None)
+    reservation = await db_session.get(QueueReservation, tray.id)
+    reservation.printer_id = box.a if reservation.printer_id == box.b else box.b
+    await db_session.commit()
+    await _post(async_client, f"/api/v1/products/orders/{order['id']}/cancel", None, connected)
+    assert await _positions(db_session) == {}
+
+
+async def test_a_plate_printed_by_hand_counts_and_is_not_printed_twice(async_client: AsyncClient, db_session, box):
+    from backend.app.services import products
+
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    tray = next(i for i in await _queue(db_session) if i.printer_id is None)
+    response = await async_client.delete(f"/api/v1/queue/{tray.id}")
+    assert response.status_code == 200, response.text
+    # Printed again from the library, by hand.
+    by_hand = await _add_by_hand(db_session, box.files[("tray", 1)], 50)
+
+    result = await _post(async_client, f"/api/v1/products/{box.id}/replan", None, connected)
+    assert (result["created"], result["held"]) == (0, 1)
+    job = (await db_session.execute(select(ProductJob).where(ProductJob.queue_item_id == by_hand))).scalar_one()
+    assert job.by_hand is True
+    assert (await _detail(async_client, box.id, connected))["unplanned"] == []
+
+    # It finishes: the tray is the order's.
+    db_session.expire_all()
+    item = (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.id == by_hand))).scalar_one()
+    item.status = "completed"
+    item.printer_id = box.b
+    await db_session.commit()
+    await products.after_queue_items_changed(db_session, [by_hand])
+    await db_session.commit()
+    detail = await _detail(async_client, box.id, connected)
+    [order] = [o for o in detail["orders"] if o["status"] == "open"]
+    tray_part = next(p for p in order["parts"] if p["part_id"] == box.parts["Tray"])
+    assert tray_part["ready"] == tray_part["needed"] == 1
+
+
+async def test_a_plate_printed_by_hand_is_linked_when_it_finishes(async_client: AsyncClient, db_session, box):
+    from backend.app.services import products
+
+    connected = {box.a, box.b}
+    # Nobody ordered anything yet; a lid printed from the library goes to stock.
+    item_id = await _add_by_hand(db_session, box.files[("lid", 2)], 1, printer_id=box.a)
+    item = (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))).scalar_one()
+    item.status = "completed"
+    await db_session.commit()
+    await products.after_queue_items_changed(db_session, [item_id])
+    await db_session.commit()
+    detail = await _detail(async_client, box.id, connected)
+    assert {(s["part_id"], s["printer_id"]): s["pieces"] for s in detail["stock"]} == {(box.parts["Lid"], box.a): 2}
+
+
+async def test_the_product_says_which_jobs_were_queued_or_moved_by_hand(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    tray = next(i for i in await _queue(db_session) if i.printer_id is None)
+    reservation = await db_session.get(QueueReservation, tray.id)
+    moved_to = box.a if reservation.printer_id == box.b else box.b
+    reservation.printer_id = moved_to
+    tray_id = tray.id
+    await db_session.commit()
+    detail = await _detail(async_client, box.id, connected)
+    [job] = [j for j in detail["jobs"] if j["queue_item_id"] == tray_id]
+    assert (job["moved"], job["by_hand"], job["printer_id"]) == (True, False, moved_to)
+    assert not any(j["moved"] for j in detail["jobs"] if j["queue_item_id"] != tray_id)
+
+
+async def test_a_job_moved_by_hand_stays_moved_at_the_next_plan_too(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    tray = next(i for i in await _queue(db_session) if i.printer_id is None)
+    tray_id = tray.id
+    job = (await db_session.execute(select(ProductJob).where(ProductJob.queue_item_id == tray_id))).scalar_one()
+    job.planned_printer_id = None  # a job from before the plan's printer was kept
+    reservation = await db_session.get(QueueReservation, tray_id)
+    moved_to = box.a if reservation.printer_id == box.b else box.b
+    reservation.printer_id = moved_to
+    await db_session.commit()
+    for _ in range(2):
+        result = await _post(async_client, f"/api/v1/products/{box.id}/replan", None, connected)
+        assert result["held"] == 1
+    db_session.expire_all()
+    assert (await db_session.get(QueueReservation, tray_id)).printer_id == moved_to

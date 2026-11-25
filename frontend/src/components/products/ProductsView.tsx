@@ -396,6 +396,14 @@ function ProductDetailPanel({ productId, canEdit, timeFormat, onEditOrder, onPla
                   <span className="text-xs text-bambu-gray">{formatDuration(job.print_time_seconds)}</span>
                 ) : null}
                 <span className="ml-auto flex items-center gap-1 text-xs text-bambu-gray-light">
+                  {(job.by_hand || job.moved) && (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                      title={t('products.handHint')}
+                    >
+                      {t(job.by_hand ? 'products.byHand' : 'products.movedByHand')}
+                    </span>
+                  )}
                   {job.pinned && <Pin className="w-3.5 h-3.5" aria-label={t('products.pinned')} />}
                   {job.printer_name ?? t('products.anyPrinter')}
                   <span

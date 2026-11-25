@@ -8,7 +8,7 @@ See services/products.py and services/product_planner.py.
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -149,6 +149,13 @@ class ProductJob(Base):
     job's pieces are in stock on ``printer_id``, the printer that printed them,
     less the ones found bad when someone checked them (``rejected``, part id as
     a string -> pieces). Until ``checked_at`` its pieces count as good.
+
+    Two kinds of waiting job are the user's, not the planner's, and a plan
+    keeps them as they are: one queued by hand (``by_hand``: a plate's file
+    printed from the library, the history or a printer card, linked when the
+    planner finds it), and one moved by hand to another printer than the plan
+    put it on (``planned_printer_id``). A moved job the orders no longer need
+    still leaves the queue; one queued by hand never does.
     """
 
     __tablename__ = "custom_product_jobs"
@@ -169,6 +176,12 @@ class ProductJob(Base):
     archive_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Pinned to its printer because it prints matched parts.
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The printer the plan put it on; a waiting job pinned or reserved elsewhere
+    # was moved by hand. None for jobs from before it was kept (printer_id then).
+    planned_printer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Queued by hand (a plate's file printed outside the planner), linked so its
+    # pieces count; the planner never replaces or removes it.
+    by_hand: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     status: Mapped[str] = mapped_column(String(20), default="planned")
     pieces: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

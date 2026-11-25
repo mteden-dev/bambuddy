@@ -9229,6 +9229,9 @@ export default {
       printerBadge: '待检查：{{count}}',
     },
     undo: '撤销',
+    byHand: '手动加入',
+    movedByHand: '手动移动',
+    handHint: '你的：计划会保持原样（手动移动的在没有订单需要时会移除）。',
     orderLabel: {
       forStock: '备库存',
       forStockTitle: '备库存：没有未完成的订单需要这些零件。',
