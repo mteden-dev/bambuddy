@@ -1486,6 +1486,14 @@ export default {
   queue: {
     title: 'Kolejka druku',
     subtitle: 'Planuj zadania druku i zarządzaj nimi',
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Czeka na Start',
+      nextWaits: 'Następne w kolejce czeka na Start',
+      wontStart: 'Nie ruszy samo: sprawdź i naciśnij Start.',
+      start: 'Start',
+      afterClear: '{{name}} nie ruszy samo: {{reason}}. Naciśnij Start na karcie.',
+    },
     filamentShort: {
       rowBadge: 'Za mało filamentu na przypisanej szpuli',
       rowTooltip: 'Harmonogram wysyłania oznaczył ten element. Kliknij Odtwórz, aby zobaczyć braki dla poszczególnych slotów i zdecydować, czy mimo to drukować.',

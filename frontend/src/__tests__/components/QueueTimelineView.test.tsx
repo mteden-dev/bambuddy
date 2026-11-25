@@ -136,6 +136,27 @@ describe('QueueTimelineView', () => {
     expect(pinnedBar.className).not.toContain('border-dashed');
   });
 
+  it('marks a job held by a short spool and starts it from its details (fork)', async () => {
+    const held = job(5, 'Short spool box', { printer_id: 1, target_model: null, manual_start: true, filament_short: true });
+    const base = forecast();
+    vi.mocked(api.getQueueForecast).mockResolvedValue(
+      forecast({
+        placements: [...base.placements, { item_id: 5, printer_id: 1, start: iso(2), end: iso(3), projected: false }],
+      }),
+    );
+    const onStartItem = vi.fn();
+    renderTimeline({ queueItems: [...queueItems, held], onStartItem });
+    const tile = await within(lane(1)).findByTitle((title) => title.startsWith('Short spool box'));
+    expect(tile).toHaveAttribute('data-hold', 'problem');
+    expect(tile.getAttribute('title')).toContain('queue.filamentShort.rowBadge');
+    expect(tile.className).toContain('border-red-400');
+    fireEvent.click(tile);
+    const details = await screen.findByTestId('queue-job-details');
+    expect(within(details).getByTestId('queue-job-hold')).toHaveTextContent('queue.filamentShort.rowBadge');
+    fireEvent.click(within(details).getByRole('button', { name: /queue\.hold\.start/ }));
+    expect(onStartItem).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }));
+  });
+
   describe('bar size (fork)', () => {
     const tallness = window.innerHeight;
     afterEach(() => {
@@ -502,8 +523,10 @@ describe('QueueTimelineView', () => {
 
         const staging = await within(lane(2)).findByTitle((title) => title.startsWith('Staged lid'));
         expect(staging).toHaveAttribute('data-manual', 'true');
-        expect(staging).toHaveTextContent('queue.timeline.manualStart');
-        expect(staging.getAttribute('title')).toContain('queue.timeline.manualStartHelp: Load PETG');
+        // Fork: what holds it (a filament to load) is a problem, said on the bar.
+        expect(staging).toHaveAttribute('data-hold', 'problem');
+        expect(staging).toHaveTextContent('Load PETG');
+        expect(staging.getAttribute('title')).toContain('Load PETG — queue.hold.wontStart');
         expect(screen.getByTestId('legend-manual')).toHaveTextContent('queue.timeline.legend.manual');
         expect(screen.queryByText(/queue\.timeline\.offTimeline\.title/)).not.toBeInTheDocument();
         // A job that starts by itself carries no such mark.

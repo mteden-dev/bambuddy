@@ -3045,6 +3045,7 @@ export function QueuePage() {
           onEditItem={setEditItem}
           onCancelItem={(item) => requestAction({ type: 'cancel', item })}
           onStopItem={(item) => requestAction({ type: 'stop', item })}
+          onStartItem={(item) => startMutation.mutate({ id: item.id })}
           t={t}
         />
       ) : activeTab === 'history' ? (

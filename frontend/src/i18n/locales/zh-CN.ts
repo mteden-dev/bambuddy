@@ -1472,6 +1472,14 @@ export default {
 
   // Queue page
   queue: {
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: '等待开始',
+      nextWaits: '队列中的下一项等待开始',
+      wontStart: '不会自动开始：请检查后点击开始。',
+      start: '开始',
+      afterClear: '{{name}} 不会自动开始：{{reason}}。请在卡片上点击开始。',
+    },
     filamentShort: {
       rowBadge: '所分配料盘的耀丝不足',
       rowTooltip: '调度程序已标记该项。点击播放查看各插槽的赤字并决定是否仍要打印。',

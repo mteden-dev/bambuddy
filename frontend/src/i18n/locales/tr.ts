@@ -1474,6 +1474,14 @@ export default {
   queue: {
     title: 'Baskı Kuyruğu',
     subtitle: 'Baskı işlerinizi zamanlayın ve yönetin',
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Başlat bekliyor',
+      nextWaits: 'Kuyruktaki sonraki iş Başlat bekliyor',
+      wontStart: 'Kendiliğinden başlamaz: kontrol edip Başlat\'a basın.',
+      start: 'Başlat',
+      afterClear: '{{name}} kendiliğinden başlamaz: {{reason}}. Karttaki Başlat\'a basın.',
+    },
     filamentShort: {
       rowBadge: 'Atanan makara için yetersiz filament',
       rowTooltip: 'Sevk planlayıcı bu öğeyi işaretledi. Yuva başına eksikliği görmek ve yine de yazdırıp yazdırmayacağınıza karar vermek için Oynat\'a tıklayın.',

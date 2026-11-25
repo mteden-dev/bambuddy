@@ -1472,6 +1472,14 @@ export default {
 
   // Queue page
   queue: {
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Espera a Iniciar',
+      nextWaits: 'El siguiente en la cola espera a Iniciar',
+      wontStart: 'No empezará solo: revísalo y pulsa Iniciar.',
+      start: 'Iniciar',
+      afterClear: '{{name}} no empezará solo: {{reason}}. Pulsa Iniciar en la tarjeta.',
+    },
     filamentShort: {
       rowBadge: 'Filamento insuficiente para la bobina asignada',
       rowTooltip: 'El planificador marco este elemento. Pulsa Reproducir para ver el deficit por slot y decidir si imprimir de todos modos.',

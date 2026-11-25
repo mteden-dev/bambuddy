@@ -1472,6 +1472,14 @@ export default {
 
   // Queue page
   queue: {
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Attende Avvia',
+      nextWaits: 'Il prossimo in coda attende Avvia',
+      wontStart: 'Non partirà da solo: controlla e premi Avvia.',
+      start: 'Avvia',
+      afterClear: '{{name}} non partirà da solo: {{reason}}. Premi Avvia sulla scheda.',
+    },
     filamentShort: {
       rowBadge: 'Filamento insufficiente per la bobina assegnata',
       rowTooltip: 'Lo scheduler ha segnalato questo elemento. Premi Play per vedere il deficit per slot e decidere se stampare comunque.',

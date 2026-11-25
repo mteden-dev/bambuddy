@@ -1884,6 +1884,14 @@ export default {
       noEditItems: '대기열 항목을 편집할 권한이 없습니다',
       noCancelItems: '대기열 항목을 취소할 권한이 없습니다'
     },
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: '시작 대기',
+      nextWaits: '다음 대기열 작업이 시작을 기다림',
+      wontStart: '자동으로 시작되지 않습니다. 확인 후 시작을 누르세요.',
+      start: '시작',
+      afterClear: '{{name}}은(는) 자동으로 시작되지 않습니다: {{reason}}. 카드에서 시작을 누르세요.',
+    },
     filamentShort: {
       rowBadge: '할당된 스풀의 필라멘트가 부족합니다',
       rowTooltip: '디스패치 스케줄러가 이 항목을 표시했습니다. 재생 버튼을 클릭하여 슬롯별 부족량을 확인하고 인쇄 여부를 결정하세요.',

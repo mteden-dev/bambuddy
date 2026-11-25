@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   CalendarClock,
   Clock,
+  Hand,
+  Play,
   Layers,
   Lock,
   LockOpen,
@@ -22,6 +25,7 @@ import { queueJobModels, queueJobName, queueJobPrintTime, queueJobThumbnailUrl }
 import { Button } from './Button';
 import { QueueItemTagChips } from './QueueItemTagChips';
 import { OrderLabelChip } from './OrderLabelChip';
+import { queueHold } from '../utils/queueHold';
 
 /** Where a job is sent: one printer, or back to any printer of a model. */
 export type QueuePinTarget = { printer_id: number } | { target_model: string };
@@ -50,6 +54,8 @@ export interface QueueJobDetailsProps {
   onEdit?: () => void;
   onCancel?: () => void;
   onStop?: () => void;
+  /** Fork: press Start on a job waiting for it (manual start). */
+  onStart?: () => void;
   onClose: () => void;
   t: (key: string, options?: Record<string, unknown>) => string;
 }
@@ -101,6 +107,7 @@ export function QueueJobDetails({
   onEdit,
   onCancel,
   onStop,
+  onStart,
   onClose,
   t,
 }: QueueJobDetailsProps) {
@@ -142,6 +149,8 @@ export function QueueJobDetails({
       : item.target_model
         ? `${t('queue.filter.any')} ${item.target_model}${item.target_location ? ` @ ${item.target_location}` : ''}`
         : t('queue.filter.unassigned');
+  // Fork: a job waiting for Start never starts by itself; say why, loudly when a problem holds it.
+  const hold = isPrinting ? null : queueHold(item, t);
   const status = isPrinting
     ? progress != null
       ? t('queue.timeline.details.printingProgress', { progress: Math.round(progress) })
@@ -198,7 +207,29 @@ export function QueueJobDetails({
                   : t('queue.timeline.details.expected', { printer: nameOf(expected.printerId) })}
               </div>
             )}
-            <div className="mt-2 text-xs text-bambu-gray break-words">{status}</div>
+            {hold ? (
+              <div
+                role="status"
+                data-testid="queue-job-hold"
+                className={`mt-2 rounded-lg px-2.5 py-2 text-xs flex items-start gap-2 ${
+                  hold.problem
+                    ? 'bg-red-500/10 border border-red-400/60 text-red-700 dark:text-red-300'
+                    : 'bg-purple-500/10 border border-purple-400/40 text-purple-700 dark:text-purple-300'
+                }`}
+              >
+                {hold.problem ? (
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-px" aria-hidden />
+                ) : (
+                  <Hand className="w-4 h-4 shrink-0 mt-px" aria-hidden />
+                )}
+                <span className="break-words">
+                  <span className="font-medium">{hold.text}</span>
+                  <span className="block text-bambu-gray">{t('queue.hold.wontStart')}</span>
+                </span>
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-bambu-gray break-words">{status}</div>
+            )}
             {isPrinting && progress != null && (
               <div className="mt-2 h-1.5 rounded-full bg-bambu-dark overflow-hidden">
                 <div className="h-full bg-blue-400" style={{ width: `${progress}%` }} />
@@ -373,6 +404,12 @@ export function QueueJobDetails({
             <Button variant="secondary" onClick={onEdit} disabled={!canModify}>
               <Pencil className="w-4 h-4" />
               {t('queue.timeline.details.edit')}
+            </Button>
+          )}
+          {hold && onStart && (
+            <Button onClick={onStart} disabled={!canModify}>
+              <Play className="w-4 h-4" />
+              {t('queue.hold.start')}
             </Button>
           )}
         </div>

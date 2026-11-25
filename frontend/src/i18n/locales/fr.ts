@@ -1472,6 +1472,14 @@ export default {
 
   // Queue page
   queue: {
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Attend Démarrer',
+      nextWaits: 'Le suivant dans la file attend Démarrer',
+      wontStart: 'Ne démarrera pas seul : vérifiez et appuyez sur Démarrer.',
+      start: 'Démarrer',
+      afterClear: '{{name}} ne démarrera pas seul : {{reason}}. Appuyez sur Démarrer sur la carte.',
+    },
     filamentShort: {
       rowBadge: 'Filament insuffisant pour la bobine assignee',
       rowTooltip: "Le planificateur a signale cet element. Cliquez sur Lecture pour voir le deficit par emplacement et decider de lancer quand meme l'impression.",

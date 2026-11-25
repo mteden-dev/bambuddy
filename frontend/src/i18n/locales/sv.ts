@@ -1484,6 +1484,14 @@ export default {
   queue: {
     title: 'Utskriftskö',
     subtitle: 'Schemalägg och hantera dina utskriftsjobb',
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Väntar på Start',
+      nextWaits: 'Nästa i kön väntar på Start',
+      wontStart: 'Startar inte av sig själv: kontrollera och tryck på Start.',
+      start: 'Start',
+      afterClear: '{{name}} startar inte av sig själv: {{reason}}. Tryck på Start på kortet.',
+    },
     filamentShort: {
       rowBadge: 'Otillräckligt filament för den tilldelade rullen',
       rowTooltip: 'Utskicksschemaläggaren markerade denna post. Klicka på Spela för att se underskottet per fack och bestämma om du vill skriva ut ändå.',

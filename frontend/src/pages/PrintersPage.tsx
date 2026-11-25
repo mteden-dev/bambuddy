@@ -186,7 +186,9 @@ import { PrinterHASensorRow } from '../components/PrinterHASensorRow';
 import { AMSHistoryModal } from '../components/AMSHistoryModal';
 import { AmsBackupModal } from '../components/AmsBackupModal';
 import { HeaterHistoryModal } from '../components/HeaterHistoryModal';
-import type { HeaterSensorKind } from '../api/client';
+import type { HeaterSensorKind, PrintQueueItem } from '../api/client';
+import { queueHold } from '../utils/queueHold';
+import { queueItemDisplayName } from '../utils/queueItemName';
 import { SlotSpoolActions, SlotSpoolAdjustModal, SlotSpoolBadge } from '../components/slotSpool/SlotSpoolSlotUi';
 import { useKeepSameRoll, useSlotSpoolPrompts } from '../hooks/useSlotSpools';
 import { SLOT_SPOOL_ORIGIN, canLoadSlotRoll, slotSpoolRingClass, slotSpoolState, spoolGramsLeft } from '../utils/slotSpools';
@@ -2966,7 +2968,16 @@ function PrinterCard({
   const clearPlateMutation = useMutation({
     mutationFn: () => api.clearPlate(printer.id),
     onSuccess: () => {
-      showToast(t('queue.clearPlateSuccess'));
+      // Fork: a next job waiting for Start does not start now the plate is
+      // clear. Say so before anyone walks away expecting it to.
+      const queued = queryClient.getQueryData<PrintQueueItem[]>(['queue', printer.id, 'pending', printer.model]);
+      const next = queued?.find((item) => item.status === 'pending');
+      const hold = next ? queueHold(next, t) : null;
+      if (next && hold) {
+        showToast(t('queue.hold.afterClear', { name: queueItemDisplayName(next), reason: hold.text }), 'warning');
+      } else {
+        showToast(t('queue.clearPlateSuccess'));
+      }
       queryClient.setQueryData(['printerStatus', printer.id], (old: PrinterStatus | undefined) =>
         old ? { ...old, awaiting_plate_clear: false } : old
       );

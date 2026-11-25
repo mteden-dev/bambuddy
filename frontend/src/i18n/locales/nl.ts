@@ -1484,6 +1484,14 @@ export default {
   queue: {
     title: 'Afdrukwachtrij',
     subtitle: 'Plan en beheer je afdruktaken',
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Wacht op Start',
+      nextWaits: 'Volgende in de wachtrij wacht op Start',
+      wontStart: 'Start niet vanzelf: controleer en druk op Start.',
+      start: 'Start',
+      afterClear: '{{name}} start niet vanzelf: {{reason}}. Druk op Start op de kaart.',
+    },
     filamentShort: {
       rowBadge: 'Onvoldoende filament op de toegewezen spoel',
       rowTooltip: 'De verzendscheduler heeft dit item gemarkeerd. Klik op Afspelen om het tekort per sleuf te bekijken en te bepalen of je toch wilt afdrukken.',

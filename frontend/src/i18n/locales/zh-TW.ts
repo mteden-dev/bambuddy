@@ -1472,6 +1472,14 @@ export default {
 
   // Queue page
   queue: {
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: '等待開始',
+      nextWaits: '佇列中的下一項等待開始',
+      wontStart: '不會自動開始：請檢查後按開始。',
+      start: '開始',
+      afterClear: '{{name}} 不會自動開始：{{reason}}。請在卡片上按開始。',
+    },
     filamentShort: {
       rowBadge: '所分配料盤的線材不足',
       rowTooltip: '調度程式已標記此項目。點擊播放查看各槽位的不足量，並決定是否仍要列印。',

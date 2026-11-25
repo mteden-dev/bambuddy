@@ -1486,6 +1486,14 @@ export default {
   queue: {
     title: 'Print Queue',
     subtitle: 'Schedule and manage your print jobs',
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Waits for Start',
+      nextWaits: 'Next in queue waits for Start',
+      wontStart: 'It will not start by itself: check it and press Start.',
+      start: 'Start',
+      afterClear: '{{name}} will not start by itself: {{reason}}. Press Start on the card.',
+    },
     filamentShort: {
       rowBadge: 'Insufficient filament for the assigned spool',
       rowTooltip: 'The dispatch scheduler flagged this item. Click Play to see the per-slot deficit and decide whether to print anyway.',

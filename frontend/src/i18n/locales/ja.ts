@@ -1471,6 +1471,14 @@ export default {
 
   // Queue page
   queue: {
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: '開始待ち',
+      nextWaits: 'キューの次の印刷は開始待ち',
+      wontStart: '自動では始まりません。確認して開始を押してください。',
+      start: '開始',
+      afterClear: '{{name}} は自動では始まりません: {{reason}}。カードで開始を押してください。',
+    },
     filamentShort: {
       rowBadge: '割り当てられたスプールのフィラメントが不足しています',
       rowTooltip: 'スケジューラーがこのアイテムをフラグしました。再生ボタンをクリックしてスロットごとの不足量を確認し、それでも印刷するか判断してください。',

@@ -18,6 +18,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import {
+  AlertTriangle,
   CalendarClock,
   Check,
   ChevronLeft,
@@ -57,6 +58,7 @@ import { StaffedHoursDialog } from './StaffedHoursDialog';
 import { useJobOrders } from '../hooks/useJobOrders';
 import { jobOrdersText, urgentFirst } from '../utils/baseOrders';
 import { fitBarHeight, LANE_BAR_HEIGHT_PX, LANE_PADDING_PX } from '../utils/timelineLayout';
+import { queueHold } from '../utils/queueHold';
 
 /** Gantt-style rolling timeline. One horizontal swimlane per printer. A
  *  print that is running is drawn from the printer's live status; every
@@ -182,6 +184,8 @@ interface QueueTimelineViewProps {
   onEditItem?: (item: PrintQueueItem) => void;
   onCancelItem?: (item: PrintQueueItem) => void;
   onStopItem?: (item: PrintQueueItem) => void;
+  /** Fork: press Start on a job waiting for it (manual start). */
+  onStartItem?: (item: PrintQueueItem) => void;
   t: (key: string, options?: Record<string, unknown>) => string;
 }
 
@@ -252,6 +256,7 @@ function TimelineBar({
   const barHeight = useContext(BarHeightContext);
   const displayName = queueJobName(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
+  const hold = isPrinting ? null : queueHold(ev.item, t);
   const printTime = queueJobPrintTime(ev.item, ev.variant);
   const models = queueJobModels(ev.item);
   // Fork (products): the order(s) a product job prints for.
@@ -270,10 +275,13 @@ function TimelineBar({
     isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null,
     ev.projected && models.length > 0 ? `${t('queue.filter.any')} ${models.join(' / ')}` : null,
     ev.item.batch_name ? `batch: ${ev.item.batch_name}` : null,
-    // Placed from when someone is expected to be there to press Start.
-    !isPrinting && ev.item.manual_start
-      ? [t('queue.timeline.manualStartHelp'), ev.item.waiting_reason].filter(Boolean).join(': ')
-      : null,
+    // Placed from when someone is expected to be there to press Start; held
+    // by a problem (fork), it says which and that it will not start by itself.
+    hold?.problem
+      ? `${hold.text} — ${t('queue.hold.wontStart')}`
+      : !isPrinting && ev.item.manual_start
+        ? [t('queue.timeline.manualStartHelp'), ev.item.waiting_reason].filter(Boolean).join(': ')
+        : null,
   ].filter(Boolean).join(' · ');
   return (
     <button
@@ -286,6 +294,7 @@ function TimelineBar({
       data-kind={isPrinting ? 'printing' : ev.reserved ? 'reserved' : ev.projected ? 'projected' : 'pinned'}
       data-moved={ev.moved ? 'true' : undefined}
       data-manual={!isPrinting && ev.item.manual_start ? 'true' : undefined}
+      data-hold={hold?.problem ? 'problem' : undefined}
       className={`@container absolute rounded-md transition-[filter,opacity] hover:brightness-110 hover:z-10 overflow-hidden flex items-center gap-1.5 px-1.5 text-left ${barClasses(ev)} ${
         ev.moved ? 'ring-2 ring-amber-300/80 ring-offset-1 ring-offset-bambu-dark-secondary' : ''
       } ${draggable ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging || dimmed ? 'opacity-40' : ''}`}
@@ -303,6 +312,11 @@ function TimelineBar({
 
 function barClasses(ev: ScheduleEvent): string {
   if (ev.type === 'printing') return 'bg-blue-500/30 border border-blue-400/60';
+  // Fork: held by a problem (the spool is short, a filament is not loaded):
+  // it will not start by itself, whatever its lane says.
+  if (ev.item.status === 'pending' && ev.item.manual_start && (ev.item.filament_short || ev.item.waiting_reason)) {
+    return 'bg-red-500/15 border-2 border-red-400/80';
+  }
   // Held for its printer: solid like a pinned job, amber like the plan.
   if (ev.reserved) return 'bg-amber-500/15 border border-amber-400/60';
   const batched = ev.item.batch_id != null;
@@ -335,19 +349,22 @@ function BarContent({
   const isPrinting = ev.type === 'printing';
   const printTime = queueJobPrintTime(ev.item, ev.variant);
   const manual = !isPrinting && ev.item.manual_start;
+  const hold = isPrinting ? null : queueHold(ev.item, t);
+  const manualText = hold?.problem ? hold.text : manual ? t('queue.timeline.manualStart') : null;
   const tall = height >= 64;
   const roomy = height >= 96;
   const progress = isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null;
   const when = `${formatTooltipTime(ev.estimatedStart)}–${formatTooltipTime(ev.estimatedEnd)}`;
   const second = [
+    hold?.problem ? hold.text : null,
     orderText,
-    manual ? t('queue.timeline.manualStart') : null,
+    !hold?.problem && manual ? t('queue.timeline.manualStart') : null,
     anyModelLabel(ev, t),
     printTime ? formatDuration(printTime) : null,
     progress,
   ].filter(Boolean).join(' · ');
   const timing = [when, printTime ? formatDuration(printTime) : null, progress].filter(Boolean).join(' · ');
-  const more = [manual ? t('queue.timeline.manualStart') : null, anyModelLabel(ev, t), ev.item.batch_name]
+  const more = [hold?.problem ? null : manualText, anyModelLabel(ev, t), ev.item.batch_name]
     .filter(Boolean)
     .join(' · ');
   const thumbSize = tall ? Math.min(height - 12, 80) : 28;
@@ -368,7 +385,9 @@ function BarContent({
             roomy ? 'text-sm items-start' : 'text-xs items-center'
           }`}
         >
-          {!isPrinting && (manual
+          {!isPrinting && (hold?.problem
+            ? <AlertTriangle className="w-3 h-3 shrink-0 text-red-300 mt-0.5" aria-hidden />
+            : manual
             ? <Hand className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />
             : ev.reserved
             ? <Lock className="w-3 h-3 shrink-0 text-amber-300 mt-0.5" aria-hidden />
@@ -379,6 +398,11 @@ function BarContent({
         </div>
         {tall ? (
           <>
+            {hold?.problem && (
+              <div className="text-[11px] text-red-200 font-medium truncate leading-tight mt-0.5" data-bar-line="hold">
+                {hold.text}
+              </div>
+            )}
             {orderText && (
               <div className="text-[11px] text-white/80 truncate leading-tight mt-0.5" data-bar-line="orders">
                 {orderText}
@@ -461,11 +485,14 @@ function LaneTrack({
 function OffTimelineChip({
   item,
   reason,
+  problem = false,
   draggable,
   onClick,
 }: {
   item: PrintQueueItem;
   reason: string;
+  /** Fork: held by a problem (the spool is short, a filament is not loaded). */
+  problem?: boolean;
   draggable: boolean;
   onClick: () => void;
 }) {
@@ -482,16 +509,20 @@ function OffTimelineChip({
       {...listeners}
       onClick={onClick}
       title={`${queueJobName(item)} · ${reason}`}
-      className={`flex items-center gap-2 max-w-[260px] rounded-md border border-bambu-dark-tertiary bg-bambu-dark/60 px-2 py-1 text-left hover:brightness-110 ${
+      data-hold={problem ? 'problem' : undefined}
+      className={`flex items-center gap-2 max-w-[260px] rounded-md border px-2 py-1 text-left hover:brightness-110 ${
+        problem ? 'border-red-400/70 bg-red-500/10' : 'border-bambu-dark-tertiary bg-bambu-dark/60'
+      } ${
         draggable ? 'cursor-grab active:cursor-grabbing' : ''
       } ${isDragging ? 'opacity-40' : ''}`}
     >
       {thumbnailUrl && (
         <img src={thumbnailUrl} alt="" className="w-6 h-6 rounded object-cover shrink-0" draggable={false} />
       )}
+      {problem && <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-400" aria-hidden />}
       <div className="min-w-0">
         <div className="text-xs text-white truncate">{queueJobName(item)}</div>
-        <div className="text-[10px] text-bambu-gray truncate">{reason}</div>
+        <div className={`text-[10px] truncate ${problem ? 'text-red-300' : 'text-bambu-gray'}`}>{reason}</div>
       </div>
     </button>
   );
@@ -511,6 +542,7 @@ export function QueueTimelineView({
   onEditItem,
   onCancelItem,
   onStopItem,
+  onStartItem,
   t,
 }: QueueTimelineViewProps) {
   // Tick "now" every minute so the NOW line and ETA labels stay live.
@@ -1706,12 +1738,18 @@ export function QueueTimelineView({
               <div className="flex flex-wrap gap-2">
                 {offTimeline.map(({ entry, item }) => {
                   const label = t(`queue.timeline.offTimeline.${OFF_TIMELINE_KEYS[entry.reason] ?? 'waiting'}`);
-                  const reason = entry.reason === 'waiting' && entry.detail ? entry.detail : label;
+                  const hold = queueHold(item, t);
+                  const reason = hold?.problem
+                    ? hold.text
+                    : entry.reason === 'waiting' && entry.detail
+                      ? entry.detail
+                      : label;
                   return (
                     <OffTimelineChip
                       key={item.id}
                       item={item}
                       reason={reason}
+                      problem={!!hold?.problem}
                       // A job held off the lanes is not part of the plan.
                       draggable={false}
                       onClick={() => setDetails({ itemId: item.id })}
@@ -1782,6 +1820,7 @@ export function QueueTimelineView({
           onEdit={onEditItem ? () => { setDetails(null); onEditItem(detailsItem); } : undefined}
           onCancel={onCancelItem ? () => { setDetails(null); onCancelItem(detailsItem); } : undefined}
           onStop={onStopItem ? () => { setDetails(null); onStopItem(detailsItem); } : undefined}
+          onStart={onStartItem ? () => { setDetails(null); onStartItem(detailsItem); } : undefined}
           onClose={() => setDetails(null)}
           t={t}
         />

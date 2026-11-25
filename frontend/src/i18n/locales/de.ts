@@ -1472,6 +1472,14 @@ export default {
 
   // Queue page
   queue: {
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Wartet auf Start',
+      nextWaits: 'Nächster in der Warteschlange wartet auf Start',
+      wontStart: 'Startet nicht von selbst: prüfen und Start drücken.',
+      start: 'Start',
+      afterClear: '{{name}} startet nicht von selbst: {{reason}}. Drücke Start auf der Karte.',
+    },
     filamentShort: {
       rowBadge: 'Filament fuer die zugewiesene Spule reicht nicht',
       rowTooltip: 'Der Dispatcher hat diese Position markiert. Klicke auf Play, um den Pro-Slot-Fehlbestand zu sehen und zu entscheiden, ob trotzdem gedruckt werden soll.',

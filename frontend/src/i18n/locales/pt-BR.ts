@@ -1472,6 +1472,14 @@ export default {
 
   // Queue page
   queue: {
+    // Fork: why a waiting job will not start by itself (manual start).
+    hold: {
+      staged: 'Aguarda Iniciar',
+      nextWaits: 'O próximo da fila aguarda Iniciar',
+      wontStart: 'Não vai começar sozinho: confira e toque em Iniciar.',
+      start: 'Iniciar',
+      afterClear: '{{name}} não vai começar sozinho: {{reason}}. Toque em Iniciar no cartão.',
+    },
     filamentShort: {
       rowBadge: 'Filamento insuficiente para a bobina atribuida',
       rowTooltip: 'O escalonador sinalizou este item. Clique em Play para ver o deficit por slot e decidir se quer imprimir mesmo assim.',
