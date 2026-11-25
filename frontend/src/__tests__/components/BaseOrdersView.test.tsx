@@ -9,7 +9,7 @@ import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
 import { server } from '../mocks/server';
 import { BaseOrdersView } from '../../components/products/BaseOrdersView';
-import type { BaseOrder, BaseSyncSettings } from '../../api/client';
+import type { BaseOrder, BaseSyncSettings, BaseWithdrawPreview } from '../../api/client';
 
 const SETTINGS: BaseSyncSettings = {
   enabled: true,
@@ -119,6 +119,10 @@ let drafts: { id: number; body: unknown }[];
 let acceptReply: BaseOrder;
 let resets: number[];
 let skipped: number[];
+let skipBodies: unknown[];
+let previews: { return_done: boolean }[];
+let preview: BaseWithdrawPreview;
+const NO_CHANGE: BaseWithdrawPreview = { removed: [], added: [], printing: [], to_stock: [], done: [] };
 let mapped: { sku: string; body: unknown }[];
 let saved: unknown[];
 
@@ -136,6 +140,9 @@ beforeEach(() => {
   acceptReply = { ...ORDER, state: 'accepted' };
   resets = [];
   skipped = [];
+  skipBodies = [];
+  previews = [];
+  preview = NO_CHANGE;
   mapped = [];
   saved = [];
   server.use(
@@ -181,9 +188,16 @@ beforeEach(() => {
       resets.push(Number(params.id));
       return HttpResponse.json(ORDER);
     }),
-    http.post('/api/v1/base-sync/orders/:id/skip', ({ params }) => {
+    http.post('/api/v1/base-sync/orders/:id/skip', async ({ params, request }) => {
       skipped.push(Number(params.id));
+      const text = await request.text();
+      skipBodies.push(text ? JSON.parse(text) : null);
       return HttpResponse.json({ ...ORDER, state: 'skipped' });
+    }),
+    http.post('/api/v1/base-sync/orders/:id/skip/preview', async ({ request }) => {
+      const body = (await request.json()) as { return_done: boolean };
+      previews.push(body);
+      return HttpResponse.json(preview);
     }),
     http.put('/api/v1/base-sync/skus/:sku', async ({ params, request }) => {
       mapped.push({ sku: String(params.sku), body: await request.json() });
@@ -448,6 +462,82 @@ describe('BaseOrdersView', () => {
     expect(await screen.findByText(/Lid 0\/1/)).toBeInTheDocument();
     expect(screen.queryByText(/Not in the queue/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send again' })).not.toBeInTheDocument();
+  });
+
+  it('withdrawing says first what leaves the queue and what goes to stock, then can be undone', async () => {
+    orders = [{ ...ORDER, state: 'accepted' }];
+    preview = {
+      removed: [
+        {
+          queue_item_id: 31,
+          filename: 'lid_x2.gcode.3mf',
+          printer_name: 'P1S-A',
+          pieces: [{ part_id: 41, name: 'Lid', pieces: 2 }],
+        },
+      ],
+      added: [
+        {
+          queue_item_id: 40,
+          filename: 'lid_x1.gcode.3mf',
+          printer_name: 'P1S-A',
+          pieces: [{ part_id: 41, name: 'Lid', pieces: 1 }],
+        },
+      ],
+      printing: [
+        {
+          queue_item_id: 30,
+          filename: 'base_x2.gcode.3mf',
+          printer_name: 'P1S-B',
+          pieces: [{ part_id: 42, name: 'Base', pieces: 2 }],
+        },
+      ],
+      to_stock: [{ part_id: 42, name: 'Base', pieces: 1 }],
+      done: [],
+    };
+    const accepts = accepted;
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Parts' }));
+    await user.click(screen.getByRole('button', { name: 'Withdraw from production' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Withdraw order nick_5001?' });
+    expect(await within(dialog).findByText('lid_x2')).toBeInTheDocument();
+    expect(within(dialog).getByText('Leave the queue')).toBeInTheDocument();
+    expect(within(dialog).getByText('lid_x1')).toBeInTheDocument();
+    expect(within(dialog).getByText('base_x2')).toBeInTheDocument();
+    expect(within(dialog).getByText('Into stock, for no order: Base ×1')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Withdraw from production' }));
+    await waitFor(() => expect(skipped).toEqual([5001]));
+    expect(skipBodies).toEqual([{ return_done: false }]);
+    // Undo sends it again as it was.
+    await user.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(accepts).toEqual([{ id: 5001, body: null }]));
+    expect(await screen.findByText('The order is back in production.')).toBeInTheDocument();
+  });
+
+  it('withdrawing a ready order asks whether its boxes go back to stock', async () => {
+    orders = [{ ...ORDER, state: 'accepted', ready: true }];
+    preview = {
+      ...NO_CHANGE,
+      to_stock: [{ part_id: 41, name: 'Lid', pieces: 2 }],
+      done: [{ product_id: 4, name: '9mm 100 Black', units: 2 }],
+    };
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Parts' }));
+    await user.click(screen.getByRole('button', { name: 'Withdraw from production' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Withdraw order nick_5001?' });
+    const box = await within(dialog).findByRole('checkbox', { name: /Put what is done for it back in stock: 2× 9mm 100 Black/ });
+    expect(box).toBeChecked();
+    expect(previews).toEqual([{ return_done: true }]);
+    // Unticked: asked again without (the boxes then stay with it), and withdrawn without.
+    preview = { ...preview, to_stock: [] };
+    await user.click(box);
+    await waitFor(() => expect(previews).toEqual([{ return_done: true }, { return_done: false }]));
+    await waitFor(() => expect(within(dialog).queryByText(/Into stock/)).toBeNull());
+    expect(within(dialog).getByRole('checkbox')).not.toBeChecked();
+    await user.click(within(dialog).getByRole('button', { name: 'Withdraw from production' }));
+    await waitFor(() => expect(skipBodies).toEqual([{ return_done: false }]));
   });
 
   it('a failed load says so and can try again', async () => {

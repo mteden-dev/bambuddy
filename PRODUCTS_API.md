@@ -215,7 +215,14 @@ i pozycje (SKU, nazwa, ilość). Imienia, adresu, telefonu ani maila nie zapisuj
   dokładka: zamówienie pamięta go (`on_hand`) i kolejna zmiana dokłada lub odejmuje tylko różnicę.
   To samo wywołanie na zatwierdzonym zamówieniu zmienia wybór (`units: 0` anuluje zamówienie
   produktu). `POST /base-sync/orders/{order_id}/reset` cofa przyjęcie albo pominięcie (zamówienie
-  znowu czeka, części „mam” wychodzą ze stanu). Lista czekających i zatwierdzonych jest w kolejności
+  znowu czeka, części „mam” wychodzą ze stanu, a to, co już było dla niego gotowe, wraca na stan).
+  `POST /base-sync/orders/{order_id}/skip` pomija czekające albo wycofuje zamówienie z produkcji;
+  z `{"return_done": true}` gotowe dla niego produkty wracają na stan (pudełka leżą na półce), a
+  ponowne `accept` cofa wycofanie. `POST /base-sync/orders/{order_id}/skip/preview` z tym samym
+  ciałem mówi, co by się stało, niczego nie zapisując: `removed` (czekające wydruki, które znikną),
+  `added` (płyty dodane w zamian dla zamówień ze wspólnej płyty), `printing` (drukujące się dla
+  niego, dokończą się), `to_stock` (części, które zostaną na stanie bez zamówienia) i `done`
+  (produkty gotowe dla niego). Lista czekających i zatwierdzonych jest w kolejności
   realizacji: najpierw Allegro po terminie wysyłki (dziś, jutro, pojutrze, później), potem zamówienia
   bez terminu (sklep) od najstarszego; `?source=allegro` albo `?source=shop` zawęża do źródła. Każde
   zamówienie ma `label` (nick z Allegro albo krótki numer ze sklepu), `source_kind` (`allegro`
@@ -236,7 +243,8 @@ i pozycje (SKU, nazwa, ilość). Imienia, adresu, telefonu ani maila nie zapisuj
   bywa dla kilku zamówień. Dopóki zamówienie jest w którymś z tych statusów, zmiany pozycji w Base (ilość,
   nowa pozycja, dopisane SKU) idą za nim. Zamówienie przestawione w Base dalej (np. „W produkcji”)
   zachowuje swoje druki; to w statusie anulowanych (`cancel_status_id`) anuluje otwarte zamówienia
-  produktów.
+  produktów, a jeśli było jeszcze w tych statusach (nie spakowane, nie wysłane), także gotowe: ich
+  pudełka wracają na stan.
 - **Termin** to termin wysyłki z platformy: `ship_date_to` z `getOrderTransactionData` w Base
   (dla Allegro koniec dnia, w którym trzeba wysłać). Bambuddy czyta go raz na zamówienie (do 40
   zamówień na odczyt, reszta przy następnym) i pokazuje jako `ship_by` w `GET /base-sync/orders`;

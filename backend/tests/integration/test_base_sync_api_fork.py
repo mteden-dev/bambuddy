@@ -756,3 +756,190 @@ async def test_withdrawing_a_base_order_from_its_print_in_the_queue(
         list((await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars())
         == []
     )
+
+
+async def _accept(client: AsyncClient, order_id: int, connected: set[int]) -> dict:
+    online, status = _live(connected)
+    with online, status:
+        response = await client.post(f"/api/v1/base-sync/orders/{order_id}/accept")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def _print_everything(db_session, printer_id: int) -> None:
+    """Every waiting print finishes on the printer; the products follow."""
+    from backend.app.services import products
+
+    items = list((await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars())
+    for item in items:
+        item.status = "completed"
+        item.printer_id = printer_id
+    await db_session.commit()
+    await products.after_queue_items_changed(db_session, [i.id for i in items])
+    await db_session.commit()
+
+
+async def _stock(client: AsyncClient, product_id: int, connected: set[int]) -> dict[str, int]:
+    online, status = _live(connected)
+    with online, status:
+        detail = (await client.get(f"/api/v1/products/{product_id}")).json()
+    names = {p["id"]: p["name"] for p in detail["parts"]}
+    return {names[s["part_id"]]: s["pieces"] for s in detail["stock"]}
+
+
+async def test_withdrawing_a_ready_order_can_put_its_boxes_back_in_stock(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5201, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    await _accept(async_client, 5201, {shop.printer})
+    await _print_everything(db_session, shop.printer)
+    [po] = await _product_orders(db_session)
+    assert po.status == "done"
+    assert await _stock(async_client, shop.product_id, {shop.printer}) == {}
+
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5201/skip", json={"return_done": True})
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "skipped"
+    [po] = await _product_orders(db_session)
+    assert (po.status, po.consumed) == ("cancelled", None)
+    assert await _stock(async_client, shop.product_id, {shop.printer}) == {"Lid": 1, "Base": 1}
+
+    # Sent again (Undo): the box on the shelf is its again, nothing is printed.
+    await _accept(async_client, 5201, {shop.printer})
+    [po] = await _product_orders(db_session)
+    assert po.status == "done"
+    assert await _stock(async_client, shop.product_id, {shop.printer}) == {}
+
+
+async def test_withdrawing_a_ready_order_keeps_its_boxes_unless_asked(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5202, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    await _accept(async_client, 5202, {shop.printer})
+    await _print_everything(db_session, shop.printer)
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5202/skip")
+    assert response.status_code == 200, response.text
+    [po] = await _product_orders(db_session)
+    assert po.status == "done"
+
+
+async def test_an_order_cancelled_in_base_before_it_left_gives_its_boxes_back(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5203, [("SKU-BOX-100-B", 1)]), _order(5204, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    await _accept(async_client, 5203, {shop.printer})
+    await _accept(async_client, 5204, {shop.printer})
+    await _print_everything(db_session, shop.printer)
+    assert [po.status for po in await _product_orders(db_session)] == ["done", "done"]
+
+    # 5204 was packed and moved on in Base; then both are cancelled.
+    fake_base.orders = [_order(5203, [("SKU-BOX-100-B", 1)]), _order(5204, [("SKU-BOX-100-B", 1)], status=100003)]
+    await _sync(async_client, {shop.printer})
+    fake_base.orders = [
+        _order(5203, [("SKU-BOX-100-B", 1)], status=CANCELLED),
+        _order(5204, [("SKU-BOX-100-B", 1)], status=CANCELLED),
+    ]
+    result = await _sync(async_client, {shop.printer})
+    assert result["cancelled"] == 2
+    statuses = {po.external_ref.split("/")[0]: po.status for po in await _product_orders(db_session)}
+    # The one still on the shelf is back in stock; the one that left stays done.
+    assert statuses == {"5203": "cancelled", "5204": "done"}
+    assert await _stock(async_client, shop.product_id, {shop.printer}) == {"Lid": 1, "Base": 1}
+
+
+async def _preview(client: AsyncClient, order_id: int, body: dict | None, connected: set[int]) -> dict:
+    online, status = _live(connected)
+    with online, status:
+        response = await client.post(f"/api/v1/base-sync/orders/{order_id}/skip/preview", json=body or {})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_the_withdraw_preview_says_what_would_happen_and_saves_nothing(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5205, [("SKU-BOX-100-B", 1)]), _order(5206, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    await _accept(async_client, 5205, {shop.printer})
+    await _accept(async_client, 5206, {shop.printer})
+    db_session.expire_all()
+    pending_ids = list(
+        (await db_session.execute(select(PrintQueueItem.id).where(PrintQueueItem.status == "pending"))).scalars()
+    )
+    assert len(pending_ids) == 4
+    # One of them is printing for 5205 now.
+    tags = (await async_client.get("/api/v1/products/order-tags")).json()["items"]
+    po_5205 = next(po.id for po in await _product_orders(db_session) if po.external_ref.startswith("5205/"))
+    running_id = next(i for i in pending_ids if po_5205 in [t["product_order_id"] for t in tags[str(i)]["orders"]])
+    running = (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.id == running_id))).scalar_one()
+    running.status = "printing"
+    running.started_at = running.created_at
+    await db_session.commit()
+
+    preview = await _preview(async_client, 5205, None, {shop.printer})
+    [printing] = preview["printing"]
+    assert printing["queue_item_id"] == running_id
+    # The piece printing for it now goes to 5206 instead: a lid and a base leave the queue,
+    # nothing is left over for stock.
+    assert sorted(p["name"] for r in preview["removed"] for p in r["pieces"]) == ["Base", "Lid"]
+    assert all(r["filename"] and r["printer_name"] == "P1S-A" for r in preview["removed"])
+    assert preview["added"] == []
+    assert preview["to_stock"] == []
+    assert preview["done"] == []
+
+    # Nothing was saved.
+    db_session.expire_all()
+    assert await db_session.scalar(select(BaseOrder.state).where(BaseOrder.order_id == 5205)) == "accepted"
+    statuses = sorted(
+        (await db_session.execute(select(PrintQueueItem.status).where(PrintQueueItem.id.in_(pending_ids)))).scalars()
+    )
+    assert statuses == ["pending", "pending", "pending", "printing"]
+    assert all(po.status == "open" for po in await _product_orders(db_session))
+
+
+async def test_the_withdraw_preview_of_a_ready_order_lists_its_boxes(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5207, [("SKU-BOX-100-B", 2)])]
+    await _sync(async_client, {shop.printer})
+    await _accept(async_client, 5207, {shop.printer})
+    await _print_everything(db_session, shop.printer)
+    preview = await _preview(async_client, 5207, {"return_done": True}, {shop.printer})
+    assert preview["done"] == [{"product_id": shop.product_id, "name": "9mm 100 Black", "units": 2}]
+    assert sorted((p["name"], p["pieces"]) for p in preview["to_stock"]) == [("Base", 2), ("Lid", 2)]
+    assert preview["removed"] == [] and preview["printing"] == []
+    [po] = await _product_orders(db_session)
+    assert po.status == "done"
+
+
+async def test_the_withdraw_preview_puts_a_piece_printing_for_no_one_else_in_stock(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5208, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    await _accept(async_client, 5208, {shop.printer})
+    db_session.expire_all()
+    items = list(
+        (
+            await db_session.execute(
+                select(PrintQueueItem).where(PrintQueueItem.status == "pending").order_by(PrintQueueItem.position)
+            )
+        ).scalars()
+    )
+    items[0].status = "printing"
+    items[0].started_at = items[0].created_at
+    await db_session.commit()
+    preview = await _preview(async_client, 5208, None, {shop.printer})
+    [printing] = preview["printing"]
+    [removed] = preview["removed"]
+    assert printing["pieces"][0]["name"] != removed["pieces"][0]["name"]
+    assert [(p["name"], p["pieces"]) for p in preview["to_stock"]] == [
+        (printing["pieces"][0]["name"], printing["pieces"][0]["pieces"])
+    ]

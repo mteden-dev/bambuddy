@@ -23,7 +23,9 @@ the sync:
    any printer's). An accepted order's product orders follow its lines while
    it stays in those statuses (a line added, a quantity changed, a SKU mapped),
    less what was held back;
-4. cancels the open product orders of an order found in the cancelled status;
+4. cancels the open product orders of an order found in the cancelled status,
+   and its done ones too while it was still in those statuses (not packed or
+   sent yet): their boxes go back to stock;
 5. replans every product whose orders changed (services/products.replan).
 
 Due dates: the marketplace's ship-by deadline (``getOrderTransactionData``'s
@@ -498,14 +500,20 @@ async def reconcile(
     return changed
 
 
-async def cancel_orders_of(db: AsyncSession, order: BaseOrder) -> set[int]:
-    """Cancel an order's open product orders; returns the products changed."""
+async def cancel_orders_of(db: AsyncSession, order: BaseOrder, *, return_done: bool = False) -> set[int]:
+    """Cancel an order's open product orders; returns the products changed.
+
+    ``return_done`` cancels its done ones too, and the pieces they took go back
+    to stock: the boxes are still on the shelf (the order was cancelled or
+    withdrawn before it left), ready for the next order of the product.
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     changed = set()
     for po in await product_orders_of(db, order.order_id):
-        if po.status == "open":
+        if po.status == "open" or (return_done and po.status == "done"):
             po.status = "cancelled"
             po.completed_at = now
+            po.consumed = None
             changed.add(po.product_id)
     await db.flush()
     return changed
@@ -616,6 +624,8 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
     changed: set[int] = set()
 
     tracked = {row.order_id: row for row in (await db.execute(select(BaseOrder))).scalars()}
+    # Still in the statuses at the last pass: not moved on (packed, sent) by hand.
+    was_in_status = {order_id: bool(row.in_status) for order_id, row in tracked.items()}
     seen_ids = set()
     seen_rows: list[BaseOrder] = []
     for data in fetched:
@@ -669,7 +679,8 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
                 if row is not None and row.state in ("new", "accepted"):
                     row.state = "cancelled"
                     row.status_id = data.status_id
-                    changed |= await cancel_orders_of(db, row)
+                    # Cancelled before it left: what was printed for it is on the shelf.
+                    changed |= await cancel_orders_of(db, row, return_done=was_in_status.get(row.order_id, False))
                     result.cancelled += 1
 
     await db.flush()
@@ -868,11 +879,12 @@ async def accept(db: AsyncSession, order: BaseOrder, choices: list[ProductChoice
 async def reset(db: AsyncSession, order: BaseOrder) -> set[int]:
     """Take a decision back: the order waits again, as it came from Base; returns the products changed.
 
-    Its open product orders are cancelled, what was held back is forgotten and
-    the pieces put into stock as on hand for it are taken out again. The
-    caller replans and commits.
+    Its product orders are cancelled (done ones give their pieces back to
+    stock: it is undone), what was held back is forgotten and the pieces put
+    into stock as on hand for it are taken out again. The caller replans and
+    commits.
     """
-    changed = await cancel_orders_of(db, order)
+    changed = await cancel_orders_of(db, order, return_done=True)
     on_hand = on_hand_parts(order)
     owner = await _part_products(db, set(on_hand))
     for part_id, pieces in on_hand.items():
@@ -887,10 +899,14 @@ async def reset(db: AsyncSession, order: BaseOrder) -> set[int]:
     return changed
 
 
-async def skip(db: AsyncSession, order: BaseOrder) -> set[int]:
-    """Leave an order out; its open product orders are cancelled. The caller replans and commits."""
+async def skip(db: AsyncSession, order: BaseOrder, *, return_done: bool = False) -> set[int]:
+    """Leave an order out (withdraw it); its open product orders are cancelled.
+
+    ``return_done``: its done ones too, their boxes back in stock. The caller
+    replans and commits.
+    """
     order.state = "skipped"
-    return await cancel_orders_of(db, order)
+    return await cancel_orders_of(db, order, return_done=return_done)
 
 
 async def refresh_accepted(db: AsyncSession, sku: str | None = None, *, refresh_due: bool = False) -> set[int]:

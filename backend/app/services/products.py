@@ -372,8 +372,9 @@ async def withdraw_orders(db: AsyncSession, product_order_ids: list[int]) -> Wit
             except ValueError:
                 base = None
         if base is not None and base.state in ("new", "accepted"):
-            # Its other products' orders go too; they are not open any more when their turn comes.
-            result.products |= await base_sync.skip(db, base)
+            # Its other products' orders go too; they are not open any more when
+            # their turn comes. What is done for it is on the shelf: back to stock.
+            result.products |= await base_sync.skip(db, base, return_done=True)
             result.base_orders.append(base.order_id)
         else:
             order.status = "cancelled"

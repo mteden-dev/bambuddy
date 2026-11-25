@@ -4780,6 +4780,33 @@ export interface BaseOrderProgress {
   parts: { part_id: number; name: string; ready: number; needed: number; on_hand: number; missing: number }[];
 }
 
+/** Fork (Base sync): what withdrawing an order would do (worked out, nothing saved). */
+export interface BaseWithdrawPiece {
+  part_id: number;
+  name: string;
+  pieces: number;
+}
+
+export interface BaseWithdrawPrint {
+  queue_item_id: number | null;
+  filename: string | null;
+  printer_name: string | null;
+  pieces: BaseWithdrawPiece[];
+}
+
+export interface BaseWithdrawPreview {
+  /** Waiting prints that leave the queue. */
+  removed: BaseWithdrawPrint[];
+  /** Plates queued instead, for the orders that shared a plate with it. */
+  added: BaseWithdrawPrint[];
+  /** Printing for it now: they finish. */
+  printing: BaseWithdrawPrint[];
+  /** Pieces that end up in stock for no order. */
+  to_stock: BaseWithdrawPiece[];
+  /** Products done for it (on the shelf): back in stock with return_done. */
+  done: { product_id: number; name: string; units: number }[];
+}
+
 export type BaseOrderCounts = Record<string, { allegro: number; shop: number }>;
 
 /** Fork (Base sync): what to print of one product when sending an order. */
@@ -8048,7 +8075,18 @@ export const api = {
       method: 'POST',
       ...(data ? { body: JSON.stringify(data) } : {}),
     }),
-  skipBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/skip`, { method: 'POST' }),
+  /** Skip a waiting order, or withdraw one in production; return_done puts what was done for it back in stock. */
+  skipBaseOrder: (orderId: number, data?: { return_done: boolean }) =>
+    request<BaseOrder>(`/base-sync/orders/${orderId}/skip`, {
+      method: 'POST',
+      ...(data ? { body: JSON.stringify(data) } : {}),
+    }),
+  /** What withdrawing an order would do to the queue and the stock; nothing is saved. */
+  previewWithdrawBaseOrder: (orderId: number, data: { return_done: boolean }) =>
+    request<BaseWithdrawPreview>(`/base-sync/orders/${orderId}/skip/preview`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   /** Plan an order in production again: for the pieces it is missing because its print left the queue. */
   requeueBaseOrder: (orderId: number) =>
     request<BaseOrder>(`/base-sync/orders/${orderId}/requeue`, { method: 'POST' }),

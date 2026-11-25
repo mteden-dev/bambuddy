@@ -187,7 +187,10 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     „Drukuj” wysyła od razu (z „Cofnij”); „Części” rozwija panel: ile sztuk drukować (reszta
     zostaje niedrukowana też przy zmianach w Base) i co jest z półki. Na zamówieniu czekającym
     to szkic („mam już dół”) zapisany od razu, a „Drukuj resztę” wysyła go; w produkcji zmiana
-    działa od razu (z „Cofnij”), a „Wycofaj z produkcji” pyta o potwierdzenie. Zamówienie w
+    działa od razu (z „Cofnij”), a „Wycofaj z produkcji” najpierw mówi, co się stanie (które
+    wydruki znikną z kolejki, co wejdzie w zamian dla zamówień ze wspólnej płyty, co się dokończy,
+    co zostanie na stanie), przy gotowym pyta, czy pudełka wracają na stan, a po wycofaniu ma
+    „Cofnij”. Zamówienie anulowane w Base, zanim wyszło, oddaje gotowe pudełka na stan. Zamówienie w
     produkcji, któremu brakuje wydruku w kolejce (usunięty, anulowany, drukarka go nie przyjęła),
     pokazuje „Brak w kolejce: …” i przycisk „Wyślij ponownie”. Wydruki w kolejce,
     na osi czasu i na karcie drukarki mają etykietę zamówienia (nick albo numer, „+N” dla kilku,

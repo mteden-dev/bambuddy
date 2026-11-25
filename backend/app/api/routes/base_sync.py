@@ -712,17 +712,195 @@ async def requeue_order(
     return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
 
 
+class SkipIn(BaseModel):
+    # Its done product orders too: what was printed for it goes back to stock
+    # (the boxes are on the shelf), for the next orders of the product.
+    return_done: bool = False
+
+
 @router.post("/orders/{order_id}/skip", response_model=BaseOrderOut)
 async def skip_order(
     order_id: int,
+    data: SkipIn | None = None,
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
 ):
-    """Leave an order out (from stock, by hand): its open product orders are cancelled."""
+    """Leave an order out, or withdraw one in production: its open product orders are cancelled.
+
+    ``return_done`` cancels its done ones too, their pieces back in stock.
+    Sending it again (``accept``) undoes it, with what was held back and on
+    hand as before.
+    """
     row = await _get_order(db, order_id)
-    await _replan(db, await svc.skip(db, row))
+    await _replan(db, await svc.skip(db, row, return_done=bool(data and data.return_done)))
     await db.commit()
     return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+
+
+class PieceRef(BaseModel):
+    part_id: int
+    name: str
+    pieces: int
+
+
+class PrintRef(BaseModel):
+    queue_item_id: int | None = None
+    filename: str | None = None
+    printer_name: str | None = None
+    pieces: list[PieceRef] = Field(default_factory=list)
+
+
+class DoneRef(BaseModel):
+    product_id: int
+    name: str
+    units: int
+
+
+class WithdrawPreviewOut(BaseModel):
+    # Waiting prints that leave the queue.
+    removed: list[PrintRef]
+    # Plates the plan queues instead, for the orders that shared a plate with it.
+    added: list[PrintRef]
+    # Printing for it now: they finish, and their pieces go to stock.
+    printing: list[PrintRef]
+    # Pieces that end up in stock for no order because of it: printed for it,
+    # printing for it, or made beyond the other orders by a plate they share.
+    to_stock: list[PieceRef]
+    # Products done for it (boxes on the shelf): back in stock with return_done.
+    done: list[DoneRef]
+
+
+@router.post("/orders/{order_id}/skip/preview", response_model=WithdrawPreviewOut)
+async def preview_skip(
+    order_id: int,
+    data: SkipIn | None = None,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+):
+    """What withdrawing an order would do to the queue and the stock; nothing is saved.
+
+    The withdrawal and the plans it causes are worked out in this request's
+    transaction and rolled back, so the answer is what ``skip`` with the same
+    body would do now.
+    """
+    row = await _get_order(db, order_id)
+    try:
+        return await _withdraw_preview(db, row, bool(data and data.return_done))
+    finally:
+        await db.rollback()
+
+
+async def _withdraw_preview(db: AsyncSession, row: BaseOrder, return_done: bool) -> WithdrawPreviewOut:
+    from backend.app.models.print_queue import PrintQueueItem
+    from backend.app.models.printer import Printer
+    from backend.app.models.products import ProductJob
+    from backend.app.services import product_planner as planner, products as product_service
+
+    orders = await svc.product_orders_of(db, row.order_id)
+    open_ids = {po.id for po in orders if po.status == "open"}
+    products = {}
+    for product_id in sorted({po.product_id for po in orders}):
+        product = await product_service.load_product(db, product_id)
+        if product is not None:
+            products[product_id] = product
+    part_names = {part.id: part.name for product in products.values() for part in product.parts}
+    files = {
+        plate.id: plate.library_file.filename if plate.library_file is not None else None
+        for product in products.values()
+        for plate in product.plates
+    }
+    printer_names = dict((await db.execute(select(Printer.id, Printer.name))).all())
+
+    def pieces_of(counts: dict[int, int]) -> list[PieceRef]:
+        return [
+            PieceRef(part_id=part_id, name=part_names.get(part_id, f"#{part_id}"), pieces=n)
+            for part_id, n in sorted(counts.items())
+            if n > 0
+        ]
+
+    def print_ref(job) -> PrintRef:
+        return PrintRef(
+            queue_item_id=job.queue_item_id,
+            filename=files.get(job.product_plate_id or -1),
+            printer_name=printer_names.get(job.printer_id),
+            pieces=pieces_of(dict(product_service.job_pieces(job, set(part_names)))),
+        )
+
+    async def surplus() -> dict[int, int]:
+        """Pieces in stock or coming from the queue that no open order takes, per part."""
+        result: dict[int, int] = {}
+        for product in products.values():
+            specs = product_service.part_specs(product)
+            ids = {spec.id for spec in specs}
+            coming = await product_service.stock_pool(db, product)
+            for job in await product_service.queued_jobs(db, product.id):
+                planner.pool_add(
+                    coming, job.printer_id or planner.UNKNOWN_PRINTER, product_service.job_pieces(job, ids)
+                )
+            needs = product_service.needs_of(await product_service.open_orders(db, product.id))
+            taken = planner.allocate(specs, coming, needs)
+            for spec in specs:
+                total = sum((coming.get(spec.id) or {}).values())
+                used = sum(by_part.get(spec.id, 0) for by_part in taken.pieces.values())
+                result[spec.id] = result.get(spec.id, 0) + max(0, total - used)
+        return result
+
+    # Before: what prints for it, and what no order takes yet.
+    by_item, _ = await product_service.order_tags(db)
+    queued = [job for product_id in products for job in await product_service.queued_jobs(db, product_id)]
+    # Started or being sent: the queue job says so before the planner's job follows it.
+    started = set(
+        (
+            await db.execute(
+                select(PrintQueueItem.id).where(
+                    PrintQueueItem.id.in_([job.queue_item_id for job in queued if job.queue_item_id is not None]),
+                    or_(PrintQueueItem.status == "printing", PrintQueueItem.dispatching_at.is_not(None)),
+                )
+            )
+        ).scalars()
+    )
+    waiting = {}
+    printing = []
+    for job in queued:
+        if job.status == "printing" or job.queue_item_id in started:
+            served = by_item.get(job.queue_item_id) if job.queue_item_id is not None else None
+            if served is not None and any(tag.product_order_id in open_ids for tag in served.orders):
+                printing.append(print_ref(job))
+        elif job.queue_item_id is not None:
+            waiting[job.queue_item_id] = print_ref(job)
+    before = await surplus()
+    done = [
+        DoneRef(product_id=po.product_id, name=products[po.product_id].name, units=po.quantity)
+        for po in orders
+        if po.status == "done" and po.product_id in products
+    ]
+
+    # Withdraw and plan, then compare.
+    config = await svc.read_config(db)
+    added_ids: list[int] = []
+    for product_id in sorted(await svc.skip(db, row, return_done=return_done)):
+        outcome = await product_service.replan(
+            db, product_id, actor_id=None, manual_start=config.manual_start, printer_ids=None
+        )
+        added_ids += outcome.item_ids
+    after_jobs = list(
+        (
+            await db.execute(
+                select(ProductJob).where(
+                    ProductJob.product_id.in_(list(products)), ProductJob.status.in_(product_service.JOB_ACTIVE)
+                )
+            )
+        ).scalars()
+    )
+    still = {job.queue_item_id for job in after_jobs}
+    after = await surplus()
+    return WithdrawPreviewOut(
+        removed=[ref for item_id, ref in waiting.items() if item_id not in still],
+        added=[print_ref(job) for job in after_jobs if job.queue_item_id in set(added_ids)],
+        printing=printing,
+        to_stock=pieces_of({part_id: after.get(part_id, 0) - before.get(part_id, 0) for part_id in after}),
+        done=done,
+    )
 
 
 # --- SKUs ------------------------------------------------------------------------------------

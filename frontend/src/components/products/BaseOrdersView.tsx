@@ -13,9 +13,9 @@ import type { TimeFormat } from '../../utils/date';
 import { useUndoToast } from '../../hooks/useUndoToast';
 import { matchesSearch, SECTION_ORDER, sectionOf } from '../../utils/baseOrders';
 import type { OrderSection } from '../../utils/baseOrders';
-import { ConfirmModal } from '../ConfirmModal';
 import { BaseSettingsModal } from './BaseSettingsModal';
 import { OrderRow } from './OrderRow';
+import { WithdrawOrderModal } from './WithdrawOrderModal';
 
 // Bigger tap targets on a touch screen (an iPad at a printer), whatever its width.
 const TOUCH = 'pointer-coarse:min-h-11!';
@@ -165,9 +165,28 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
+  // Undo of a withdrawal: sent again, with what was held back and on hand as before.
+  const undoWithdrawMutation = useMutation({
+    mutationFn: ({ order }: { order: BaseOrder }) => api.acceptBaseOrder(order.order_id),
+    onSuccess: () => {
+      refresh();
+      showToast(t('baseSync.toast.withdrawUndone'), 'success');
+    },
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
   const orderMutation = useMutation({
-    mutationFn: ({ order, action }: { order: BaseOrder; action: 'accept' | 'skip' | 'withdraw' }) =>
-      action === 'accept' ? api.acceptBaseOrder(order.order_id) : api.skipBaseOrder(order.order_id),
+    mutationFn: ({
+      order,
+      action,
+      returnDone,
+    }: {
+      order: BaseOrder;
+      action: 'accept' | 'skip' | 'withdraw';
+      returnDone?: boolean;
+    }) =>
+      action === 'accept'
+        ? api.acceptBaseOrder(order.order_id)
+        : api.skipBaseOrder(order.order_id, action === 'withdraw' ? { return_done: !!returnDone } : undefined),
     onSuccess: (sent, { order, action }) => {
       refresh();
       setWithdrawing(null);
@@ -181,8 +200,8 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
             ? 'baseSync.toast.withdrawn'
             : 'baseSync.toast.skipped',
       );
-      // Sending or skipping a waiting order can be taken back for a moment.
-      if (action === 'withdraw') showToast(message, 'success');
+      // Sending, skipping or withdrawing an order can be taken back for a moment.
+      if (action === 'withdraw') undoToast(message, () => undoWithdrawMutation.mutate({ order }));
       else undoToast(message, () => resetMutation.mutate({ order, restore: false }));
     },
     onError: (e: Error) => showToast(e.message, 'error'),
@@ -217,7 +236,9 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
     ? orderMutation.variables?.order.order_id
     : resetMutation.isPending
       ? resetMutation.variables?.order.order_id
-      : requeueMutation.isPending
+      : undoWithdrawMutation.isPending
+        ? undoWithdrawMutation.variables?.order.order_id
+        : requeueMutation.isPending
         ? requeueMutation.variables?.order.order_id
         : null;
 
@@ -432,13 +453,10 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
 
       {showSettings && <BaseSettingsModal onClose={() => setShowSettings(false)} onSaved={refresh} />}
       {withdrawing && (
-        <ConfirmModal
-          title={t('baseSync.withdrawTitle', { number: withdrawing.label })}
-          message={t('baseSync.withdrawMessage')}
-          confirmText={t('baseSync.withdraw')}
-          variant="danger"
-          isLoading={orderMutation.isPending}
-          onConfirm={() => orderMutation.mutate({ order: withdrawing, action: 'withdraw' })}
+        <WithdrawOrderModal
+          order={withdrawing}
+          busy={orderMutation.isPending}
+          onConfirm={(returnDone) => orderMutation.mutate({ order: withdrawing, action: 'withdraw', returnDone })}
           onCancel={() => setWithdrawing(null)}
         />
       )}
