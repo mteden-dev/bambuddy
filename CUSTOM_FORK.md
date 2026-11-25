@@ -45,10 +45,14 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     `/printer-tags`, scheduler zawęża nią drukarki twórcy (dopasowanie, wybudzanie gniazdkiem,
     suszenie, przeniesienie przy braku filamentu),
   - oś czasu kolejki jest pierwszą i domyślną zakładką kolejki (wybrana zakładka jest
-    zapamiętywana); jej tory wypełniają wolną wysokość ekranu (po równo na drukarkę, 40–128 px
-    na kafelek), a kafelek pokazuje tyle, ile się zmieści: wysoki dodaje zamówienia, godziny
-    druku i czas, a przy szerokim także „Dowolna <model>”, ręczny start i grupę; wąski chowa
-    miniaturę i dodatkowe linie,
+    zapamiętywana); jej tory wypełniają wolną wysokość ekranu (po równo na drukarkę, 40–160 px
+    na kafelek), a kafelek pokazuje tyle, ile się zmieści: od 48 px nazwa w dwóch liniach, od
+    64 px osobno zamówienia i godziny druku z czasem, od 92 px linia z filamentem (kolor, typ,
+    gramy), „Dowolna <model>”, ręcznym startem i grupą (wąski kafelek oddaje ją nazwie), od
+    108 px trzy linie nazwy, od 136 px większa miniatura i tekst. Tekst ma pierwszeństwo:
+    miniatura zajmuje najwyżej ćwierć szerokości kafelka, a na wąskim znika; nazwa jest bez
+    „.gcode.3mf”. Na wąskim ekranie (iPad pionowo) oś domyślnie pokazuje 12 h, a zoom
+    zapamiętuje się dopiero po zmianie,
   - oś czasu kolejki pokazuje całą kolejkę: zadania „Dowolna <model>” stoją na drukarce, którą
     według prognozy dostaną (przerywana ramka; przypięte do drukarki mają pełną ramkę i pinezkę).
     Prognozę liczy backend (`GET /queue/forecast`, `services/queue_forecast.py`): drukarka, która

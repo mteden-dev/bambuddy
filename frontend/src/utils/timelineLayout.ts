@@ -5,7 +5,7 @@
 
 // The least a bar is tall (the timeline as it always was), and the most.
 export const LANE_BAR_HEIGHT_PX = 40;
-export const MAX_LANE_BAR_HEIGHT_PX = 128;
+export const MAX_LANE_BAR_HEIGHT_PX = 160;
 // Above and below the bar in its lane.
 export const LANE_PADDING_PX = 16;
 

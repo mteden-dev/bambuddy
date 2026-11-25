@@ -80,7 +80,12 @@ import { queueHold } from '../utils/queueHold';
 const HOUR_MS = 60 * 60 * 1000;
 // Zoom (fork): how many hours the window shows, from close up to three days.
 const ZOOM_HOURS = [4, 8, 12, 24, 48, 72];
-const DEFAULT_ZOOM = ZOOM_HOURS.indexOf(24);
+// Fork: 24 hours, 12 on a narrow screen (an iPad upright), where 24 leave a
+// print a few dozen pixels.
+function defaultZoom(): number {
+  const narrow = typeof window !== 'undefined' && window.innerWidth < 1024;
+  return ZOOM_HOURS.indexOf(narrow ? 12 : 24);
+}
 const ZOOM_STORAGE_KEY = 'queueTimelineZoomHours';
 // Hours between axis ticks at each zoom: about six to twelve labels.
 function tickStepHours(rangeHours: number): number {
@@ -93,9 +98,9 @@ function tickStepHours(rangeHours: number): number {
 function storedZoom(): number {
   try {
     const index = ZOOM_HOURS.indexOf(Number(localStorage.getItem(ZOOM_STORAGE_KEY)));
-    return index === -1 ? DEFAULT_ZOOM : index;
+    return index === -1 ? defaultZoom() : index;
   } catch {
-    return DEFAULT_ZOOM;
+    return defaultZoom();
   }
 }
 // Trackpad pinch arrives as ctrl+wheel in small steps: this much makes one zoom step.
@@ -111,6 +116,15 @@ const LANES_BOTTOM_RESERVE_PX = 40;
 const OFF_TIMELINE_RESERVE_PX = 72;
 // Fork: the bar height of this timeline, from the room the screen has.
 const BarHeightContext = createContext(LANE_BAR_HEIGHT_PX);
+// The picture on a tall bar: at most this big, and this share of the bar's width.
+const THUMB_MAX_PX = 80;
+const THUMB_SHARE_CQW = 24;
+const THUMB_LARGE_MAX_PX = 112;
+
+/** A job's name on its bar: the slicer's file extension is room the bar needs for the rest. */
+function barName(name: string): string {
+  return name.replace(/(\.gcode)?\.3mf$|\.gcode$/i, '');
+}
 // Why a finished plate waits until then (GET /queue/forecast plate_waits).
 type PlateWaitReason = NonNullable<QueueForecastPlateWait['reason']>;
 interface PlateWaitSpan {
@@ -351,8 +365,13 @@ function BarContent({
   const manual = !isPrinting && ev.item.manual_start;
   const hold = isPrinting ? null : queueHold(ev.item, t);
   const manualText = hold?.problem ? hold.text : manual ? t('queue.timeline.manualStart') : null;
+  // Lines by what fits (a name line ~15px, the small ones ~14px): from 64px
+  // the orders and the hours get lines of their own, from 76px the name two
+  // lines, from 92px one more line of details, from 108px a third name line.
   const tall = height >= 64;
-  const roomy = height >= 96;
+  const roomy = height >= 92;
+  // A tall screen's bars: a bigger picture and details a size up.
+  const large = height >= 136;
   const progress = isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null;
   const when = `${formatTooltipTime(ev.estimatedStart)}–${formatTooltipTime(ev.estimatedEnd)}`;
   const second = [
@@ -364,25 +383,44 @@ function BarContent({
     progress,
   ].filter(Boolean).join(' · ');
   const timing = [when, printTime ? formatDuration(printTime) : null, progress].filter(Boolean).join(' · ');
-  const more = [hold?.problem ? null : manualText, anyModelLabel(ev, t), ev.item.batch_name]
+  const grams = ev.item.filament_used_grams;
+  const filament = [ev.item.filament_type, grams ? `${Math.round(grams)} g` : null].filter(Boolean).join(' ');
+  const more = [filament || null, hold?.problem ? null : manualText, anyModelLabel(ev, t), ev.item.batch_name]
     .filter(Boolean)
     .join(' · ');
-  const thumbSize = tall ? Math.min(height - 12, 80) : 28;
+  const filamentColor = ev.item.filament_color ? `#${ev.item.filament_color.replace('#', '').slice(0, 6)}` : null;
+  // The text goes first: the picture takes at most a quarter of the bar's
+  // width (cqw: the bar is a size container), at most the bar's height and
+  // THUMB_MAX_PX, and a bar too narrow for both shows the text alone.
+  const thumbMax = tall ? Math.min(height - 12, large ? THUMB_LARGE_MAX_PX : THUMB_MAX_PX) : 28;
+  // A narrow bar has no room for the details line: the name takes it.
+  const nameLines =
+    height >= 108
+      ? 'line-clamp-3 break-words'
+      : height >= 92
+        ? 'line-clamp-2 @max-[9rem]:line-clamp-3 break-words'
+        : height >= 76 || (!tall && height >= 48)
+          ? 'line-clamp-2 break-words'
+          : 'truncate';
+  const small = large ? 'text-xs' : 'text-[10px]';
+  const medium = large ? 'text-[13px]' : 'text-[11px]';
   return (
     <>
       {thumbnailUrl && (
         <img
           src={thumbnailUrl}
           alt=""
-          className={`rounded object-cover shrink-0 bg-bambu-dark ${tall ? 'hidden @min-[7rem]:block' : ''}`}
-          style={{ width: thumbSize, height: thumbSize }}
+          className={`rounded object-cover shrink-0 bg-bambu-dark aspect-square ${
+            tall ? 'hidden @min-[8rem]:block' : 'hidden @min-[5rem]:block'
+          }`}
+          style={{ width: `min(${thumbMax}px, ${THUMB_SHARE_CQW}cqw)` }}
           draggable={false}
         />
       )}
       <div className="min-w-0 flex-1">
         <div
           className={`text-white font-medium leading-tight flex gap-1 ${
-            roomy ? 'text-sm items-start' : 'text-xs items-center'
+            large ? 'text-sm items-start' : tall ? 'text-xs items-start @min-[15rem]:text-sm' : `text-xs ${height >= 48 ? 'items-start' : 'items-center'}`
           }`}
         >
           {!isPrinting && (hold?.problem
@@ -394,26 +432,36 @@ function BarContent({
             : ev.projected
               ? <Shuffle className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />
               : <Pin className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />)}
-          <span className={roomy ? 'line-clamp-2 break-words' : 'truncate'}>{queueJobName(ev.item, ev.variant)}</span>
+          <span className={nameLines}>{barName(queueJobName(ev.item, ev.variant))}</span>
         </div>
         {tall ? (
           <>
             {hold?.problem && (
-              <div className="text-[11px] text-red-200 font-medium truncate leading-tight mt-0.5" data-bar-line="hold">
+              <div className={`${medium} text-red-200 font-medium truncate leading-tight mt-0.5`} data-bar-line="hold">
                 {hold.text}
               </div>
             )}
             {orderText && (
-              <div className="text-[11px] text-white/80 truncate leading-tight mt-0.5" data-bar-line="orders">
+              <div className={`${medium} text-white/80 truncate leading-tight mt-0.5`} data-bar-line="orders">
                 {orderText}
               </div>
             )}
-            <div className="text-[10px] text-bambu-gray truncate leading-tight mt-0.5" data-bar-line="timing">
+            <div className={`${small} text-bambu-gray truncate leading-tight mt-0.5`} data-bar-line="timing">
               {timing}
             </div>
             {roomy && more && (
-              <div className="hidden @min-[9rem]:block text-[10px] text-bambu-gray truncate leading-tight mt-0.5" data-bar-line="more">
-                {more}
+              <div
+                className={`hidden @min-[9rem]:flex items-center gap-1 ${small} text-bambu-gray leading-tight mt-0.5 min-w-0`}
+                data-bar-line="more"
+              >
+                {filament && filamentColor && (
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0 ring-1 ring-white/20"
+                    style={{ backgroundColor: filamentColor }}
+                    aria-hidden
+                  />
+                )}
+                <span className="truncate">{more}</span>
               </div>
             )}
           </>
@@ -559,7 +607,13 @@ export function QueueTimelineView({
   const rangeHours = ZOOM_HOURS[zoomIndex];
   const rangeMs = rangeHours * HOUR_MS;
   const stepHours = tickStepHours(rangeHours);
+  // Remembered once someone zooms (fork): until then the default follows the screen.
+  const zoomChosen = useRef(false);
   useEffect(() => {
+    if (!zoomChosen.current) {
+      zoomChosen.current = true;
+      return;
+    }
     try {
       localStorage.setItem(ZOOM_STORAGE_KEY, String(rangeHours));
     } catch {

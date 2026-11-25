@@ -172,6 +172,33 @@ describe('QueueTimelineView', () => {
       expect(pinned.querySelector('[data-bar-line="timing"]')?.textContent).toMatch(/\d.*–.*\d/);
     });
 
+    it('keeps a picture to a share of the bar and shows the name without the file extension', async () => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
+      const withPicture = {
+        ...pinned,
+        archive_name: 'Lid x3.gcode.3mf',
+        library_file_id: 9,
+        library_file_thumbnail: 'yes',
+      } as unknown as PrintQueueItem;
+      renderTimeline({ queueItems: [withPicture, anyJob, staged, laterJob] });
+      const lid = await within(lane(1)).findByTitle((title) => title.startsWith('Lid x3.gcode.3mf'));
+      expect(lid).toHaveTextContent('Lid x3');
+      expect(lid).not.toHaveTextContent('.gcode.3mf');
+      // The picture is held to a share of the bar's width, so the text keeps its room.
+      expect(lid.querySelector('img')?.getAttribute('style')).toMatch(/min\(\d+px, 24cqw\)/);
+    });
+
+    it('opens on 12 hours on a narrow screen when no zoom was chosen', async () => {
+      const width = window.innerWidth;
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 820 });
+      try {
+        renderTimeline();
+        expect(await screen.findByText('12 h')).toBeInTheDocument();
+      } finally {
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+      }
+    });
+
     it('keeps the two-line bar when the screen has no room for more', async () => {
       Object.defineProperty(window, 'innerHeight', { configurable: true, value: 120 });
       renderTimeline();
