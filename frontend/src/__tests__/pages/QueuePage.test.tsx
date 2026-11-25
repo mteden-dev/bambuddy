@@ -142,6 +142,7 @@ describe('QueuePage', () => {
     vi.mocked(localStorage.getItem).mockImplementation((key: string) => {
       if (key === 'queue.historyCollapsed') return 'false'; // expanded
       if (key === 'queue.viewMode') return 'list';
+      if (key === 'queue.tab') return 'queue'; // the list, not the timeline (the default)
       return null;
     });
 

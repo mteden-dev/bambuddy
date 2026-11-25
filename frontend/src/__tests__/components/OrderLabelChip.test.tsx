@@ -56,7 +56,8 @@ describe('OrderLabelChip', () => {
     await user.click(await screen.findByRole('button', { name: 'nick_a +1' }));
     expect(screen.getByText('Planned; may change after a replan.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /#1244/ }));
-    expect(window.location.search).toBe('?tab=base&order=52054002');
+    expect(window.location.pathname).toBe('/orders');
+    expect(window.location.search).toBe('?order=52054002');
   });
 
   it('says a plate is for stock, and labels a printer by what it prints', async () => {

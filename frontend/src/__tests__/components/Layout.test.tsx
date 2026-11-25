@@ -112,6 +112,25 @@ describe('Layout', () => {
       expect(hrefs.indexOf('/products')).toBe(hrefs.indexOf('/queue') + 1);
       expect(products.textContent).toContain('Products');
     });
+
+    it('has Orders right after Products, also in a sidebar order saved before it existed', async () => {
+      vi.mocked(localStorage.getItem).mockImplementation((key: string) =>
+        key === 'sidebarOrder' ? JSON.stringify(['printers', 'queue', 'products', 'settings']) : null,
+      );
+      try {
+        render(<Layout />);
+        const orders = await waitFor(() => {
+          const link = document.querySelector('aside a[href="/orders"]');
+          expect(link).not.toBeNull();
+          return link as HTMLAnchorElement;
+        });
+        const hrefs = Array.from(document.querySelectorAll('aside a')).map((a) => a.getAttribute('href'));
+        expect(hrefs.indexOf('/orders')).toBe(hrefs.indexOf('/products') + 1);
+        expect(orders.textContent).toContain('Orders');
+      } finally {
+        vi.mocked(localStorage.getItem).mockReset();
+      }
+    });
   });
 
   describe('external link count', () => {

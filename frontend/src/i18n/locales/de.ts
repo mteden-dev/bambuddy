@@ -32,6 +32,7 @@ export default {
     archives: 'Archiv',
     queue: 'Druckwarteschlange',
     products: 'Produkte',
+    orders: 'Bestellungen',
     stats: 'Statistiken',
     profiles: 'Profile',
     maintenance: 'Wartung',
@@ -9092,11 +9093,6 @@ export default {
   products: {
     title: 'Produkte',
     subtitle: 'Produkte aus Teilen und ihre Bestellungen',
-    tabs: {
-      products: 'Produkte',
-      base: 'Bestellungen aus Base',
-      qc: 'Zu prüfen',
-    },
     newProduct: 'Neues Produkt',
     emptyTitle: 'Noch keine Produkte',
     emptyDescription: 'Ein Produkt besteht aus Teilen (etwa eine Box: Deckel, Boden und Einsatz) mit geslicten Platten für jedes Teil. Bestelle einige, und Bambuddy stellt die Platten in die Warteschlange; eine Bestellung vor Druckbeginn wird mit den anderen zusammen geplant, auf größeren Platten, wenn das schneller ist.',
@@ -9285,6 +9281,15 @@ export default {
         withdrawn: 'Zurückgezogen: {{orders}}.',
         short: 'Manche Teile lassen sich nicht planen: Prüfe die Platten des Produkts.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Bestellungen',
+    subtitle: 'Bestellungen aus Base und fertige Drucke zum Prüfen',
+    tabs: {
+      base: 'Bestellungen aus Base',
+      qc: 'Zu prüfen',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

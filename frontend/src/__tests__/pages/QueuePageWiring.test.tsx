@@ -118,6 +118,7 @@ beforeEach(() => {
   vi.mocked(localStorage.getItem).mockImplementation((key: string) => {
     if (key === 'queue.historyCollapsed') return 'false';
     if (key === 'queue.viewMode') return 'list';
+    if (key === 'queue.tab') return 'queue'; // the list, not the timeline (the default)
     return null;
   });
   useQueue([pendingA, printing, completedA]);
@@ -178,6 +179,18 @@ function selectBoxFor(name: string): HTMLElement {
 function dialogOf(title: HTMLElement): HTMLElement {
   return title.closest('div.fixed') as HTMLElement;
 }
+
+describe('QueuePage tabs (fork)', () => {
+  it('opens on the timeline, the first tab, when no tab was chosen', async () => {
+    vi.mocked(localStorage.getItem).mockImplementation(() => null);
+    server.use(http.get('*/api/v1/queue/forecast', () => HttpResponse.json({ error: 'not in this test' }, { status: 500 })));
+    render(<QueuePage />);
+    const tabs = await screen.findAllByRole('button', { name: /^(Timeline|Queue|Batches|History|Pipelines)/ });
+    expect(tabs[0]).toHaveTextContent('Timeline');
+    expect(tabs[0].className).toContain('border-bambu-green');
+    expect(screen.queryByText('Pending A')).toBeNull();
+  });
+});
 
 describe('QueuePage wiring: row actions', () => {
   it('Stop on a printing item -> confirm -> POST /queue/{id}/stop for that item', async () => {

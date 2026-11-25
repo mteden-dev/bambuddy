@@ -31,6 +31,7 @@ export default {
     archives: '아카이브',
     queue: '대기열',
     products: '제품',
+    orders: '주문',
     stats: '통계',
     profiles: '프로필',
     maintenance: '유지보수',
@@ -8715,11 +8716,6 @@ export default {
   products: {
     title: '제품',
     subtitle: '부품으로 이루어진 제품과 주문',
-    tabs: {
-      products: '제품',
-      base: 'Base 주문',
-      qc: '확인 대기',
-    },
     newProduct: '새 제품',
     emptyTitle: '아직 제품이 없습니다',
     emptyDescription: '제품은 여러 부품으로 이루어집니다(예: 상자라면 뚜껑, 바닥, 트레이). 부품마다 슬라이스된 플레이트가 있습니다. 주문하면 Bambuddy가 플레이트를 대기열에 넣습니다. 인쇄 시작 전에 추가된 주문은 다른 주문과 함께 계획되며, 더 빠르면 더 큰 플레이트를 사용합니다.',
@@ -8908,6 +8904,15 @@ export default {
         withdrawn: '철회됨: {{orders}}',
         short: '계획할 수 없는 부품이 있습니다. 제품의 플레이트를 확인하세요.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: '주문',
+    subtitle: 'Base 주문과 확인할 완성된 출력물',
+    tabs: {
+      base: 'Base 주문',
+      qc: '확인 대기',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

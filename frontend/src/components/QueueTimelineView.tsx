@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useState, useMemo, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   DndContext,
@@ -56,6 +56,7 @@ import { QueueJobDetails, type QueuePinTarget } from './QueueJobDetails';
 import { StaffedHoursDialog } from './StaffedHoursDialog';
 import { useJobOrders } from '../hooks/useJobOrders';
 import { jobOrdersText, urgentFirst } from '../utils/baseOrders';
+import { fitBarHeight, LANE_BAR_HEIGHT_PX, LANE_PADDING_PX } from '../utils/timelineLayout';
 
 /** Gantt-style rolling timeline. One horizontal swimlane per printer. A
  *  print that is running is drawn from the printer's live status; every
@@ -102,8 +103,12 @@ const PINCH_ZOOM_RATIO = 1.3;
 // Minimum bar width — short prints (a few minutes) would otherwise render as
 // 1-2px slivers and be unclickable. 32px keeps them at thumb size.
 const MIN_BAR_PX = 32;
-// Lane height for the bar row + label.
-const LANE_BAR_HEIGHT_PX = 40;
+// Kept free under the lanes: the page's padding, a scrollbar.
+const LANES_BOTTOM_RESERVE_PX = 40;
+// The jobs off the lanes, when there are any.
+const OFF_TIMELINE_RESERVE_PX = 72;
+// Fork: the bar height of this timeline, from the room the screen has.
+const BarHeightContext = createContext(LANE_BAR_HEIGHT_PX);
 // Why a finished plate waits until then (GET /queue/forecast plate_waits).
 type PlateWaitReason = NonNullable<QueueForecastPlateWait['reason']>;
 interface PlateWaitSpan {
@@ -244,6 +249,7 @@ function TimelineBar({
     data: { item: ev.item },
     disabled: !draggable,
   });
+  const barHeight = useContext(BarHeightContext);
   const displayName = queueJobName(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
   const printTime = queueJobPrintTime(ev.item, ev.variant);
@@ -280,17 +286,17 @@ function TimelineBar({
       data-kind={isPrinting ? 'printing' : ev.reserved ? 'reserved' : ev.projected ? 'projected' : 'pinned'}
       data-moved={ev.moved ? 'true' : undefined}
       data-manual={!isPrinting && ev.item.manual_start ? 'true' : undefined}
-      className={`absolute rounded-md transition-[filter,opacity] hover:brightness-110 hover:z-10 overflow-hidden flex items-center gap-1.5 px-1.5 text-left ${barClasses(ev)} ${
+      className={`@container absolute rounded-md transition-[filter,opacity] hover:brightness-110 hover:z-10 overflow-hidden flex items-center gap-1.5 px-1.5 text-left ${barClasses(ev)} ${
         ev.moved ? 'ring-2 ring-amber-300/80 ring-offset-1 ring-offset-bambu-dark-secondary' : ''
       } ${draggable ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging || dimmed ? 'opacity-40' : ''}`}
       style={{
         left: `${leftPct}%`,
         width: `max(${MIN_BAR_PX}px, ${widthPct}%)`,
-        top: 8,
-        height: LANE_BAR_HEIGHT_PX,
+        top: LANE_PADDING_PX / 2,
+        height: barHeight,
       }}
     >
-      <BarContent ev={ev} t={t} orderText={orderText} />
+      <BarContent ev={ev} t={t} orderText={orderText} height={barHeight} />
     </button>
   );
 }
@@ -308,35 +314,88 @@ function barClasses(ev: ScheduleEvent): string {
   return batched ? 'bg-cyan-500/20 border border-cyan-400/50' : 'bg-bambu-green/20 border border-bambu-green/50';
 }
 
-function BarContent({ ev, t, orderText = null }: { ev: ScheduleEvent; t: QueueTimelineViewProps['t']; orderText?: string | null }) {
+/**
+ * What a bar shows. Fork: as much as its size allows. Its height (the lanes
+ * grow to fill the screen) adds lines: the orders, the time it runs, the
+ * rest; its width (a container query on the bar) drops the picture and the
+ * extra lines of a short job.
+ */
+function BarContent({
+  ev,
+  t,
+  orderText = null,
+  height = LANE_BAR_HEIGHT_PX,
+}: {
+  ev: ScheduleEvent;
+  t: QueueTimelineViewProps['t'];
+  orderText?: string | null;
+  height?: number;
+}) {
   const thumbnailUrl = queueJobThumbnailUrl(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
   const printTime = queueJobPrintTime(ev.item, ev.variant);
   const manual = !isPrinting && ev.item.manual_start;
+  const tall = height >= 64;
+  const roomy = height >= 96;
+  const progress = isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null;
+  const when = `${formatTooltipTime(ev.estimatedStart)}–${formatTooltipTime(ev.estimatedEnd)}`;
   const second = [
     orderText,
     manual ? t('queue.timeline.manualStart') : null,
     anyModelLabel(ev, t),
     printTime ? formatDuration(printTime) : null,
-    isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null,
+    progress,
   ].filter(Boolean).join(' · ');
+  const timing = [when, printTime ? formatDuration(printTime) : null, progress].filter(Boolean).join(' · ');
+  const more = [manual ? t('queue.timeline.manualStart') : null, anyModelLabel(ev, t), ev.item.batch_name]
+    .filter(Boolean)
+    .join(' · ');
+  const thumbSize = tall ? Math.min(height - 12, 80) : 28;
   return (
     <>
       {thumbnailUrl && (
-        <img src={thumbnailUrl} alt="" className="w-7 h-7 rounded object-cover shrink-0 bg-bambu-dark" draggable={false} />
+        <img
+          src={thumbnailUrl}
+          alt=""
+          className={`rounded object-cover shrink-0 bg-bambu-dark ${tall ? 'hidden @min-[7rem]:block' : ''}`}
+          style={{ width: thumbSize, height: thumbSize }}
+          draggable={false}
+        />
       )}
       <div className="min-w-0 flex-1">
-        <div className="text-xs text-white font-medium truncate leading-tight flex items-center gap-1">
+        <div
+          className={`text-white font-medium leading-tight flex gap-1 ${
+            roomy ? 'text-sm items-start' : 'text-xs items-center'
+          }`}
+        >
           {!isPrinting && (manual
-            ? <Hand className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />
+            ? <Hand className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />
             : ev.reserved
-            ? <Lock className="w-3 h-3 shrink-0 text-amber-300" aria-hidden />
+            ? <Lock className="w-3 h-3 shrink-0 text-amber-300 mt-0.5" aria-hidden />
             : ev.projected
-              ? <Shuffle className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />
-              : <Pin className="w-3 h-3 shrink-0 text-bambu-gray" aria-hidden />)}
-          <span className="truncate">{queueJobName(ev.item, ev.variant)}</span>
+              ? <Shuffle className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />
+              : <Pin className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />)}
+          <span className={roomy ? 'line-clamp-2 break-words' : 'truncate'}>{queueJobName(ev.item, ev.variant)}</span>
         </div>
-        <div className="text-[10px] text-bambu-gray truncate leading-tight">{second}</div>
+        {tall ? (
+          <>
+            {orderText && (
+              <div className="text-[11px] text-white/80 truncate leading-tight mt-0.5" data-bar-line="orders">
+                {orderText}
+              </div>
+            )}
+            <div className="text-[10px] text-bambu-gray truncate leading-tight mt-0.5" data-bar-line="timing">
+              {timing}
+            </div>
+            {roomy && more && (
+              <div className="hidden @min-[9rem]:block text-[10px] text-bambu-gray truncate leading-tight mt-0.5" data-bar-line="more">
+                {more}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-[10px] text-bambu-gray truncate leading-tight">{second}</div>
+        )}
       </div>
       {isPrinting && ev.progress != null && (
         <div className="absolute bottom-0 left-0 h-0.5 bg-blue-300" style={{ width: `${ev.progress}%` }} aria-hidden />
@@ -360,6 +419,7 @@ function LaneTrack({
   children: ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `printer-${printerId}`, data: { printerId } });
+  const barHeight = useContext(BarHeightContext);
   const highlight = dragState && dragState.allowed
     ? isOver
       ? 'bg-bambu-green/5'
@@ -370,7 +430,7 @@ function LaneTrack({
       ref={setNodeRef}
       data-lane={printerId}
       className={`relative flex-1 ${highlight}`}
-      style={{ height: LANE_BAR_HEIGHT_PX + 16 }}
+      style={{ height: barHeight + LANE_PADDING_PX }}
     >
       {children}
       {markerX != null && (
@@ -906,6 +966,30 @@ export function QueueTimelineView({
   }, [events, queuedByPrinter]);
   const allEvents = useMemo(() => Array.from(eventsByPrinter.values()).flat(), [eventsByPrinter]);
 
+  // Fork: the lanes fill the room the screen has below them, a share per
+  // printer, so the bars can show more. Measured from where the lanes start.
+  const lanesRef = useRef<HTMLDivElement>(null);
+  const [barHeight, setBarHeight] = useState(LANE_BAR_HEIGHT_PX);
+  const offTimelineCount = forecast?.off_timeline?.length ?? 0;
+  useLayoutEffect(() => {
+    const fit = () => {
+      const lanes = lanesRef.current;
+      if (!lanes) return;
+      const top = lanes.getBoundingClientRect().top + window.scrollY;
+      const reserve = LANES_BOTTOM_RESERVE_PX + (offTimelineCount > 0 ? OFF_TIMELINE_RESERVE_PX : 0);
+      setBarHeight(fitBarHeight(top, window.innerHeight, printers.length, reserve));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    // What is above the lanes may load or wrap after they do.
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fit) : null;
+    observer?.observe(document.body);
+    return () => {
+      window.removeEventListener('resize', fit);
+      observer?.disconnect();
+    };
+  }, [printers.length, offTimelineCount]);
+
   const offTimeline = useMemo(
     () => (forecast?.off_timeline ?? [])
       .map((entry) => ({ entry, item: itemsById.get(entry.item_id) }))
@@ -1362,6 +1446,7 @@ export function QueueTimelineView({
           <p className="text-sm">{t('queue.timeline.noData')}</p>
         </div>
       ) : (
+        <BarHeightContext.Provider value={barHeight}>
         <DndContext
           sensors={sensors}
           collisionDetection={pointerFirst}
@@ -1420,7 +1505,7 @@ export function QueueTimelineView({
             </div>
 
             {/* Lanes */}
-            <div className="relative">
+            <div className="relative" ref={lanesRef}>
               {/* Nobody there to clear plates: shaded behind the lanes. */}
               {unstaffed.length > 0 && (
                 <div className="absolute inset-0 flex pointer-events-none" aria-hidden>
@@ -1518,8 +1603,8 @@ export function QueueTimelineView({
                             style={{
                               left: `${((startMs - rangeStartMs) / rangeMs) * 100}%`,
                               width: `max(${MIN_BAR_PX}px, ${((endMs - startMs) / rangeMs) * 100}%)`,
-                              top: 8,
-                              height: LANE_BAR_HEIGHT_PX,
+                              top: LANE_PADDING_PX / 2,
+                              height: barHeight,
                             }}
                             title={t('queue.timeline.externalPrint')}
                           >
@@ -1551,8 +1636,8 @@ export function QueueTimelineView({
                             style={{
                               left: `${((startMs - rangeStartMs) / rangeMs) * 100}%`,
                               width: `${((endMs - startMs) / rangeMs) * 100}%`,
-                              top: 8,
-                              height: LANE_BAR_HEIGHT_PX,
+                              top: LANE_PADDING_PX / 2,
+                              height: barHeight,
                               backgroundImage: PLATE_WAIT_PATTERN,
                             }}
                           >
@@ -1641,18 +1726,23 @@ export function QueueTimelineView({
             {dragItem && (
               // Opaque underlay: the bar colours are translucent and the tile
               // passes over other bars.
-              <div className="rounded-md bg-bambu-dark-secondary shadow-lg" style={{ width: 200, height: LANE_BAR_HEIGHT_PX }}>
+              <div className="rounded-md bg-bambu-dark-secondary shadow-lg" style={{ width: 200, height: barHeight }}>
                 <div
-                  className={`relative h-full rounded-md flex items-center gap-1.5 px-1.5 cursor-grabbing overflow-hidden ${
+                  className={`@container relative h-full rounded-md flex items-center gap-1.5 px-1.5 cursor-grabbing overflow-hidden ${
                     dragEvent ? barClasses(dragEvent) : 'bg-bambu-green/20 border border-bambu-green/50'
                   }`}
                 >
-                  <BarContent ev={dragEvent ?? { item: dragItem, estimatedStart: now, estimatedEnd: now, type: 'queued' }} t={t} />
+                  <BarContent
+                    ev={dragEvent ?? { item: dragItem, estimatedStart: now, estimatedEnd: now, type: 'queued' }}
+                    t={t}
+                    height={barHeight}
+                  />
                 </div>
               </div>
             )}
           </DragOverlay>
         </DndContext>
+        </BarHeightContext.Provider>
       )}
 
       {staffedOpen && (

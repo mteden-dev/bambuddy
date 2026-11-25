@@ -32,6 +32,7 @@ export default {
     archives: 'Arquivos',
     queue: 'Fila de impressão',
     products: 'Produtos',
+    orders: 'Pedidos',
     stats: 'Estatísticas',
     profiles: 'Perfis',
     maintenance: 'Manutenção',
@@ -9077,11 +9078,6 @@ export default {
   products: {
     title: 'Produtos',
     subtitle: 'Produtos feitos de peças e seus pedidos',
-    tabs: {
-      products: 'Produtos',
-      base: 'Pedidos do Base',
-      qc: 'A conferir',
-    },
     newProduct: 'Novo produto',
     emptyTitle: 'Nenhum produto ainda',
     emptyDescription: 'Um produto é feito de peças (por exemplo uma caixa: tampa, base e bandeja) com placas fatiadas para cada uma. Faça um pedido e o Bambuddy coloca as placas na fila; um pedido adicionado antes de a impressão começar é planejado junto com os outros, em placas maiores quando isso for mais rápido.',
@@ -9270,6 +9266,15 @@ export default {
         withdrawn: 'Retirados: {{orders}}.',
         short: 'Algumas peças não podem ser planejadas: confira as placas do produto.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Pedidos',
+    subtitle: 'Pedidos do Base e impressões prontas para conferir',
+    tabs: {
+      base: 'Pedidos do Base',
+      qc: 'A conferir',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

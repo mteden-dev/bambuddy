@@ -32,6 +32,7 @@ export default {
     archives: '归档',
     queue: '打印队列',
     products: '产品',
+    orders: '订单',
     stats: '统计',
     profiles: '配置文件',
     maintenance: '维护',
@@ -9075,11 +9076,6 @@ export default {
   products: {
     title: '产品',
     subtitle: '由零件组成的产品及其订单',
-    tabs: {
-      products: '产品',
-      base: '来自 Base 的订单',
-      qc: '待检查',
-    },
     newProduct: '新建产品',
     emptyTitle: '还没有产品',
     emptyDescription: '产品由多个零件组成（例如盒子：盖子、底座和托盘），每个零件都有已切片的打印板。下单后，Bambuddy 会把打印板加入队列；在开始打印前加入的订单会与其他订单一起规划，更快时会使用更大的打印板。',
@@ -9268,6 +9264,15 @@ export default {
         withdrawn: '已撤回：{{orders}}。',
         short: '部分零件无法计划：请检查产品的打印板。',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: '订单',
+    subtitle: 'Base 订单和待检查的已完成打印',
+    tabs: {
+      base: '来自 Base 的订单',
+      qc: '待检查',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

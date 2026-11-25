@@ -32,6 +32,7 @@ export default {
     archives: 'Archiwa',
     queue: 'Kolejka druku',
     products: 'Produkty',
+    orders: 'Zamówienia',
     stats: 'Statystyki',
     profiles: 'Profile',
     maintenance: 'Konserwacja',
@@ -9145,11 +9146,6 @@ export default {
   products: {
     title: 'Produkty',
     subtitle: 'Produkty z części i zamówienia na nie',
-    tabs: {
-      products: 'Produkty',
-      base: 'Zamówienia z Base',
-      qc: 'Do sprawdzenia',
-    },
     newProduct: 'Nowy produkt',
     emptyTitle: 'Nie ma jeszcze produktów',
     emptyDescription: 'Produkt składa się z części (np. pudełko: góra, dół i tray), a każda ma pocięte płyty. Zamów kilka sztuk, a Bambuddy doda płyty do kolejki; zamówienie dodane przed startem druku planuje się razem z pozostałymi, na większych płytach, jeśli tak będzie szybciej.',
@@ -9338,6 +9334,15 @@ export default {
         withdrawn: 'Wycofano: {{orders}}.',
         short: 'Części nie da się zaplanować – sprawdź płyty produktu.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Zamówienia',
+    subtitle: 'Zamówienia z Base i wydruki do sprawdzenia',
+    tabs: {
+      base: 'Zamówienia z Base',
+      qc: 'Do sprawdzenia',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

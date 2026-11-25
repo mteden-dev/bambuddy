@@ -32,6 +32,7 @@ export default {
     archives: 'Arşivler',
     queue: 'Baskı Kuyruğu',
     products: 'Ürünler',
+    orders: 'Siparişler',
     stats: 'İstatistikler',
     profiles: 'Profiller',
     maintenance: 'Bakım',
@@ -9019,11 +9020,6 @@ export default {
   products: {
     title: 'Ürünler',
     subtitle: 'Parçalardan oluşan ürünler ve siparişleri',
-    tabs: {
-      products: 'Ürünler',
-      base: 'Base siparişleri',
-      qc: 'Kontrol edilecek',
-    },
     newProduct: 'Yeni ürün',
     emptyTitle: 'Henüz ürün yok',
     emptyDescription: 'Bir ürün parçalardan oluşur (örneğin bir kutu: kapak, taban ve tepsi) ve her parçanın dilimlenmiş plakaları vardır. Sipariş verin, Bambuddy plakaları kuyruğa koysun; baskı başlamadan eklenen bir sipariş diğerleriyle birlikte, daha hızlıysa daha büyük plakalarda planlanır.',
@@ -9212,6 +9208,15 @@ export default {
         withdrawn: 'Çekildi: {{orders}}.',
         short: 'Bazı parçalar planlanamıyor: ürünün plakalarını kontrol edin.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Siparişler',
+    subtitle: 'Base siparişleri ve kontrol edilecek biten baskılar',
+    tabs: {
+      base: 'Base siparişleri',
+      qc: 'Kontrol edilecek',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

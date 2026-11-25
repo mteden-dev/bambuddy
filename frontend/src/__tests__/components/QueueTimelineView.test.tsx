@@ -136,6 +136,30 @@ describe('QueueTimelineView', () => {
     expect(pinnedBar.className).not.toContain('border-dashed');
   });
 
+  describe('bar size (fork)', () => {
+    const tallness = window.innerHeight;
+    afterEach(() => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: tallness });
+    });
+
+    it('fills the room below the lanes and shows when a job runs on a tall bar', async () => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
+      renderTimeline();
+      const pinned = await within(lane(1)).findByTitle((title) => title.startsWith('Pinned box'));
+      expect(parseInt(pinned.style.height, 10)).toBeGreaterThan(40);
+      expect(parseInt(lane(1).style.height, 10)).toBe(parseInt(pinned.style.height, 10) + 16);
+      expect(pinned.querySelector('[data-bar-line="timing"]')?.textContent).toMatch(/\d.*–.*\d/);
+    });
+
+    it('keeps the two-line bar when the screen has no room for more', async () => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 120 });
+      renderTimeline();
+      const pinned = await within(lane(1)).findByTitle((title) => title.startsWith('Pinned box'));
+      expect(pinned.style.height).toBe('40px');
+      expect(pinned.querySelector('[data-bar-line="timing"]')).toBeNull();
+    });
+  });
+
   it('lists jobs the forecast leaves off the lanes with the reason', async () => {
     renderTimeline();
 

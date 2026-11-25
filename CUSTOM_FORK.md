@@ -44,6 +44,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     drukarek wypełnione, z ikoną drukarki). Reguła: `services/printer_tags.py`, API
     `/printer-tags`, scheduler zawęża nią drukarki twórcy (dopasowanie, wybudzanie gniazdkiem,
     suszenie, przeniesienie przy braku filamentu),
+  - oś czasu kolejki jest pierwszą i domyślną zakładką kolejki (wybrana zakładka jest
+    zapamiętywana); jej tory wypełniają wolną wysokość ekranu (po równo na drukarkę, 40–128 px
+    na kafelek), a kafelek pokazuje tyle, ile się zmieści: wysoki dodaje zamówienia, godziny
+    druku i czas, a przy szerokim także „Dowolna <model>”, ręczny start i grupę; wąski chowa
+    miniaturę i dodatkowe linie,
   - oś czasu kolejki pokazuje całą kolejkę: zadania „Dowolna <model>” stoją na drukarce, którą
     według prognozy dostaną (przerywana ramka; przypięte do drukarki mają pełną ramkę i pinezkę).
     Prognozę liczy backend (`GET /queue/forecast`, `services/queue_forecast.py`): drukarka, która
@@ -171,7 +176,7 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     „Płyta zdjęta” na karcie drukarki pada pytanie o płytę, która na niej leży (wadliwe na część
     jednym tapnięciem, „Sprawdzę później”, gdy płyta jeszcze stygnie, co przy świeżej płycie jest
     główną odpowiedzią, albo „Anuluj”, który płyty nie zdejmuje); karta drukarki i menu mają
-    licznik „do sprawdzenia”, zakładka „Do sprawdzenia” zbiera wszystko (filtr po drukarce,
+    licznik „do sprawdzenia”, zakładka „Do sprawdzenia” na stronie Zamówienia zbiera wszystko (filtr po drukarce,
     sprawdzone z 7 dni do poprawienia, „Cofnij” po zapisie). Niesprawdzone liczą się jako dobre;
     wadliwe wypadają ze stanu i planer dodrukowuje je od razu, a zamówienie zamknięte z taką
     sztuką otwiera się znowu. Ocena trafia też jako werdykt do archiwum (upstreamowe pytanie o
@@ -179,7 +184,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     wybiera się segmentami 0–3 albo − n +, a okna wysuwają się od dołu. Widok pokazuje zamówienia z postępem i prognozą gotowości, zadania w
     kolejce, stan części z korektą i braki, których nie ma w kolejce (np. ręcznie usunięte
     zadanie). Zamówienia mają pola `external_source`/`external_ref` na przyszłe zamówienia ze
-    sklepu. **Zamówienia z Base** (base.com, zakładka „Zamówienia z Base” na stronie Produkty,
+    sklepu. **Zamówienia z Base** (base.com, osobna strona „Zamówienia” w pasku bocznym, zaraz
+    po Produktach, z zakładkami „Zamówienia z Base” i „Do sprawdzenia”; licznik do sprawdzenia
+    jest przy niej, a stare linki `/products?tab=base|qc` prowadzą tam,
     `services/base_sync.py`): co kilka minut Bambuddy czyta zamówienia z wybranych statusów
     (np. „Przyjęte do realizacji” i „DZIŚ / Jutro / Pojutrze / 3+ Dni”) i wybranych źródeł, potwierdzone od ustawionej daty (domyślnie
     od chwili konfiguracji, żeby nie wpadły zamówienia zrobione wcześniej), tylko do odczytu, bez danych kupującego

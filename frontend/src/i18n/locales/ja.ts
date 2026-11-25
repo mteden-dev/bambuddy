@@ -32,6 +32,7 @@ export default {
     archives: 'アーカイブ',
     queue: '印刷キュー',
     products: '製品',
+    orders: '注文',
     stats: '統計',
     profiles: 'プロファイル',
     maintenance: 'メンテナンス',
@@ -9091,11 +9092,6 @@ export default {
   products: {
     title: '製品',
     subtitle: '部品でできた製品とその注文',
-    tabs: {
-      products: '製品',
-      base: 'Baseの注文',
-      qc: '確認待ち',
-    },
     newProduct: '新しい製品',
     emptyTitle: '製品はまだありません',
     emptyDescription: '製品は複数の部品でできています（例：箱ならフタ、底、トレイ）。部品ごとにスライス済みのプレートを用意します。注文するとBambuddyがプレートをキューに入れます。印刷開始前に追加された注文は他の注文とまとめて計画され、速くなる場合は大きなプレートを使います。',
@@ -9284,6 +9280,15 @@ export default {
         withdrawn: '外した注文: {{orders}}',
         short: '計画できない部品があります。製品のプレートを確認してください。',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: '注文',
+    subtitle: 'Base の注文と確認待ちの完成した印刷',
+    tabs: {
+      base: 'Baseの注文',
+      qc: '確認待ち',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

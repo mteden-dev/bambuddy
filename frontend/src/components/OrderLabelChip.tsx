@@ -17,9 +17,9 @@ interface OrderLabelChipProps {
 
 const DOT: Record<string, string> = { allegro: 'bg-[#FF5A00]', shop: 'bg-sky-400' };
 
-/** Opens an order in Products → Orders from Base, through the router's history (no router needed here). */
+/** Opens an order on the Orders page, through the router's history (no router needed here). */
 function openOrder(baseOrderId: number) {
-  window.history.pushState({}, '', `/products?tab=base&order=${baseOrderId}`);
+  window.history.pushState({}, '', `/orders?order=${baseOrderId}`);
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
 

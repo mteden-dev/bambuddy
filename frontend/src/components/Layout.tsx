@@ -1,7 +1,7 @@
 import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { PageLoading } from './PageLoading';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Printer, Archive, ListOrdered, Boxes, BarChart3, Cloud, Settings, Sun, Moon, Monitor, ChevronLeft, ChevronRight, Keyboard, Github, ArrowUpCircle, Wrench, FolderKanban, FolderOpen, X, Menu, Info, Plug, Bug, LogOut, Key, Loader2, Disc3, ShieldAlert, Globe, Bell, Receipt, Megaphone, type LucideIcon } from 'lucide-react';
+import { Printer, Archive, ListOrdered, Boxes, ShoppingCart, BarChart3, Cloud, Settings, Sun, Moon, Monitor, ChevronLeft, ChevronRight, Keyboard, Github, ArrowUpCircle, Wrench, FolderKanban, FolderOpen, X, Menu, Info, Plug, Bug, LogOut, Key, Loader2, Disc3, ShieldAlert, Globe, Bell, Receipt, Megaphone, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../contexts/ThemeContext';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
@@ -52,6 +52,8 @@ export const defaultNavItems: NavItem[] = [
   { id: 'queue', to: '/queue', icon: ListOrdered, labelKey: 'nav.queue' },
   // Fork: products made of parts and their orders (order syncing grows here).
   { id: 'products', to: '/products', icon: Boxes, labelKey: 'nav.products' },
+  // Fork: orders from Base and the finished prints to check.
+  { id: 'orders', to: '/orders', icon: ShoppingCart, labelKey: 'nav.orders' },
   { id: 'projects', to: '/projects', icon: FolderKanban, labelKey: 'nav.projects' },
   { id: 'files', to: '/files', icon: FolderOpen, labelKey: 'nav.files' },
   // Id kept from when the page was MakerWorld-only, so saved sidebar orders and hidden items still apply.
@@ -369,6 +371,7 @@ export function Layout() {
       archives: ['archives:read', 'archives:read_own', 'archives:read_all'],
       queue: ['queue:read', 'queue:read_own', 'queue:read_all'],
       products: ['queue:read', 'queue:read_own', 'queue:read_all'],
+      orders: ['queue:read', 'queue:read_own', 'queue:read_all'],
       stats: 'stats:read',
       profiles: 'kprofiles:read',
       maintenance: 'maintenance:read',
@@ -417,6 +420,12 @@ export function Layout() {
       if (navItemsMap.has(id) || extLinksMap.has(id)) {
         result.push(id);
         seen.add(id);
+      }
+      // Fork: Orders came out of Products; a stored order from before has it
+      // right after Products rather than at the end.
+      if (id === 'products' && !sidebarOrder.includes('orders') && !isHidden('orders')) {
+        result.push('orders');
+        seen.add('orders');
       }
     }
 
@@ -762,7 +771,7 @@ export function Layout() {
                 const { to, icon: Icon, labelKey } = navItem;
                 const showQueueBadge = id === 'queue' && pendingQueueCount > 0;
                 const showArchiveBadge = id === 'archives' && pendingUploadsCount > 0;
-                const showProductsBadge = id === 'products' && productsToCheckCount > 0;
+                const showProductsBadge = id === 'orders' && productsToCheckCount > 0;
                 const badgeCount = showQueueBadge
                   ? pendingQueueCount
                   : showArchiveBadge

@@ -32,6 +32,7 @@ export default {
     archives: '歸檔',
     queue: '列印佇列',
     products: '產品',
+    orders: '訂單',
     stats: '統計',
     profiles: '設定檔案',
     maintenance: '維護',
@@ -9075,11 +9076,6 @@ export default {
   products: {
     title: '產品',
     subtitle: '由零件組成的產品及其訂單',
-    tabs: {
-      products: '產品',
-      base: '來自 Base 的訂單',
-      qc: '待檢查',
-    },
     newProduct: '新增產品',
     emptyTitle: '還沒有產品',
     emptyDescription: '產品由多個零件組成（例如盒子：蓋子、底座和托盤），每個零件都有已切片的列印板。下單後，Bambuddy 會把列印板加入佇列；在開始列印前加入的訂單會與其他訂單一起規劃，較快時會使用更大的列印板。',
@@ -9268,6 +9264,15 @@ export default {
         withdrawn: '已撤回：{{orders}}。',
         short: '部分零件無法規劃：請檢查產品的列印板。',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: '訂單',
+    subtitle: 'Base 訂單和待檢查的已完成列印',
+    tabs: {
+      base: '來自 Base 的訂單',
+      qc: '待檢查',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

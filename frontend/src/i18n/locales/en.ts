@@ -32,6 +32,7 @@ export default {
     archives: 'Archives',
     queue: 'Print Queue',
     products: 'Products',
+    orders: 'Orders',
     stats: 'Statistics',
     profiles: 'Profiles',
     maintenance: 'Maintenance',
@@ -9145,11 +9146,6 @@ export default {
   products: {
     title: 'Products',
     subtitle: 'Products made of parts and the orders for them',
-    tabs: {
-      products: 'Products',
-      base: 'Orders from Base',
-      qc: 'To check',
-    },
     newProduct: 'New product',
     emptyTitle: 'No products yet',
     emptyDescription: 'A product is made of parts (say a box: lid, base and tray) with sliced plates for each. Order some and Bambuddy puts the plates in the queue; an order added before printing starts is planned together with the others, on bigger plates where that is faster.',
@@ -9338,6 +9334,15 @@ export default {
         withdrawn: 'Withdrawn: {{orders}}.',
         short: 'Some parts cannot be planned: check the product\'s plates.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Orders',
+    subtitle: 'Orders from Base and the finished prints to check',
+    tabs: {
+      base: 'Orders from Base',
+      qc: 'To check',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

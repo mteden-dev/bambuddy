@@ -32,6 +32,7 @@ export default {
     archives: 'Archieven',
     queue: 'Afdrukwachtrij',
     products: 'Producten',
+    orders: 'Bestellingen',
     stats: 'Statistieken',
     profiles: 'Profielen',
     maintenance: 'Onderhoud',
@@ -9143,11 +9144,6 @@ export default {
   products: {
     title: 'Producten',
     subtitle: 'Producten uit onderdelen en hun bestellingen',
-    tabs: {
-      products: 'Producten',
-      base: 'Bestellingen uit Base',
-      qc: 'Te controleren',
-    },
     newProduct: 'Nieuw product',
     emptyTitle: 'Nog geen producten',
     emptyDescription: 'Een product bestaat uit onderdelen (bijvoorbeeld een doos: deksel, bodem en inzet) met gesliceerde platen voor elk onderdeel. Bestel er een paar en Bambuddy zet de platen in de wachtrij; een bestelling die binnenkomt voordat het printen begint, wordt samen met de andere gepland, op grotere platen als dat sneller is.',
@@ -9336,6 +9332,15 @@ export default {
         withdrawn: 'Teruggetrokken: {{orders}}.',
         short: 'Sommige onderdelen kunnen niet worden gepland: controleer de platen van het product.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Bestellingen',
+    subtitle: 'Bestellingen uit Base en klare prints om te controleren',
+    tabs: {
+      base: 'Bestellingen uit Base',
+      qc: 'Te controleren',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

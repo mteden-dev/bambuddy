@@ -32,6 +32,7 @@ export default {
     archives: 'Archivi',
     queue: 'Coda di stampa',
     products: 'Prodotti',
+    orders: 'Ordini',
     stats: 'Statistiche',
     profiles: 'Profili',
     maintenance: 'Manutenzione',
@@ -9077,11 +9078,6 @@ export default {
   products: {
     title: 'Prodotti',
     subtitle: 'Prodotti fatti di parti e i loro ordini',
-    tabs: {
-      products: 'Prodotti',
-      base: 'Ordini da Base',
-      qc: 'Da controllare',
-    },
     newProduct: 'Nuovo prodotto',
     emptyTitle: 'Ancora nessun prodotto',
     emptyDescription: 'Un prodotto è fatto di parti (ad esempio una scatola: coperchio, fondo e vassoio) con piatti già slicati per ciascuna. Ordinane alcuni e Bambuddy mette i piatti in coda; un ordine aggiunto prima dell\'inizio della stampa viene pianificato insieme agli altri, su piatti più grandi se così è più veloce.',
@@ -9270,6 +9266,15 @@ export default {
         withdrawn: 'Ritirati: {{orders}}.',
         short: 'Alcuni pezzi non si possono pianificare: controlla le piastre del prodotto.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Ordini',
+    subtitle: 'Ordini da Base e stampe finite da controllare',
+    tabs: {
+      base: 'Ordini da Base',
+      qc: 'Da controllare',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

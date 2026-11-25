@@ -28,6 +28,8 @@ const MaintenancePage = lazyPage(() => import('./pages/MaintenancePage'), 'Maint
 const ProjectsPage = lazyPage(() => import('./pages/ProjectsPage'), 'ProjectsPage');
 // Fork: products made of parts and their orders.
 const ProductsPage = lazyPage(() => import('./pages/ProductsPage'), 'ProductsPage');
+// Fork: orders from Base and the prints to check.
+const OrdersPage = lazyPage(() => import('./pages/OrdersPage'), 'OrdersPage');
 const ProjectDetailPage = lazyPage(() => import('./pages/ProjectDetailPage'), 'ProjectDetailPage');
 const FileManagerPage = lazyPage(() => import('./pages/FileManagerPage'), 'FileManagerPage');
 const LibraryTrashPage = lazyPage(() => import('./pages/LibraryTrashPage'), 'LibraryTrashPage');
@@ -248,6 +250,7 @@ function App() {
                   <Route path="maintenance" element={<MaintenancePage />} />
                   <Route path="projects" element={<ProjectsPage />} />
                   <Route path="products" element={<ProductsPage />} />
+                  <Route path="orders" element={<OrdersPage />} />
                   <Route path="projects/:id" element={<ProjectDetailPage />} />
                   <Route path="inventory" element={<InventoryPage />} />
                   <Route path="files" element={<FileManagerPage />} />

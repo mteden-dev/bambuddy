@@ -32,6 +32,7 @@ export default {
     archives: 'Arkiv',
     queue: 'Utskriftskö',
     products: 'Produkter',
+    orders: 'Beställningar',
     stats: 'Statistik',
     profiles: 'Profiler',
     maintenance: 'Underhåll',
@@ -9174,11 +9175,6 @@ errors: {
   products: {
     title: 'Produkter',
     subtitle: 'Produkter av delar och deras beställningar',
-    tabs: {
-      products: 'Produkter',
-      base: 'Beställningar från Base',
-      qc: 'Att kontrollera',
-    },
     newProduct: 'Ny produkt',
     emptyTitle: 'Inga produkter än',
     emptyDescription: 'En produkt består av delar (till exempel en låda: lock, botten och insats) med slicade plattor för varje del. Beställ några så lägger Bambuddy plattorna i kön; en beställning som kommer innan utskriften börjar planeras tillsammans med de andra, på större plattor när det går fortare.',
@@ -9367,6 +9363,15 @@ errors: {
         withdrawn: 'Tillbakadragna: {{orders}}.',
         short: 'Vissa delar kan inte planeras: kontrollera produktens plattor.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Beställningar',
+    subtitle: 'Beställningar från Base och färdiga utskrifter att kontrollera',
+    tabs: {
+      base: 'Beställningar från Base',
+      qc: 'Att kontrollera',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

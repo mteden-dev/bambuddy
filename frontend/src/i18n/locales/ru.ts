@@ -31,6 +31,7 @@ export default {
     archives: "Архив",
     queue: "Очередь печати",
     products: 'Изделия',
+    orders: 'Заказы',
     stats: "Статистика",
     profiles: "Профили",
     maintenance: "Обслуживание",
@@ -8697,11 +8698,6 @@ export default {
   products: {
     title: 'Изделия',
     subtitle: 'Изделия из деталей и заказы на них',
-    tabs: {
-      products: 'Изделия',
-      base: 'Заказы из Base',
-      qc: 'На проверку',
-    },
     newProduct: 'Новое изделие',
     emptyTitle: 'Изделий пока нет',
     emptyDescription: 'Изделие состоит из деталей (например, коробка: крышка, дно и вкладыш), и у каждой есть нарезанные столы. Закажите несколько — Bambuddy поставит столы в очередь; заказ, добавленный до начала печати, планируется вместе с остальными, на столах побольше, если так быстрее.',
@@ -8890,6 +8886,15 @@ export default {
         withdrawn: 'Сняты: {{orders}}.',
         short: 'Некоторые детали нельзя запланировать: проверьте пластины продукта.',
       },
+    },
+  },
+  // Fork: orders from Base and the prints to check, on their own page.
+  orders: {
+    title: 'Заказы',
+    subtitle: 'Заказы из Base и готовые печати для проверки',
+    tabs: {
+      base: 'Заказы из Base',
+      qc: 'На проверку',
     },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).

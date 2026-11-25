@@ -1821,9 +1821,13 @@ export function QueuePage() {
     if (url === 'pipelines' || url === 'history' || url === 'timeline' || url === 'queue' || url === 'batches') {
       return url;
     }
-    const saved = localStorage.getItem('queue.activeTab');
-    if (saved === 'history' || saved === 'timeline' || saved === 'pipelines' || saved === 'batches') return saved;
-    return 'queue';
+    // Fork: the timeline is the main tab. The tab chosen last is kept under a
+    // key of its own: the old one held "queue" for everyone who never chose.
+    const saved = localStorage.getItem('queue.tab');
+    if (saved === 'queue' || saved === 'history' || saved === 'timeline' || saved === 'pipelines' || saved === 'batches') {
+      return saved;
+    }
+    return 'timeline';
   });
   // Active-tab layout toggle. "position" = today's flat list; "printer"
   // groups items under per-printer section headers with aggregate stats.
@@ -1874,7 +1878,7 @@ export function QueuePage() {
   }, [pendingSortAsc]);
 
   useEffect(() => {
-    localStorage.setItem('queue.activeTab', activeTab);
+    localStorage.setItem('queue.tab', activeTab);
   }, [activeTab]);
 
   useEffect(() => {
@@ -2784,14 +2788,14 @@ export function QueuePage() {
         </div>
       </div>
 
-      {/* Tab strip — Active queue is the main view; History and Timeline
-          live in their own tabs so the queue page stays focused. */}
+      {/* Tab strip — fork: the timeline is the main view, then the active
+          queue; History lives in its own tab so the queue page stays focused. */}
       <div className="flex gap-1 border-b border-bambu-dark-tertiary mb-6 overflow-x-auto">
         {([
+          { id: 'timeline' as const, label: t('queue.tabs.timeline'), icon: GanttChart, count: null as number | null },
           { id: 'queue' as const, label: t('queue.tabs.queue'), icon: Clock, count: pendingItems.length + activeItems.length },
           { id: 'batches' as const, label: t('queue.tabs.batches'), icon: Package, count: activeBatchCount },
           { id: 'history' as const, label: t('queue.tabs.history'), icon: ListOrdered, count: historyTotal },
-          { id: 'timeline' as const, label: t('queue.tabs.timeline'), icon: GanttChart, count: null as number | null },
           // Slicer Pipelines dashboard (#1425 PR C). Lives here instead of
           // its own sidebar entry so the Print Queue page is the single
           // place an operator looks for "what's running / what ran".
