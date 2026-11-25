@@ -752,3 +752,132 @@ async def test_jobs_are_labelled_with_the_orders_they_print_for(async_client: As
         await async_client.get(f"/api/v1/products/{box.id}")
     tags = (await async_client.get("/api/v1/products/order-tags")).json()
     assert tags["printers"][str(item.printer_id)]["orders"][0]["label"] in ("first", "second")
+
+
+# --- an order's print taken out of the queue ------------------------------------------------
+
+
+async def test_a_print_stopped_part_way_is_replanned(async_client: AsyncClient, db_session, box):
+    from backend.app.services import products
+
+    products._auto_replans.clear()
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    item = (await _queue(db_session))[0]
+    # Stop in the queue, or cancelled on the printer: the queue job ends cancelled after it started.
+    item.status = "cancelled"
+    item.started_at = item.created_at
+    await db_session.commit()
+    replans = []
+
+    async def _record(product_id, actor_id, manual_start):
+        replans.append(product_id)
+
+    with patch.object(products, "_replan_later", side_effect=_record):
+        await products.after_queue_items_changed(db_session, [item.id])
+        await db_session.commit()
+    assert replans == [box.id]
+    job = (await db_session.execute(select(ProductJob).where(ProductJob.queue_item_id == item.id))).scalar_one()
+    assert job.status == "cancelled"
+    products._auto_replans.clear()
+
+
+async def test_a_waiting_job_cancelled_in_the_queue_is_not_replanned_by_itself(
+    async_client: AsyncClient, db_session, box
+):
+    from backend.app.services import products
+
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    item = (await _queue(db_session))[0]
+    replans = []
+
+    async def _record(product_id, actor_id, manual_start):
+        replans.append(product_id)
+
+    with patch.object(products, "_replan_later", side_effect=_record):
+        response = await async_client.post(f"/api/v1/queue/{item.id}/cancel")
+        assert response.status_code == 200, response.text
+    assert replans == []
+
+
+async def _cancel_job(client: AsyncClient, item_id: int, body: dict, connected: set[int]) -> dict:
+    return await _post(client, f"/api/v1/products/queue-items/{item_id}/cancel", body, connected)
+
+
+async def _detail(client: AsyncClient, product_id: int, connected: set[int]) -> dict:
+    online, status = _live(connected)
+    with online, status:
+        response = await client.get(f"/api/v1/products/{product_id}")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_cancelling_an_order_print_to_print_it_again_puts_it_back(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    tray_id = next(i for i in await _queue(db_session) if i.printer_id is None).id
+    result = await _cancel_job(async_client, tray_id, {"then": "replan"}, connected)
+    assert result["replanned"] == [box.id]
+    assert (result["created"], result["kept"]) == (1, 2)
+    db_session.expire_all()
+    status = await db_session.scalar(select(PrintQueueItem.status).where(PrintQueueItem.id == tray_id))
+    assert status == "cancelled"
+    trays = [i for i in await _queue(db_session) if i.library_file_id == box.files[("tray", 1)]]
+    assert len(trays) == 1 and trays[0].id != tray_id
+    assert (await _detail(async_client, box.id, connected))["unplanned"] == []
+
+
+async def test_an_order_print_whose_pieces_are_on_hand_goes_to_stock(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    tray = next(i for i in await _queue(db_session) if i.printer_id is None)
+    result = await _cancel_job(async_client, tray.id, {"then": "stock"}, connected)
+    assert result["stocked"] == [{"part_id": box.parts["Tray"], "pieces": 1}]
+    assert result["created"] == 0
+    items = await _queue(db_session)
+    assert len(items) == 2 and all(i.printer_id is not None for i in items)  # lid and base still print
+    detail = await _detail(async_client, box.id, connected)
+    assert detail["unplanned"] == []
+    assert {(s["part_id"], s["printer_id"]): s["pieces"] for s in detail["stock"]} == {(box.parts["Tray"], 0): 1}
+
+
+async def test_cancelling_an_order_print_can_withdraw_its_orders(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1, "notes": "first"}, connected)
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1, "notes": "second"}, connected)
+    tags = (await async_client.get("/api/v1/products/order-tags")).json()["items"]
+    tray_files = (box.files[("tray", 1)], box.files[("tray", 2)])
+    tray = next(i for i in await _queue(db_session) if i.library_file_id in tray_files)
+    served = [t["product_order_id"] for t in tags[str(tray.id)]["orders"]]
+    assert served
+    result = await _cancel_job(async_client, tray.id, {"then": "withdraw", "orders": served[:1]}, connected)
+    assert result["withdrawn"] == served[:1]
+    assert result["withdrawn_base_orders"] == []
+    detail = await _detail(async_client, box.id, connected)
+    open_ids = {o["id"] for o in detail["orders"] if o["status"] == "open"}
+    assert served[0] not in open_ids and len(open_ids) == 1
+    # The other order still gets everything it needs, and nothing more is queued for the withdrawn one.
+    assert detail["unplanned"] == []
+    trays = [i for i in await _queue(db_session) if i.library_file_id in tray_files]
+    assert sum(2 if i.library_file_id == box.files[("tray", 2)] else 1 for i in trays) == 1
+
+
+async def test_only_a_waiting_job_the_planner_made_is_cancelled_with_a_follow_up(
+    async_client: AsyncClient, db_session, box
+):
+    connected = {box.a, box.b}
+    await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    by_hand = PrintQueueItem(library_file_id=box.files[("tray", 1)], status="pending", position=99)
+    db_session.add(by_hand)
+    await db_session.commit()
+    response = await async_client.post(f"/api/v1/products/queue-items/{by_hand.id}/cancel", json={"then": "replan"})
+    assert response.status_code == 409
+
+    tray = next(i for i in await _queue(db_session) if i.printer_id is None)
+    response = await async_client.post(f"/api/v1/products/queue-items/{tray.id}/cancel", json={"then": "withdraw"})
+    assert response.status_code == 400
+    tray.status = "printing"
+    await db_session.commit()
+    response = await async_client.post(f"/api/v1/products/queue-items/{tray.id}/cancel", json={"then": "replan"})
+    assert response.status_code == 409

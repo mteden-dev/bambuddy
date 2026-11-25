@@ -9304,6 +9304,36 @@ export default {
       planned: 'Gepland; kan veranderen na herplannen.',
       forTooltip: 'Voor: {{list}}',
     },
+    cancelJob: {
+      title: 'Een print voor bestellingen annuleren?',
+      printsFor: 'Print voor',
+      question: 'Wat gebeurt er met de onderdelen?',
+      replan: {
+        label: 'Opnieuw printen',
+        hint: 'Hij verlaat de wachtrij en het plan voegt hem meteen weer toe, misschien op een andere printer of plaat.',
+        button: 'Opnieuw printen',
+      },
+      stock: {
+        label: 'Ik heb deze onderdelen',
+        hint: 'De onderdelen gaan naar de voorraad; de bestellingen nemen ze daaruit en het plan print de rest.',
+        button: 'Naar voorraad',
+      },
+      withdraw: {
+        label: 'Bestelling terugtrekken',
+        hint: 'De hele bestelling gaat naar Overgeslagen en de nog niet gestarte prints verlaten de wachtrij.',
+        hintMany: 'De aangevinkte bestellingen gaan naar Overgeslagen; de plaat wordt voor de rest opnieuw gepland.',
+        button: 'Terugtrekken',
+      },
+      back: 'Terug',
+      choose: 'Kiezen',
+      stopNote: 'Hij print voor {{orders}}: na het stoppen zet het plan hem vanzelf weer in de wachtrij. Is de bestelling niet meer nodig, trek haar dan terug.',
+      toast: {
+        replanned: 'Print geannuleerd; het plan is opnieuw berekend.',
+        stocked: 'Onderdelen op voorraad; het plan is opnieuw berekend.',
+        withdrawn: 'Teruggetrokken: {{orders}}.',
+        short: 'Sommige onderdelen kunnen niet worden gepland: controleer de platen van het product.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9363,6 +9393,8 @@ export default {
       undone: 'Ongedaan: de bestelling wacht weer.',
       withdrawn: 'De bestelling is uit productie gehaald.',
       restored: 'De bestelling wacht weer.',
+      requeued: 'De prints staan weer in de wachtrij.',
+      requeueShort: 'Opnieuw gepland, maar sommige onderdelen kunnen nog steeds niet worden geprint: controleer de platen van het product.',
     },
     acceptModal: {
       haveLabel: 'Extra in huis: {{part}} ({{name}})',
@@ -9397,6 +9429,8 @@ export default {
       saved: 'Base-instellingen opgeslagen',
     },
     withdraw: 'Uit productie halen',
+    missing: 'Niet in de wachtrij: {{parts}}',
+    requeue: 'Opnieuw sturen',
     withdrawTitle: 'Bestelling {{number}} terugtrekken?',
     withdrawMessage: 'De prints die nog niet zijn gestart verdwijnen uit de wachtrij. In Base verandert niets.',
     print: 'Printen',

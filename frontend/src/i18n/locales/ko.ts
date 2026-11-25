@@ -8876,6 +8876,36 @@ export default {
       planned: '계획상입니다. 재계획 후 바뀔 수 있습니다.',
       forTooltip: '대상: {{list}}',
     },
+    cancelJob: {
+      title: '주문용 출력을 취소할까요?',
+      printsFor: '출력 대상',
+      question: '부품은 어떻게 할까요?',
+      replan: {
+        label: '다시 출력',
+        hint: '대기열에서 빠지고 계획이 바로 다시 추가합니다(다른 프린터나 플레이트일 수 있음).',
+        button: '다시 출력',
+      },
+      stock: {
+        label: '이 부품이 있어요',
+        hint: '부품이 재고로 들어가고, 주문은 거기서 가져가며 나머지는 계획이 출력합니다.',
+        button: '재고로',
+      },
+      withdraw: {
+        label: '주문 철회',
+        hint: '주문 전체가 건너뜀으로 가고, 아직 시작하지 않은 출력은 대기열에서 빠집니다.',
+        hintMany: '선택한 주문은 건너뜀으로 가고, 나머지 주문을 위해 플레이트를 다시 계획합니다.',
+        button: '철회',
+      },
+      back: '뒤로',
+      choose: '선택',
+      stopNote: '{{orders}} 주문용 출력입니다. 중지하면 계획이 자동으로 다시 대기열에 넣습니다. 주문이 더 필요 없으면 대신 철회하세요.',
+      toast: {
+        replanned: '출력을 취소하고 계획을 다시 계산했습니다.',
+        stocked: '부품을 재고에 넣고 계획을 다시 계산했습니다.',
+        withdrawn: '철회됨: {{orders}}',
+        short: '계획할 수 없는 부품이 있습니다. 제품의 플레이트를 확인하세요.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -8935,6 +8965,8 @@ export default {
       undone: '되돌렸습니다: 주문이 다시 대기 중입니다.',
       withdrawn: '주문을 생산에서 철회했습니다.',
       restored: '주문이 다시 대기 중입니다.',
+      requeued: '출력이 대기열로 돌아왔습니다.',
+      requeueShort: '다시 계획했지만 아직 출력할 수 없는 부품이 있습니다. 제품의 플레이트를 확인하세요.',
     },
     acceptModal: {
       haveLabel: '추가 보유: {{part}} ({{name}})',
@@ -8969,6 +9001,8 @@ export default {
       saved: 'Base 설정을 저장했습니다',
     },
     withdraw: '생산에서 철회',
+    missing: '대기열에 없음: {{parts}}',
+    requeue: '다시 보내기',
     withdrawTitle: '주문 {{number}}을(를) 철회할까요?',
     withdrawMessage: '아직 시작하지 않은 인쇄는 대기열에서 빠집니다. Base에서는 아무것도 바뀌지 않습니다.',
     print: '인쇄',

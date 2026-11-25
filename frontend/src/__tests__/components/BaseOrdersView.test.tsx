@@ -396,6 +396,60 @@ describe('BaseOrdersView', () => {
     await waitFor(() => expect(skipped).toEqual([5001]));
   });
 
+  it('an order whose print left the queue says so and is sent again', async () => {
+    const progress = {
+      product_id: 4,
+      product_order_id: 9,
+      status: 'open',
+      units: 1,
+      units_ready: 0,
+      estimated_ready_at: null,
+      parts: [
+        { part_id: 41, name: 'Lid', ready: 0, needed: 1, on_hand: 0, missing: 1 },
+        { part_id: 42, name: 'Base', ready: 0, needed: 1, on_hand: 0, missing: 0 },
+      ],
+    };
+    orders = [{ ...ORDER, state: 'accepted', progress: [progress] }];
+    const requeued: number[] = [];
+    server.use(
+      http.post('/api/v1/base-sync/orders/:id/requeue', ({ params }) => {
+        requeued.push(Number(params.id));
+        const parts = progress.parts.map((part) => ({ ...part, missing: 0 }));
+        return HttpResponse.json({ ...orders[0], progress: [{ ...progress, parts }] });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    expect(await screen.findByText('Not in the queue: Lid ×1')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Send again' }));
+    await waitFor(() => expect(requeued).toEqual([5001]));
+    expect(await screen.findByText('Its prints are back in the queue.')).toBeInTheDocument();
+  });
+
+  it('an order with every print in the queue offers no Send again', async () => {
+    orders = [
+      {
+        ...ORDER,
+        state: 'accepted',
+        progress: [
+          {
+            product_id: 4,
+            product_order_id: 9,
+            status: 'open',
+            units: 1,
+            units_ready: 0,
+            estimated_ready_at: null,
+            parts: [{ part_id: 41, name: 'Lid', ready: 0, needed: 1, on_hand: 0, missing: 0 }],
+          },
+        ],
+      },
+    ];
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    expect(await screen.findByText(/Lid 0\/1/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not in the queue/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send again' })).not.toBeInTheDocument();
+  });
+
   it('a failed load says so and can try again', async () => {
     server.use(http.get('/api/v1/base-sync/orders', () => HttpResponse.json({ detail: 'boom' }, { status: 500 })));
     render(<BaseOrdersView hasPermission={allowAll} />);

@@ -9335,6 +9335,36 @@ errors: {
       planned: 'Planerat; kan ändras efter omplanering.',
       forTooltip: 'För: {{list}}',
     },
+    cancelJob: {
+      title: 'Avbryta en utskrift gjord för beställningar?',
+      printsFor: 'Skriver ut för',
+      question: 'Vad händer med delarna?',
+      replan: {
+        label: 'Skriv ut igen',
+        hint: 'Den lämnar kön och planen lägger till den igen direkt, kanske på en annan skrivare eller platta.',
+        button: 'Skriv ut igen',
+      },
+      stock: {
+        label: 'Jag har de här delarna',
+        hint: 'Delarna går till lagret; beställningarna tar dem därifrån och planen skriver ut resten.',
+        button: 'Till lager',
+      },
+      withdraw: {
+        label: 'Dra tillbaka beställningen',
+        hint: 'Hela beställningen hamnar under Överhoppade och dess utskrifter som inte har startat lämnar kön.',
+        hintMany: 'De markerade beställningarna hamnar under Överhoppade; plattan planeras om för resten.',
+        button: 'Dra tillbaka',
+      },
+      back: 'Tillbaka',
+      choose: 'Välj',
+      stopNote: 'Den skriver ut för {{orders}}: när den stoppas lägger planen tillbaka den i kön av sig själv. Behövs beställningen inte längre, dra tillbaka den i stället.',
+      toast: {
+        replanned: 'Utskriften avbruten; planen har räknats om.',
+        stocked: 'Delarna i lager; planen har räknats om.',
+        withdrawn: 'Tillbakadragna: {{orders}}.',
+        short: 'Vissa delar kan inte planeras: kontrollera produktens plattor.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9394,6 +9424,8 @@ errors: {
       undone: 'Ångrat: beställningen väntar igen.',
       withdrawn: 'Beställningen är tillbakadragen från produktion.',
       restored: 'Beställningen väntar igen.',
+      requeued: 'Utskrifterna är tillbaka i kön.',
+      requeueShort: 'Omplanerad, men vissa delar kan fortfarande inte skrivas ut: kontrollera produktens plattor.',
     },
     acceptModal: {
       haveLabel: 'Har utöver lager: {{part}} ({{name}})',
@@ -9428,6 +9460,8 @@ errors: {
       saved: 'Base-inställningar sparade',
     },
     withdraw: 'Dra tillbaka från produktion',
+    missing: 'Inte i kön: {{parts}}',
+    requeue: 'Skicka igen',
     withdrawTitle: 'Dra tillbaka beställning {{number}}?',
     withdrawMessage: 'Dess utskrifter som inte har startat lämnar kön. Inget ändras i Base.',
     print: 'Skriv ut',

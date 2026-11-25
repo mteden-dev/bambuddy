@@ -9238,6 +9238,36 @@ export default {
       planned: 'Previsto; può cambiare dopo una ripianificazione.',
       forTooltip: 'Per: {{list}}',
     },
+    cancelJob: {
+      title: 'Annullare una stampa fatta per ordini?',
+      printsFor: 'Stampa per',
+      question: 'Che fine fanno i suoi pezzi?',
+      replan: {
+        label: 'Stampa di nuovo',
+        hint: 'Esce dalla coda e il piano la riaggiunge subito, magari su un\'altra stampante o piastra.',
+        button: 'Stampa di nuovo',
+      },
+      stock: {
+        label: 'Ho già questi pezzi',
+        hint: 'I suoi pezzi vanno in magazzino; gli ordini li prendono da lì e il piano stampa il resto.',
+        button: 'In magazzino',
+      },
+      withdraw: {
+        label: 'Ritira l\'ordine',
+        hint: 'L\'intero ordine passa in Saltati e le sue stampe non ancora avviate escono dalla coda.',
+        hintMany: 'Gli ordini spuntati passano in Saltati; la piastra viene ripianificata per gli altri.',
+        button: 'Ritira',
+      },
+      back: 'Indietro',
+      choose: 'Scegli',
+      stopNote: 'Stampa per {{orders}}: una volta fermata, il piano la rimette in coda da solo. Se l\'ordine non serve più, ritiralo invece.',
+      toast: {
+        replanned: 'Stampa annullata; il piano è stato ricalcolato.',
+        stocked: 'Pezzi in magazzino; il piano è stato ricalcolato.',
+        withdrawn: 'Ritirati: {{orders}}.',
+        short: 'Alcuni pezzi non si possono pianificare: controlla le piastre del prodotto.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9297,6 +9327,8 @@ export default {
       undone: 'Annullato: l\'ordine è di nuovo in attesa.',
       withdrawn: 'L\'ordine è stato ritirato dalla produzione.',
       restored: 'L\'ordine è di nuovo in attesa.',
+      requeued: 'Le sue stampe sono di nuovo in coda.',
+      requeueShort: 'Ripianificato, ma alcuni pezzi non si possono ancora stampare: controlla le piastre del prodotto.',
     },
     acceptModal: {
       haveLabel: 'Ho in più: {{part}} ({{name}})',
@@ -9331,6 +9363,8 @@ export default {
       saved: 'Impostazioni Base salvate',
     },
     withdraw: 'Ritira dalla produzione',
+    missing: 'Non in coda: {{parts}}',
+    requeue: 'Invia di nuovo',
     withdrawTitle: 'Ritirare l\'ordine {{number}}?',
     withdrawMessage: 'Le sue stampe non ancora avviate escono dalla coda. In Base non cambia nulla.',
     print: 'Stampa',

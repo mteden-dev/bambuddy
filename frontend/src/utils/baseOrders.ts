@@ -72,6 +72,14 @@ export function urgentFirst(entry: ProductJobOrders | undefined): ProductOrderTa
   return [...(entry?.orders ?? [])].sort((a, b) => when(a) - when(b));
 }
 
+/** Pieces an order in production misses: neither there nor coming from the queue (its print left it). */
+export function missingParts(order: BaseOrder): { name: string; pieces: number }[] {
+  if (order.state !== 'accepted' || order.ready) return [];
+  return order.progress.flatMap((product) =>
+    product.parts.filter((part) => (part.missing ?? 0) > 0).map((part) => ({ name: part.name, pieces: part.missing })),
+  );
+}
+
 /** "jan_k", "jan_k +1", or the stock label for a plate printed for no order; null for none. */
 export function jobOrdersText(entry: ProductJobOrders | undefined, stockLabel: string): string | null {
   if (!entry) return null;

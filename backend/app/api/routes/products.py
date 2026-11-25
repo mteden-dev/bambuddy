@@ -822,6 +822,129 @@ async def order_tags(db: AsyncSession = Depends(get_db, scope="function"), _=Rea
     )
 
 
+# --- cancelling an order's print in the queue ---------------------------------------------
+
+
+class QueueJobCancelIn(BaseModel):
+    # What becomes of the pieces the job was to print: "replan" plans them again
+    # (the print comes back, maybe on another printer or plate), "stock" puts
+    # them in stock as on hand, "withdraw" takes ``orders`` out of production.
+    then: Literal["replan", "stock", "withdraw"]
+    # withdraw: product order ids, as GET /products/order-tags lists them for
+    # the job; a Base order is withdrawn whole.
+    orders: list[int] = Field(default_factory=list, max_length=100)
+
+
+class QueueJobCancelOut(BaseModel):
+    # Products planned again, and the queue jobs the plans made and kept.
+    replanned: list[int]
+    created: int = 0
+    kept: int = 0
+    # stock: the pieces put in stock.
+    stocked: list[PartPieces] = Field(default_factory=list)
+    # withdraw: the product orders taken out, and the Base orders among them.
+    withdrawn: list[int] = Field(default_factory=list)
+    withdrawn_base_orders: list[int] = Field(default_factory=list)
+    # Pieces the open orders still need that no plate can make.
+    short: list[PartPieces] = Field(default_factory=list)
+
+
+@router.post("/queue-items/{item_id}/cancel", response_model=QueueJobCancelOut)
+async def cancel_queue_job(
+    item_id: int,
+    data: QueueJobCancelIn,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    auth_result: tuple[User | ApiKeyActor | None, bool] = Depends(
+        require_ownership_permission(Permission.QUEUE_UPDATE_ALL, Permission.QUEUE_UPDATE_OWN)
+    ),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+    review_required: bool = QueueReviewRequired,
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Cancel a waiting queue job the planner made for orders, and say what becomes of its pieces.
+
+    A plain cancel (POST /queue/{id}/cancel) leaves the orders short with
+    nothing in the queue to make up for it, until something else replans the
+    product. Here the job is cancelled and then, by ``then``: the product is
+    planned again (``replan``), its pieces go into stock as pieces of no known
+    printer first (``stock``: someone has them), or ``orders`` are withdrawn
+    first (``withdraw``: a Base order whole, as its Withdraw does). Each product
+    changed is planned again, which also shrinks or drops a plate other orders
+    shared.
+    """
+    from backend.app.models.print_queue import PrintQueueItem
+    from backend.app.services.finance_budget import release_budget_reservation
+    from backend.app.services.print_scheduler import scheduler
+
+    user, can_modify_all = auth_result
+    item = await db.get(PrintQueueItem, item_id)
+    if item is None or not printer_scope.allows(item.printer_id):
+        raise HTTPException(404, "Queue item not found")
+    if not can_modify_all and item.created_by_id != user.id:
+        raise HTTPException(403, "You can only cancel your own queue items")
+    if item.status != "pending" or item.dispatching_at is not None:
+        raise HTTPException(409, "Only a waiting job can be cancelled here; stop a printing one")
+    job = await svc.job_of_item(db, item)
+    if job is None:
+        raise HTTPException(409, "The planner did not make this job for an order")
+    if data.then == "withdraw" and not data.orders:
+        raise HTTPException(400, "Say which orders to withdraw")
+    product = await svc.load_product(db, job.product_id)
+    part_ids = {p.id for p in product.parts} if product is not None else set()
+
+    item.status = "cancelled"
+    item.completed_at = datetime.now(timezone.utc)
+    await release_budget_reservation(db, source_type="print_queue", source_id=item.id, status="released")
+    await db.flush()
+    # The job follows its queue job now, not at the next plan.
+    await svc.after_queue_items_changed(db, [item.id])
+
+    actor_id = actor.id if actor is not None else None
+    changed = {job.product_id}
+    out = QueueJobCancelOut(replanned=[])
+    if data.then == "stock":
+        stocked = svc.put_pieces_in_stock(db, job, part_ids, actor_id=actor_id, note=f"Queue job {item.id}: on hand")
+        out.stocked = [PartPieces(part_id=k, pieces=n) for k, n in stocked]
+    elif data.then == "withdraw":
+        withdrawal = await svc.withdraw_orders(db, data.orders)
+        changed |= withdrawal.products
+        out.withdrawn = withdrawal.orders
+        out.withdrawn_base_orders = withdrawal.base_orders
+    await db.flush()
+
+    created: list[int] = []
+    short: dict[int, int] = {}
+    for product_id in sorted(changed):
+        outcome = await svc.replan(
+            db,
+            product_id,
+            actor_id=actor_id,
+            manual_start=review_required or bool(item.manual_start),
+            printer_ids=printer_scope.printer_ids,
+        )
+        created += outcome.item_ids
+        out.kept += outcome.kept
+        if outcome.plan is not None:
+            for part_id, n in outcome.plan.short.items():
+                short[part_id] = short.get(part_id, 0) + n
+        out.replanned.append(product_id)
+    await db.commit()
+    await svc.announce_planned(created)
+    scheduler.notify_dispatch_cancelled(item_id)
+    out.created = len(created)
+    out.short = [PartPieces(part_id=k, pieces=n) for k, n in sorted(short.items()) if n > 0]
+    logger.info(
+        "[PRODUCTS] Cancelled queue job %s (%s): replanned %s, %s new, %s kept",
+        item_id,
+        data.then,
+        out.replanned,
+        out.created,
+        out.kept,
+    )
+    return out
+
+
 # --- checking finished pieces ------------------------------------------------------------
 
 

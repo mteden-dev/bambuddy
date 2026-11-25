@@ -218,6 +218,9 @@ class PartProgress(BaseModel):
     needed: int
     # Of them, put in as on hand for this order (from the shelf).
     on_hand: int = 0
+    # Pieces it needs that are neither there nor coming from a job in the queue
+    # (its print was deleted, cancelled or stopped): sending it again plans them.
+    missing: int = 0
 
 
 class ProductProgress(BaseModel):
@@ -454,7 +457,16 @@ async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, P
         names = {p.id: p.name for p in product.parts}
         open_rows = await product_service.open_orders(db, product_id)
         pool = await product_service.stock_pool(db, product)
-        allocation = planner.allocate(specs, pool, product_service.needs_of(open_rows))
+        needs = product_service.needs_of(open_rows)
+        allocation = planner.allocate(specs, pool, needs)
+        # The same with the pieces still coming from the queue: what is left over is missing.
+        coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
+        part_ids = {spec.id for spec in specs}
+        for job in await product_service.queued_jobs(db, product_id):
+            planner.pool_add(
+                coming, job.printer_id or planner.UNKNOWN_PRINTER, product_service.job_pieces(job, part_ids)
+            )
+        with_queue = planner.allocate(specs, coming, needs)
         estimates = {}
         if open_rows:
             if forecast is None:
@@ -472,6 +484,11 @@ async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, P
                         else min(allocation.pieces.get(po.id, {}).get(spec.id, 0), po.quantity * spec.per_unit)
                     ),
                     needed=po.quantity * spec.per_unit,
+                    missing=(
+                        0
+                        if done
+                        else max(0, po.quantity * spec.per_unit - with_queue.pieces.get(po.id, {}).get(spec.id, 0))
+                    ),
                 )
                 for spec in specs
             ]
@@ -668,6 +685,29 @@ async def reset_order(
     if row.state == "cancelled":
         raise HTTPException(409, "The order was cancelled in Base")
     await _replan(db, await svc.reset(db, row))
+    await db.commit()
+    return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+
+
+@router.post("/orders/{order_id}/requeue", response_model=BaseOrderOut)
+async def requeue_order(
+    order_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+):
+    """Send an order in production to print again: plan its products' open orders again.
+
+    For pieces it is missing (``progress[].parts[].missing``) because its print
+    left the queue: deleted, cancelled, or a print the printer never started.
+    Waiting jobs that still fit stay; the plan only adds what is missing.
+    """
+    row = await _get_order(db, order_id)
+    if row.state != "accepted":
+        raise HTTPException(409, "Only an order in production can be sent again")
+    products = {po.product_id for po in await svc.product_orders_of(db, order_id) if po.status == "open"}
+    if not products:
+        raise HTTPException(409, "Nothing of the order is left to print")
+    await _replan(db, products)
     await db.commit()
     return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
 

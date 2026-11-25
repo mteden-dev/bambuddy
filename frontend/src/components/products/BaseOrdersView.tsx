@@ -155,6 +155,16 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
+  const requeueMutation = useMutation({
+    mutationFn: ({ order }: { order: BaseOrder }) => api.requeueBaseOrder(order.order_id),
+    onSuccess: (sent: BaseOrder) => {
+      refresh();
+      // Still missing after a fresh plan: no plate (or no printer) can make it.
+      const short = sent.progress.some((p) => p.parts.some((part) => part.missing > 0));
+      showToast(t(short ? 'baseSync.toast.requeueShort' : 'baseSync.toast.requeued'), short ? 'warning' : 'success');
+    },
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
   const orderMutation = useMutation({
     mutationFn: ({ order, action }: { order: BaseOrder; action: 'accept' | 'skip' | 'withdraw' }) =>
       action === 'accept' ? api.acceptBaseOrder(order.order_id) : api.skipBaseOrder(order.order_id),
@@ -207,7 +217,9 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
     ? orderMutation.variables?.order.order_id
     : resetMutation.isPending
       ? resetMutation.variables?.order.order_id
-      : null;
+      : requeueMutation.isPending
+        ? requeueMutation.variables?.order.order_id
+        : null;
 
   return (
     <div>
@@ -407,6 +419,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                         onSkip={() => orderMutation.mutate({ order, action: 'skip' })}
                         onRestore={() => resetMutation.mutate({ order, restore: true })}
                         onWithdraw={() => setWithdrawing(order)}
+                        onRequeue={() => requeueMutation.mutate({ order })}
                       />
                     ))}
                   </div>

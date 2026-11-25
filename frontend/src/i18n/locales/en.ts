@@ -9306,6 +9306,36 @@ export default {
       planned: 'Planned; may change after a replan.',
       forTooltip: 'For: {{list}}',
     },
+    cancelJob: {
+      title: 'Cancel a print made for orders?',
+      printsFor: 'Prints for',
+      question: 'What happens to its parts?',
+      replan: {
+        label: 'Print it again',
+        hint: 'It leaves the queue and the plan adds it again right away, maybe on another printer or plate.',
+        button: 'Print again',
+      },
+      stock: {
+        label: 'I have these parts',
+        hint: 'Its parts go into stock; the orders take them from there and the plan prints the rest.',
+        button: 'Put in stock',
+      },
+      withdraw: {
+        label: 'Withdraw the order',
+        hint: 'The whole order goes to Skipped, and its prints that have not started leave the queue.',
+        hintMany: 'The orders you tick go to Skipped; the plate is planned again for the rest.',
+        button: 'Withdraw',
+      },
+      back: 'Back',
+      choose: 'Choose',
+      stopNote: 'It prints for {{orders}}: once stopped, the plan queues it again by itself. If the order is no longer needed, withdraw it instead.',
+      toast: {
+        replanned: 'Print cancelled; the plan was worked out again.',
+        stocked: 'Parts in stock; the plan was worked out again.',
+        withdrawn: 'Withdrawn: {{orders}}.',
+        short: 'Some parts cannot be planned: check the product\'s plates.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9365,6 +9395,8 @@ export default {
       undone: 'Taken back: the order waits again.',
       withdrawn: 'The order is out of production.',
       restored: 'The order waits again.',
+      requeued: 'Its prints are back in the queue.',
+      requeueShort: 'Planned again, but some parts still cannot be printed: check the product\'s plates.',
     },
     acceptModal: {
       haveLabel: 'Extra {{part}} of {{name}} on hand',
@@ -9399,6 +9431,8 @@ export default {
       saved: 'Base settings saved',
     },
     withdraw: 'Withdraw from production',
+    missing: 'Not in the queue: {{parts}}',
+    requeue: 'Send again',
     withdrawTitle: 'Withdraw order {{number}}?',
     withdrawMessage: 'Its prints that have not started leave the queue. Nothing is changed in Base.',
     print: 'Print',

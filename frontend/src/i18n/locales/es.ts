@@ -9261,6 +9261,36 @@ export default {
       planned: 'Previsto; puede cambiar tras replanificar.',
       forTooltip: 'Para: {{list}}',
     },
+    cancelJob: {
+      title: '¿Cancelar una impresión hecha para pedidos?',
+      printsFor: 'Imprime para',
+      question: '¿Qué pasa con sus piezas?',
+      replan: {
+        label: 'Imprimir de nuevo',
+        hint: 'Sale de la cola y el plan la vuelve a añadir enseguida, quizá en otra impresora o placa.',
+        button: 'Imprimir de nuevo',
+      },
+      stock: {
+        label: 'Ya tengo estas piezas',
+        hint: 'Sus piezas pasan al stock; los pedidos las toman de ahí y el plan imprime el resto.',
+        button: 'Al stock',
+      },
+      withdraw: {
+        label: 'Retirar el pedido',
+        hint: 'Todo el pedido pasa a Omitidos y sus impresiones aún no iniciadas salen de la cola.',
+        hintMany: 'Los pedidos marcados pasan a Omitidos; la placa se vuelve a planificar para el resto.',
+        button: 'Retirar',
+      },
+      back: 'Volver',
+      choose: 'Elegir',
+      stopNote: 'Imprime para {{orders}}: al detenerla, el plan la vuelve a poner en cola solo. Si el pedido ya no hace falta, retíralo.',
+      toast: {
+        replanned: 'Impresión cancelada; el plan se ha recalculado.',
+        stocked: 'Piezas en stock; el plan se ha recalculado.',
+        withdrawn: 'Retirados: {{orders}}.',
+        short: 'Algunas piezas no se pueden planificar: revisa las placas del producto.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9320,6 +9350,8 @@ export default {
       undone: 'Deshecho: el pedido vuelve a esperar.',
       withdrawn: 'El pedido se ha retirado de producción.',
       restored: 'El pedido vuelve a esperar.',
+      requeued: 'Sus impresiones vuelven a estar en la cola.',
+      requeueShort: 'Replanificado, pero algunas piezas siguen sin poder imprimirse: revisa las placas del producto.',
     },
     acceptModal: {
       haveLabel: 'Tengo aparte: {{part}} ({{name}})',
@@ -9354,6 +9386,8 @@ export default {
       saved: 'Ajustes de Base guardados',
     },
     withdraw: 'Retirar de producción',
+    missing: 'Fuera de la cola: {{parts}}',
+    requeue: 'Enviar de nuevo',
     withdrawTitle: '¿Retirar el pedido {{number}}?',
     withdrawMessage: 'Sus impresiones que no han empezado salen de la cola. En Base no cambia nada.',
     print: 'Imprimir',

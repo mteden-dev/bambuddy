@@ -127,6 +127,28 @@ planu), `created` (nowe zadania), `kept` (czekające zadania zostawione bez zmia
 zmianami w kolejce), `replaced` (usunięte), `ready_at`, `finish_at`, `short` (części, dla których
 żadna drukarka nie ma płyty).
 
+### Wydruk zamówienia anulowany w kolejce
+
+Zwykłe `POST /queue/{id}/cancel` na zadaniu planera zostawia zamówienia bez części i bez niczego w
+kolejce, dopóki coś innego nie przeliczy planu. Zamiast tego:
+
+```bash
+# wydrukuj ponownie: zadanie anulowane, produkt planowany od nowa (wraca, może na innej drukarce/płycie)
+curl -s -X POST "$BB/products/queue-items/321/cancel" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"then": "replan"}'
+# mam te części: sztuki z zadania idą na stan (bez drukarki), potem plan
+curl -s -X POST "$BB/products/queue-items/321/cancel" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"then": "stock"}'
+# wycofaj zamówienia (id zamówień produktu z GET /products/order-tags); zamówienie z Base idzie w całości
+curl -s -X POST "$BB/products/queue-items/321/cancel" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"then": "withdraw", "orders": [15]}'
+```
+
+Tylko czekające zadanie planera (inne: 409, bez `orders` przy `withdraw`: 400). Odpowiedź:
+`replanned` (produkty), `created`, `kept`, `stocked`, `withdrawn` (zamówienia produktu),
+`withdrawn_base_orders`, `short`. Wydruk zatrzymany w trakcie (Stop w kolejce albo przerwany na
+drukarce) przelicza plan sam, jak nieudany.
+
 ## Stan części
 
 ```bash
@@ -199,8 +221,10 @@ i pozycje (SKU, nazwa, ilość). Imienia, adresu, telefonu ani maila nie zapisuj
   zamówienie ma `label` (nick z Allegro albo krótki numer ze sklepu), `source_kind` (`allegro`
   albo `shop`), a pozycje miniaturę produktu (`has_thumbnail`, `thumbnail_version`). Zamówienie w
   produkcji ma `progress`: części produktu gotowe z potrzebnych (z tego `on_hand` z półki) i
-  `estimated_ready_at`. `GET /base-sync/orders/counts` zwraca liczby zamówień w każdym stanie, osobno
-  z Allegro i ze sklepu.
+  `estimated_ready_at`; `missing` przy części to sztuki, których nie ma ani na stanie, ani w kolejce
+  (wydruk usunięty, anulowany albo drukarka go nie przyjęła). `POST /base-sync/orders/{order_id}/requeue`
+  wysyła takie zamówienie ponownie: przelicza plan jego produktów (409, gdy nie jest w produkcji).
+  `GET /base-sync/orders/counts` zwraca liczby zamówień w każdym stanie, osobno z Allegro i ze sklepu.
 - **Szkic** na zamówieniu czekającym: `POST /base-sync/orders/{order_id}/draft` z tym samym ciałem
   co `accept` zapisuje wybór („mam już dół”) bez wysyłania do druku: nic nie trafia do stanu ani
   do kolejki. Zamówienie pokazuje go jako `draft`, a `accept` bez treści wysyła go i czyści.

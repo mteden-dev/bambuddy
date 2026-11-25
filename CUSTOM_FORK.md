@@ -146,7 +146,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     części parowane są przypięte do drukarki, pozostałe to „Dowolna <model>” z rezerwacją na
     drukarce z planu; obowiązują tagi drukarek, drukarki użytkownika i ręczny start. Plan liczy
     się od nowa przy nowym, zmienionym lub anulowanym zamówieniu, korekcie stanu, „Przelicz plan”
-    i nieudanym wydruku (tylko takim, który ruszył, najwyżej 3 razy na godzinę). Czekające zadanie,
+    i nieudanym albo zatrzymanym w trakcie wydruku (tylko takim, który ruszył, najwyżej 3 razy na
+    godzinę). Anulowanie czekającego wydruku zamówienia w kolejce lub na osi czasu pyta, co z jego
+    częściami: „Wydrukuj ponownie” (plan od razu), „Mam te części” (na stan) albo „Wycofaj
+    zamówienie” (wybrane zamówienia, dla których drukuje); potwierdzenie Stop mówi, że plan
+    wydrukuje go jeszcze raz. Czekające zadanie,
     które nowy plan też ma (ta sama płyta na tej samej drukarce), zostaje razem ze zmianami
     zrobionymi w kolejce (np. mapowanie filamentu) i tylko zmienia miejsce; pozostałe czekające
     znikają, rozpoczęte zostają i liczą się jako w drodze. Przy włączonym „najkrótsze najpierw”
@@ -183,7 +187,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     „Drukuj” wysyła od razu (z „Cofnij”); „Części” rozwija panel: ile sztuk drukować (reszta
     zostaje niedrukowana też przy zmianach w Base) i co jest z półki. Na zamówieniu czekającym
     to szkic („mam już dół”) zapisany od razu, a „Drukuj resztę” wysyła go; w produkcji zmiana
-    działa od razu (z „Cofnij”), a „Wycofaj z produkcji” pyta o potwierdzenie. Wydruki w kolejce,
+    działa od razu (z „Cofnij”), a „Wycofaj z produkcji” pyta o potwierdzenie. Zamówienie w
+    produkcji, któremu brakuje wydruku w kolejce (usunięty, anulowany, drukarka go nie przyjęła),
+    pokazuje „Brak w kolejce: …” i przycisk „Wyślij ponownie”. Wydruki w kolejce,
     na osi czasu i na karcie drukarki mają etykietę zamówienia (nick albo numer, „+N” dla kilku,
     „na stan”), z numerem z Base po najechaniu i przejściem do zamówienia; potem daje
     zamówienia produktów i przelicza plan;

@@ -9306,6 +9306,36 @@ export default {
       planned: 'Planowo. Po przeplanowaniu może się zmienić.',
       forTooltip: 'Dla: {{list}}',
     },
+    cancelJob: {
+      title: 'Anulować wydruk z zamówienia?',
+      printsFor: 'Drukuje dla',
+      question: 'Co z jego częściami?',
+      replan: {
+        label: 'Wydrukuj ponownie',
+        hint: 'Zniknie z kolejki, a plan od razu doda go jeszcze raz – może na innej drukarce albo płycie.',
+        button: 'Wydrukuj ponownie',
+      },
+      stock: {
+        label: 'Mam te części',
+        hint: 'Części z tego wydruku trafią na stan, zamówienia wezmą je stamtąd, a plan dodrukuje resztę.',
+        button: 'Na stan',
+      },
+      withdraw: {
+        label: 'Wycofaj zamówienie',
+        hint: 'Całe zamówienie trafi do Pominiętych, a jego wydruki, które jeszcze nie ruszyły, znikną z kolejki.',
+        hintMany: 'Zaznaczone zamówienia trafią do Pominiętych; płyta przeliczy się dla pozostałych.',
+        button: 'Wycofaj',
+      },
+      back: 'Wróć',
+      choose: 'Wybierz',
+      stopNote: 'Drukuje dla: {{orders}}. Po zatrzymaniu plan sam doda go jeszcze raz. Jeśli zamówienie nie jest już potrzebne, wycofaj je.',
+      toast: {
+        replanned: 'Wydruk anulowany, plan przeliczony.',
+        stocked: 'Części na stanie, plan przeliczony.',
+        withdrawn: 'Wycofano: {{orders}}.',
+        short: 'Części nie da się zaplanować – sprawdź płyty produktu.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9365,6 +9395,8 @@ export default {
       undone: 'Cofnięte: zamówienie znowu czeka.',
       withdrawn: 'Zamówienie wycofane z produkcji.',
       restored: 'Zamówienie znowu czeka.',
+      requeued: 'Wydruki wróciły do kolejki.',
+      requeueShort: 'Plan przeliczony, ale części nadal nie da się wydrukować – sprawdź płyty produktu.',
     },
     acceptModal: {
       haveLabel: 'Mam poza stanem: {{part}} ({{name}})',
@@ -9399,6 +9431,8 @@ export default {
       saved: 'Zapisano ustawienia Base',
     },
     withdraw: 'Wycofaj z produkcji',
+    missing: 'Brak w kolejce: {{parts}}',
+    requeue: 'Wyślij ponownie',
     withdrawTitle: 'Wycofać zamówienie {{number}}?',
     withdrawMessage: 'Jego wydruki, które jeszcze nie ruszyły, znikną z kolejki. W Base nic się nie zmienia.',
     print: 'Drukuj',

@@ -9253,6 +9253,36 @@ export default {
       planned: 'Geplant; kann sich nach einer Neuplanung ändern.',
       forTooltip: 'Für: {{list}}',
     },
+    cancelJob: {
+      title: 'Druck für Bestellungen abbrechen?',
+      printsFor: 'Druckt für',
+      question: 'Was passiert mit seinen Teilen?',
+      replan: {
+        label: 'Erneut drucken',
+        hint: 'Er verlässt die Warteschlange und der Plan fügt ihn sofort wieder hinzu, vielleicht auf einem anderen Drucker oder einer anderen Platte.',
+        button: 'Erneut drucken',
+      },
+      stock: {
+        label: 'Ich habe diese Teile',
+        hint: 'Seine Teile kommen auf Lager; die Bestellungen nehmen sie von dort und der Plan druckt den Rest.',
+        button: 'Auf Lager',
+      },
+      withdraw: {
+        label: 'Bestellung zurückziehen',
+        hint: 'Die ganze Bestellung kommt zu „Übersprungen“, und ihre noch nicht gestarteten Drucke verlassen die Warteschlange.',
+        hintMany: 'Die angehakten Bestellungen kommen zu „Übersprungen“; die Platte wird für den Rest neu geplant.',
+        button: 'Zurückziehen',
+      },
+      back: 'Zurück',
+      choose: 'Auswählen',
+      stopNote: 'Er druckt für {{orders}}: Nach dem Stopp reiht der Plan ihn von selbst wieder ein. Wird die Bestellung nicht mehr gebraucht, ziehe sie stattdessen zurück.',
+      toast: {
+        replanned: 'Druck abgebrochen; der Plan wurde neu berechnet.',
+        stocked: 'Teile auf Lager; der Plan wurde neu berechnet.',
+        withdrawn: 'Zurückgezogen: {{orders}}.',
+        short: 'Manche Teile lassen sich nicht planen: Prüfe die Platten des Produkts.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9312,6 +9342,8 @@ export default {
       undone: 'Rückgängig: Die Bestellung wartet wieder.',
       withdrawn: 'Die Bestellung ist aus der Produktion genommen.',
       restored: 'Die Bestellung wartet wieder.',
+      requeued: 'Ihre Drucke sind wieder in der Warteschlange.',
+      requeueShort: 'Neu geplant, aber manche Teile lassen sich weiterhin nicht drucken: Prüfe die Platten des Produkts.',
     },
     acceptModal: {
       haveLabel: 'Zusätzlich vorhanden: {{part}} ({{name}})',
@@ -9346,6 +9378,8 @@ export default {
       saved: 'Base-Einstellungen gespeichert',
     },
     withdraw: 'Aus der Produktion nehmen',
+    missing: 'Nicht in der Warteschlange: {{parts}}',
+    requeue: 'Erneut senden',
     withdrawTitle: 'Bestellung {{number}} zurückziehen?',
     withdrawMessage: 'Seine noch nicht gestarteten Drucke verlassen die Warteschlange. In Base ändert sich nichts.',
     print: 'Drucken',

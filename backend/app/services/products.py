@@ -15,8 +15,10 @@ A product is parts; its plates are sliced files that print pieces of them
   "Any <model>" jobs reserved on the printer the plan put them on
   (services/queue_reservations.py).
 - **Replanning** happens when an order is added, changed or cancelled, when
-  stock is corrected, on request, and when one of its prints fails. Nothing
-  else rewrites the planner's jobs.
+  stock is corrected, on request, when one of its prints fails or is stopped,
+  and when one of its waiting jobs is cancelled in the queue through
+  ``POST /products/queue-items/{id}/cancel`` (print again, the pieces are on
+  hand, or withdraw its orders). Nothing else rewrites the planner's jobs.
 
 ``after_queue_items_changed`` is called where print batches are refreshed
 (services/print_batch.py), so a job's row follows its queue job there.
@@ -279,6 +281,107 @@ async def sync_jobs(db: AsyncSession, jobs: list[ProductJob]) -> list[ProductJob
             job.finished_at = item.completed_at or now
             failed.append(job)
     return failed
+
+
+async def job_of_item(db: AsyncSession, item: PrintQueueItem) -> ProductJob | None:
+    """The planner's job behind a waiting or printing queue job; None for one queued by hand."""
+    job = (
+        await db.execute(
+            select(ProductJob)
+            .where(ProductJob.queue_item_id == item.id, ProductJob.status.in_(JOB_ACTIVE))
+            .order_by(ProductJob.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return job if job is not None and _same_item(job, item) else None
+
+
+async def queued_jobs(db: AsyncSession, product_id: int) -> list[ProductJob]:
+    """The product's jobs whose pieces are still coming: waiting or printing behind their queue job.
+
+    Read only, unlike ``sync_jobs``: a job whose queue job was deleted or
+    cancelled (and not followed yet) is left out, so the pieces it was to
+    print show as missing at once. A printing job whose row went counts until
+    it is followed: its outcome is in the archive.
+    """
+    jobs = await active_jobs(db, product_id)
+    ids = [j.queue_item_id for j in jobs if j.queue_item_id is not None]
+    items: dict[int, PrintQueueItem] = {}
+    if ids:
+        rows = (await db.execute(select(PrintQueueItem).where(PrintQueueItem.id.in_(ids)))).scalars()
+        items = {i.id: i for i in rows}
+    live = []
+    for job in jobs:
+        item = items.get(job.queue_item_id) if job.queue_item_id is not None else None
+        if item is not None and not _same_item(job, item):
+            item = None
+        if item is None:
+            if job.status == "printing":
+                live.append(job)
+        elif item.status in ("pending", "printing", "completed"):
+            live.append(job)
+    return live
+
+
+def put_pieces_in_stock(
+    db: AsyncSession, job: ProductJob, part_ids: set[int], *, actor_id: int | None, note: str
+) -> planner.Pieces:
+    """Put the pieces a job was to print in stock, of no known printer: someone has them already.
+
+    Returns them. The caller replans and commits.
+    """
+    pieces = job_pieces(job, part_ids)
+    for part_id, n in pieces:
+        db.add(
+            ProductStockAdjustment(part_id=part_id, printer_id=None, delta=n, note=note[:255], created_by_id=actor_id)
+        )
+    return pieces
+
+
+@dataclass
+class Withdrawal:
+    """What withdrawing orders changed."""
+
+    products: set[int] = field(default_factory=set)
+    # Product orders taken out of production.
+    orders: list[int] = field(default_factory=list)
+    # Base orders withdrawn whole (as their Withdraw does).
+    base_orders: list[int] = field(default_factory=list)
+
+
+async def withdraw_orders(db: AsyncSession, product_order_ids: list[int]) -> Withdrawal:
+    """Take orders out of production: a Base order goes whole, as its Withdraw does; one entered here is cancelled.
+
+    Orders no longer open are passed over. The caller replans and commits.
+    """
+    from backend.app.models.base_sync import BaseOrder
+    from backend.app.services import base_sync
+
+    result = Withdrawal()
+    if not product_order_ids:
+        return result
+    rows = list((await db.execute(select(ProductOrder).where(ProductOrder.id.in_(product_order_ids)))).scalars())
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for order in sorted(rows, key=lambda o: o.id):
+        if order.status != "open":
+            continue
+        base = None
+        if order.external_source == base_sync.EXTERNAL_SOURCE and order.external_ref:
+            try:
+                base = await db.get(BaseOrder, int(order.external_ref.split("/", 1)[0]))
+            except ValueError:
+                base = None
+        if base is not None and base.state in ("new", "accepted"):
+            # Its other products' orders go too; they are not open any more when their turn comes.
+            result.products |= await base_sync.skip(db, base)
+            result.base_orders.append(base.order_id)
+        else:
+            order.status = "cancelled"
+            order.completed_at = now
+            result.products.add(order.product_id)
+        result.orders.append(order.id)
+    await db.flush()
+    return result
 
 
 # --- stock and orders ------------------------------------------------------------
@@ -1035,14 +1138,15 @@ def _may_auto_replan(product_id: int, now: float) -> bool:
 
 
 async def after_queue_items_changed(db: AsyncSession, queue_item_ids: list[int]) -> None:
-    """Follow queue jobs the planner made; replan a product whose print failed.
+    """Follow queue jobs the planner made; replan a product whose print failed or was stopped.
 
     Called where print batches are refreshed, in the caller's session; changes
     are left for the caller to commit. The replan runs afterwards, in its own
     session, acting for whoever queued the failed job. Only a print that
     started counts: a job the printer never started (the scheduler gives up
     after its retries) is left for someone to look at, as is a product whose
-    prints keep failing (AUTO_REPLAN_LIMIT).
+    prints keep failing (AUTO_REPLAN_LIMIT). A print stopped part way counts
+    as failed: someone who no longer wants it withdraws its order instead.
     """
     if not queue_item_ids:
         return
@@ -1069,7 +1173,19 @@ async def after_queue_items_changed(db: AsyncSession, queue_item_ids: list[int])
         product = await load_product(db, product_id)
         if product is not None:
             await complete_ready_orders(db, product, await stock_pool(db, product))
-    started = [j for j in failed if (item := items.get(j.queue_item_id or -1)) is not None and item.started_at]
+    # A print stopped part way (Stop in the queue, cancelled on the printer)
+    # made no pieces either: its orders are short just the same.
+    stopped = [
+        j
+        for j in jobs
+        if j.status == "cancelled"
+        and (item := items.get(j.queue_item_id or -1)) is not None
+        and item.status == "cancelled"
+        and item.started_at
+    ]
+    started = [
+        j for j in failed if (item := items.get(j.queue_item_id or -1)) is not None and item.started_at
+    ] + stopped
     for product_id in sorted({j.product_id for j in started}):
         if not _may_auto_replan(product_id, time.monotonic()):
             logger.warning("[PRODUCTS] Product %s: prints keep failing, not replanning it again for now", product_id)
@@ -1097,9 +1213,9 @@ async def _replan_later(product_id: int, actor_id: int | None, manual_start: boo
             )
             await db.commit()
         await announce_planned(outcome.item_ids)
-        logger.info("[PRODUCTS] Replanned product %s after a failed print", product_id)
+        logger.info("[PRODUCTS] Replanned product %s after a print failed or was stopped", product_id)
     except Exception as e:
-        logger.warning("[PRODUCTS] Could not replan product %s after a failed print: %s", product_id, e)
+        logger.warning("[PRODUCTS] Could not replan product %s after a print failed or was stopped: %s", product_id, e)
 
 
 # --- thumbnails -------------------------------------------------------------------------

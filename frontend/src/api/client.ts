@@ -4776,7 +4776,8 @@ export interface BaseOrderProgress {
   units: number;
   units_ready: number;
   estimated_ready_at: string | null;
-  parts: { part_id: number; name: string; ready: number; needed: number; on_hand: number }[];
+  /** missing: pieces neither there nor coming from a job in the queue (its print left the queue). */
+  parts: { part_id: number; name: string; ready: number; needed: number; on_hand: number; missing: number }[];
 }
 
 export type BaseOrderCounts = Record<string, { allegro: number; shop: number }>;
@@ -4828,6 +4829,22 @@ export interface ProductJobOrders {
   orders: ProductOrderTag[];
   /** Its pieces go to no open order: it prints for stock. */
   for_stock: boolean;
+}
+
+/** Fork (products): what becomes of the pieces of an order's print cancelled in the queue. */
+export type QueueJobCancelThen = 'replan' | 'stock' | 'withdraw';
+
+export interface QueueJobCancelResult {
+  /** Products planned again, and the queue jobs the plans made and kept. */
+  replanned: number[];
+  created: number;
+  kept: number;
+  stocked: ProductPartPieces[];
+  /** Product orders taken out, and the Base orders among them (withdrawn whole). */
+  withdrawn: number[];
+  withdrawn_base_orders: number[];
+  /** Pieces the open orders still need that no plate can make. */
+  short: ProductPartPieces[];
 }
 
 export interface ProductOrderTags {
@@ -8032,6 +8049,15 @@ export const api = {
       ...(data ? { body: JSON.stringify(data) } : {}),
     }),
   skipBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/skip`, { method: 'POST' }),
+  /** Plan an order in production again: for the pieces it is missing because its print left the queue. */
+  requeueBaseOrder: (orderId: number) =>
+    request<BaseOrder>(`/base-sync/orders/${orderId}/requeue`, { method: 'POST' }),
+  /** Cancel a waiting print the planner made for orders, and say what becomes of its pieces. */
+  cancelOrderJob: (itemId: number, data: { then: QueueJobCancelThen; orders?: number[] }) =>
+    request<QueueJobCancelResult>(`/products/queue-items/${itemId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   /** Undo sending or skipping: the order waits again. */
   resetBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/reset`, { method: 'POST' }),
   /** Save a choice on a waiting order without sending it ("I have the base"). */

@@ -92,6 +92,8 @@ import { BatchOrdersView } from '../components/BatchOrdersView';
 import { ThumbnailHoverPreview } from '../components/ThumbnailHoverPreview';
 import { QueueItemTagChips } from '../components/QueueItemTagChips';
 import { OrderLabelChip } from '../components/OrderLabelChip';
+import { OrderJobCancelModal } from '../components/products/OrderJobCancelModal';
+import { useJobOrders } from '../hooks/useJobOrders';
 import { buildLoadedFilaments, type LoadedFilament } from '../hooks/useFilamentMapping';
 import { hasGcodeSnippets, useUiSettings } from '../hooks/useUiSettings';
 
@@ -1757,6 +1759,18 @@ export function QueuePage() {
     type: 'cancel' | 'remove' | 'stop';
     item: PrintQueueItem;
   } | null>(null);
+  // Fork (products): a waiting print the planner made for orders asks what
+  // becomes of its pieces instead of a plain cancel (OrderJobCancelModal).
+  const { data: jobOrders } = useJobOrders();
+  const [orderJobCancel, setOrderJobCancel] = useState<PrintQueueItem | null>(null);
+  const ordersOf = (item: PrintQueueItem) => jobOrders?.items[String(item.id)];
+  const requestAction = (action: { type: 'cancel' | 'remove' | 'stop'; item: PrintQueueItem }) => {
+    if (action.type === 'cancel' && action.item.status === 'pending' && ordersOf(action.item)?.orders.length) {
+      setOrderJobCancel(action.item);
+      return;
+    }
+    setConfirmAction(action);
+  };
   const [selectedItems, setSelectedItems] = useState<number[]>([]);
   const [showBulkEditModal, setShowBulkEditModal] = useState(false);
   // #1818: per-printer Resume-after-failure confirm modal. Tracks which
@@ -3025,8 +3039,8 @@ export function QueuePage() {
           onPinItem={(item, target) => timelineMoveMutation.mutate({ item, target })}
           canModifyItem={(item) => canModify('queue', 'update', item.created_by_id)}
           onEditItem={setEditItem}
-          onCancelItem={(item) => setConfirmAction({ type: 'cancel', item })}
-          onStopItem={(item) => setConfirmAction({ type: 'stop', item })}
+          onCancelItem={(item) => requestAction({ type: 'cancel', item })}
+          onStopItem={(item) => requestAction({ type: 'stop', item })}
           t={t}
         />
       ) : activeTab === 'history' ? (
@@ -3039,7 +3053,7 @@ export function QueuePage() {
           sortAsc={historySortAsc}
           onSortByChange={setHistorySortBy}
           onSortAscToggle={() => setHistorySortAsc(!historySortAsc)}
-          onRemove={(item) => setConfirmAction({ type: 'remove', item })}
+          onRemove={(item) => requestAction({ type: 'remove', item })}
           onRequeue={setRequeueItem}
           timeFormat={timeFormat}
           batchCollapsed={batchCollapsed}
@@ -3065,7 +3079,7 @@ export function QueuePage() {
                     onEdit={() => {}}
                     onCancel={() => {}}
                     onRemove={() => {}}
-                    onStop={() => setConfirmAction({ type: 'stop', item })}
+                    onStop={() => requestAction({ type: 'stop', item })}
                     onRequeue={() => {}}
                     onStart={() => {}}
                     timeFormat={timeFormat}
@@ -3195,7 +3209,7 @@ export function QueuePage() {
                           onToggleBatch={row.kind === 'batch' ? () => toggleBatchCollapsed(row.batchId) : undefined}
                           onUngroup={row.kind === 'batch' ? () => setUngroupBatchId(row.batchId) : undefined}
                           setEditItem={setEditItem}
-                          setConfirmAction={setConfirmAction}
+                          setConfirmAction={requestAction}
                           startMutation={startMutation}
                           selectedItems={selectedItems}
                           handleToggleSelect={handleToggleSelect}
@@ -3235,7 +3249,7 @@ export function QueuePage() {
                                   onToggleBatch={row.kind === 'batch' ? () => toggleBatchCollapsed(row.batchId) : undefined}
                                   onUngroup={row.kind === 'batch' ? () => setUngroupBatchId(row.batchId) : undefined}
                                   setEditItem={setEditItem}
-                                  setConfirmAction={setConfirmAction}
+                                  setConfirmAction={requestAction}
                                   startMutation={startMutation}
                                   selectedItems={selectedItems}
                                   handleToggleSelect={handleToggleSelect}
@@ -3364,6 +3378,15 @@ export function QueuePage() {
         />
       )}
 
+      {orderJobCancel && ordersOf(orderJobCancel) && (
+        <OrderJobCancelModal
+          itemId={orderJobCancel.id}
+          name={queueItemDisplayName(orderJobCancel, (n) => t('common.plusNMore', { count: n }))}
+          entry={ordersOf(orderJobCancel)!}
+          onClose={() => setOrderJobCancel(null)}
+        />
+      )}
+
       {confirmAction && (
         <ConfirmModal
           title={
@@ -3375,7 +3398,10 @@ export function QueuePage() {
             confirmAction.type === 'cancel'
               ? t('queue.confirm.cancelMessage', { name: confirmAction.item.archive_name || confirmAction.item.library_file_name || t('queue.confirm.thisPrint') })
               : confirmAction.type === 'stop'
-              ? t('queue.confirm.stopMessage', { name: confirmAction.item.archive_name || confirmAction.item.library_file_name || t('queue.confirm.thisPrint') })
+              ? t('queue.confirm.stopMessage', { name: confirmAction.item.archive_name || confirmAction.item.library_file_name || t('queue.confirm.thisPrint') }) +
+                (ordersOf(confirmAction.item)?.orders.length
+                  ? '\n\n' + t('products.cancelJob.stopNote', { orders: ordersOf(confirmAction.item)!.orders.map((o) => o.label).join(', ') })
+                  : '')
               : t('queue.confirm.removeMessage', { name: confirmAction.item.archive_name || confirmAction.item.library_file_name || t('queue.confirm.thisItem') })
           }
           confirmText={

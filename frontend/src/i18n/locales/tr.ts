@@ -9180,6 +9180,36 @@ export default {
       planned: 'Planlı; yeniden planlamadan sonra değişebilir.',
       forTooltip: 'İçin: {{list}}',
     },
+    cancelJob: {
+      title: 'Siparişler için yapılan baskı iptal edilsin mi?',
+      printsFor: 'Şunlar için basıyor',
+      question: 'Parçaları ne olsun?',
+      replan: {
+        label: 'Yeniden bas',
+        hint: 'Kuyruktan çıkar ve plan onu hemen yeniden ekler; belki başka bir yazıcıda veya plakada.',
+        button: 'Yeniden bas',
+      },
+      stock: {
+        label: 'Bu parçalar bende',
+        hint: 'Parçaları stoğa girer; siparişler oradan alır, kalanını plan basar.',
+        button: 'Stoğa',
+      },
+      withdraw: {
+        label: 'Siparişi çek',
+        hint: 'Siparişin tamamı Atlanan\'a geçer, henüz başlamamış baskıları kuyruktan çıkar.',
+        hintMany: 'İşaretlenen siparişler Atlanan\'a geçer; plaka kalanlar için yeniden planlanır.',
+        button: 'Çek',
+      },
+      back: 'Geri',
+      choose: 'Seç',
+      stopNote: '{{orders}} için basıyor: durdurulunca plan onu kendiliğinden yeniden kuyruğa alır. Sipariş artık gerekmiyorsa onu çekin.',
+      toast: {
+        replanned: 'Baskı iptal edildi; plan yeniden hesaplandı.',
+        stocked: 'Parçalar stokta; plan yeniden hesaplandı.',
+        withdrawn: 'Çekildi: {{orders}}.',
+        short: 'Bazı parçalar planlanamıyor: ürünün plakalarını kontrol edin.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9239,6 +9269,8 @@ export default {
       undone: 'Geri alındı: sipariş yeniden bekliyor.',
       withdrawn: 'Sipariş üretimden çekildi.',
       restored: 'Sipariş yeniden bekliyor.',
+      requeued: 'Baskıları kuyruğa geri döndü.',
+      requeueShort: 'Yeniden planlandı ama bazı parçalar hâlâ basılamıyor: ürünün plakalarını kontrol edin.',
     },
     acceptModal: {
       haveLabel: 'Stok dışı elimde: {{part}} ({{name}})',
@@ -9273,6 +9305,8 @@ export default {
       saved: 'Base ayarları kaydedildi',
     },
     withdraw: 'Üretimden çek',
+    missing: 'Kuyrukta yok: {{parts}}',
+    requeue: 'Yeniden gönder',
     withdrawTitle: '{{number}} siparişi geri çekilsin mi?',
     withdrawMessage: 'Henüz başlamamış baskıları kuyruktan çıkar. Base\'de hiçbir şey değişmez.',
     print: 'Bas',

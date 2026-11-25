@@ -9239,6 +9239,36 @@ export default {
       planned: 'Prévu ; peut changer après une replanification.',
       forTooltip: 'Pour : {{list}}',
     },
+    cancelJob: {
+      title: 'Annuler une impression faite pour des commandes ?',
+      printsFor: 'Imprime pour',
+      question: 'Que deviennent ses pièces ?',
+      replan: {
+        label: 'Réimprimer',
+        hint: 'Elle quitte la file et le plan la rajoute aussitôt, peut-être sur une autre imprimante ou un autre plateau.',
+        button: 'Réimprimer',
+      },
+      stock: {
+        label: 'J\'ai déjà ces pièces',
+        hint: 'Ses pièces vont en stock ; les commandes les y prennent et le plan imprime le reste.',
+        button: 'En stock',
+      },
+      withdraw: {
+        label: 'Retirer la commande',
+        hint: 'Toute la commande passe dans Ignorées et ses impressions pas encore lancées quittent la file.',
+        hintMany: 'Les commandes cochées passent dans Ignorées ; le plateau est replanifié pour les autres.',
+        button: 'Retirer',
+      },
+      back: 'Retour',
+      choose: 'Choisir',
+      stopNote: 'Elle imprime pour {{orders}} : une fois arrêtée, le plan la remet en file tout seul. Si la commande n\'est plus utile, retirez-la plutôt.',
+      toast: {
+        replanned: 'Impression annulée ; le plan a été recalculé.',
+        stocked: 'Pièces en stock ; le plan a été recalculé.',
+        withdrawn: 'Retirées : {{orders}}.',
+        short: 'Certaines pièces ne peuvent pas être planifiées : vérifiez les plateaux du produit.',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9298,6 +9328,8 @@ export default {
       undone: 'Annulé : la commande attend à nouveau.',
       withdrawn: 'La commande est retirée de la production.',
       restored: 'La commande attend à nouveau.',
+      requeued: 'Ses impressions sont de retour dans la file.',
+      requeueShort: 'Replanifié, mais certaines pièces ne peuvent toujours pas être imprimées : vérifiez les plateaux du produit.',
     },
     acceptModal: {
       haveLabel: 'J\'ai en plus : {{part}} ({{name}})',
@@ -9332,6 +9364,8 @@ export default {
       saved: 'Réglages Base enregistrés',
     },
     withdraw: 'Retirer de la production',
+    missing: 'Absent de la file : {{parts}}',
+    requeue: 'Renvoyer',
     withdrawTitle: 'Retirer la commande {{number}} ?',
     withdrawMessage: 'Ses impressions non démarrées quittent la file. Rien n\'est modifié dans Base.',
     print: 'Imprimer',

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, ImageOff, Loader2, PackageCheck, ShoppingBag } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ImageOff, Loader2, PackageCheck, RotateCcw, ShoppingBag } from 'lucide-react';
 import { api } from '../../api/client';
 import type { BaseOrder, BaseOrderLine } from '../../api/client';
 import { Card } from '../Card';
@@ -8,7 +8,7 @@ import { Button } from '../Button';
 import { useUiSettings } from '../../hooks/useUiSettings';
 import { formatDateOnly, formatDateTime, formatRelativeTime, formatTimeOnly, parseUTCDate } from '../../utils/date';
 import type { TimeFormat } from '../../utils/date';
-import { sendLabel, shipKind, wantedUnits } from '../../utils/baseOrders';
+import { missingParts, sendLabel, shipKind, wantedUnits } from '../../utils/baseOrders';
 import { OrderPartsPanel } from './OrderPartsPanel';
 
 const TOUCH = 'pointer-coarse:min-h-11!';
@@ -27,6 +27,8 @@ interface OrderRowProps {
   onSkip: () => void;
   onRestore: () => void;
   onWithdraw: () => void;
+  /** Plan an order in production again, for the pieces it misses (its print left the queue). */
+  onRequeue: () => void;
 }
 
 /** Allegro: an orange "A"; a shop: a bag. The account name says which Allegro account. */
@@ -160,6 +162,7 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
   const { t } = useTranslation();
   const { data: ui } = useUiSettings();
   const timeFormat: TimeFormat = ui?.time_format || 'system';
+  const missing = missingParts(order);
   if (order.ready) {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded bg-bambu-green/15 text-bambu-green">
@@ -191,6 +194,14 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
             )}
           </div>
         ))}
+        {missing.length > 0 && (
+          <div role="status" className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-300">
+            <AlertTriangle aria-hidden="true" className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              {t('baseSync.missing', { parts: missing.map((m) => `${m.name} ×${m.pieces}`).join(', ') })}
+            </span>
+          </div>
+        )}
       </div>
     );
   }
@@ -229,14 +240,27 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
  * row opens its parts underneath.
  */
 export function OrderRow(props: OrderRowProps) {
-  const { order, expanded, onToggle, canAct, showState, partNames, busy, onPrint, onSkip, onRestore, onWithdraw } =
-    props;
+  const {
+    order,
+    expanded,
+    onToggle,
+    canAct,
+    showState,
+    partNames,
+    busy,
+    onPrint,
+    onSkip,
+    onRestore,
+    onWithdraw,
+    onRequeue,
+  } = props;
   const { t } = useTranslation();
   const { data: ui } = useUiSettings();
   const timeFormat: TimeFormat = ui?.time_format || 'system';
   const [allLines, setAllLines] = useState(false);
   const hasProducts = order.lines.some((line) => line.mapping === 'product');
   const waiting = order.state === 'new' || order.state === 'skipped';
+  const missing = missingParts(order).length > 0;
   // Three lines; the rest behind "+N" (all of them once the row is open).
   const shownLines = allLines || expanded ? order.lines : order.lines.slice(0, 3);
   const hiddenLines = order.lines.length - shownLines.length;
@@ -330,6 +354,12 @@ export function OrderRow(props: OrderRowProps) {
               >
                 {t('baseSync.partsButton')}
                 <ChevronDown className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+              </Button>
+            )}
+            {missing && (
+              <Button size="sm" className={TOUCH} onClick={onRequeue} disabled={busy}>
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                {t('baseSync.requeue')}
               </Button>
             )}
             {waiting && (

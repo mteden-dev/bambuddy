@@ -232,6 +232,76 @@ describe('QueuePage wiring: row actions', () => {
     expect(mutationCalls()).toHaveLength(0);
   });
 
+  it('Cancel on a pending print made for an order -> asks what becomes of its parts -> products cancel', async () => {
+    const tag = {
+      product_order_id: 9,
+      label: 'nick_a',
+      title: 'Base 5001 · Allegro Shop A',
+      base_order_id: 5001,
+      source_kind: 'allegro',
+      ship_by: null,
+      due: null,
+    };
+    server.use(
+      http.get('*/api/v1/products/order-tags', () =>
+        HttpResponse.json({ items: { '11': { orders: [tag], for_stock: false } }, printers: {} }),
+      ),
+      http.post('*/api/v1/products/queue-items/:id/cancel', async ({ request }) => {
+        await capture(request);
+        return HttpResponse.json({
+          replanned: [4],
+          created: 1,
+          kept: 0,
+          stocked: [],
+          withdrawn: [],
+          withdrawn_base_orders: [],
+          short: [],
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<QueuePage />);
+    await screen.findByText('Pending A');
+    await screen.findByText('nick_a');
+
+    await user.click(screen.getByTitle('Cancel'));
+    expect(await screen.findByText('Cancel a print made for orders?')).toBeInTheDocument();
+    expect(screen.queryByText(/want to cancel "Pending A"/)).toBeNull();
+    await user.click(screen.getByRole('radio', { name: /^Print it again/ }));
+    await user.click(screen.getByRole('button', { name: 'Print again' }));
+
+    await waitFor(() => expect(mutationCalls()).toHaveLength(1));
+    expect(mutationCalls()[0]).toMatchObject({
+      method: 'POST',
+      path: '/api/v1/products/queue-items/11/cancel',
+      body: { then: 'replan' },
+    });
+  });
+
+  it('Stop on a print made for an order says the plan prints it again', async () => {
+    const tag = {
+      product_order_id: 9,
+      label: 'nick_a',
+      title: 'Base 5001 · Allegro Shop A',
+      base_order_id: 5001,
+      source_kind: 'allegro',
+      ship_by: null,
+      due: null,
+    };
+    server.use(
+      http.get('*/api/v1/products/order-tags', () =>
+        HttpResponse.json({ items: { '21': { orders: [tag], for_stock: false } }, printers: {} }),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<QueuePage />);
+    await screen.findByText('Running Job');
+    await screen.findByText('nick_a');
+
+    await user.click(screen.getByTitle('Stop Print'));
+    expect(await screen.findByText(/It prints for nick_a: once stopped, the plan queues it again/)).toBeInTheDocument();
+  });
+
   it('Remove on a history item -> confirm -> DELETE /queue/{id}', async () => {
     const user = userEvent.setup();
     render(<QueuePage />);

@@ -677,3 +677,82 @@ async def test_order_counts_by_state_and_source(async_client: AsyncClient, db_se
     counts = (await async_client.get("/api/v1/base-sync/orders/counts")).json()
     assert counts["new"] == {"allegro": 1, "shop": 1}
     assert counts["accepted"] == {"allegro": 0, "shop": 0}
+
+
+async def _accepted(client: AsyncClient, connected: set[int]) -> dict:
+    online, status = _live(connected)
+    with online, status:
+        response = await client.get("/api/v1/base-sync/orders", params={"state": "accepted"})
+    assert response.status_code == 200, response.text
+    [order] = response.json()
+    return order
+
+
+def _missing(order: dict) -> int:
+    return sum(part["missing"] for progress in order["progress"] for part in progress["parts"])
+
+
+async def test_an_order_whose_print_left_the_queue_says_so_and_is_sent_again(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5101, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5101/accept")
+    assert response.status_code == 200, response.text
+    assert _missing(await _accepted(async_client, {shop.printer})) == 0
+
+    # Someone deletes one of its prints from the queue.
+    pending = list(
+        (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars()
+    )
+    assert len(pending) == 2
+    response = await async_client.delete(f"/api/v1/queue/{pending[0].id}")
+    assert response.status_code == 200, response.text
+    assert _missing(await _accepted(async_client, {shop.printer})) == 1
+
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5101/requeue")
+    assert response.status_code == 200, response.text
+    assert _missing(response.json()) == 0
+    db_session.expire_all()
+    pending = list(
+        (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars()
+    )
+    assert len(pending) == 2
+
+
+async def test_only_an_order_in_production_is_sent_again(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5102, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    response = await async_client.post("/api/v1/base-sync/orders/5102/requeue")
+    assert response.status_code == 409
+
+
+async def test_withdrawing_a_base_order_from_its_print_in_the_queue(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5103, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    online, status = _live({shop.printer})
+    with online, status:
+        await async_client.post("/api/v1/base-sync/orders/5103/accept")
+    tags = (await async_client.get("/api/v1/products/order-tags")).json()["items"]
+    pending = list(
+        (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars()
+    )
+    served = [t["product_order_id"] for t in tags[str(pending[0].id)]["orders"]]
+    with online, status:
+        response = await async_client.post(
+            f"/api/v1/products/queue-items/{pending[0].id}/cancel", json={"then": "withdraw", "orders": served}
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["withdrawn_base_orders"] == [5103]
+    db_session.expire_all()
+    assert await db_session.scalar(select(BaseOrder.state).where(BaseOrder.order_id == 5103)) == "skipped"
+    # Both of its prints left the queue: the one cancelled and the one only it needed.
+    assert (
+        list((await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars())
+        == []
+    )

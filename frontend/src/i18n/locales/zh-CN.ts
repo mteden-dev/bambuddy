@@ -9236,6 +9236,36 @@ export default {
       planned: '按计划；重新规划后可能变化。',
       forTooltip: '用于：{{list}}',
     },
+    cancelJob: {
+      title: '取消为订单打印的任务？',
+      printsFor: '打印给',
+      question: '它的零件怎么办？',
+      replan: {
+        label: '重新打印',
+        hint: '它会离开队列，计划会立即重新添加（可能换打印机或打印板）。',
+        button: '重新打印',
+      },
+      stock: {
+        label: '这些零件我已有',
+        hint: '零件计入库存；订单从库存取用，其余由计划打印。',
+        button: '计入库存',
+      },
+      withdraw: {
+        label: '撤回订单',
+        hint: '整个订单移到“已跳过”，尚未开始的打印离开队列。',
+        hintMany: '勾选的订单移到“已跳过”；打印板为其余订单重新计划。',
+        button: '撤回',
+      },
+      back: '返回',
+      choose: '请选择',
+      stopNote: '它为 {{orders}} 打印：停止后计划会自动重新加入队列。如果订单不再需要，请改为撤回订单。',
+      toast: {
+        replanned: '打印已取消，计划已重新计算。',
+        stocked: '零件已入库，计划已重新计算。',
+        withdrawn: '已撤回：{{orders}}。',
+        short: '部分零件无法计划：请检查产品的打印板。',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9295,6 +9325,8 @@ export default {
       undone: '已撤销：订单重新等待。',
       withdrawn: '订单已撤出生产。',
       restored: '订单重新等待。',
+      requeued: '打印已回到队列。',
+      requeueShort: '已重新计划，但仍有零件无法打印：请检查产品的打印板。',
     },
     acceptModal: {
       haveLabel: '额外已有：{{part}}（{{name}}）',
@@ -9329,6 +9361,8 @@ export default {
       saved: 'Base 设置已保存',
     },
     withdraw: '撤出生产',
+    missing: '不在队列中：{{parts}}',
+    requeue: '重新发送',
     withdrawTitle: '撤回订单 {{number}}？',
     withdrawMessage: '尚未开始的打印会离开队列。Base 中不会有任何更改。',
     print: '打印',

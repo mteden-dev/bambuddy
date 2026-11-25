@@ -9252,6 +9252,36 @@ export default {
       planned: '予定です。再計画で変わることがあります。',
       forTooltip: '対象：{{list}}',
     },
+    cancelJob: {
+      title: '注文用の印刷をキャンセルしますか？',
+      printsFor: '印刷先の注文',
+      question: '部品はどうしますか？',
+      replan: {
+        label: 'もう一度印刷',
+        hint: 'キューから外れ、プランがすぐに追加し直します（別のプリンターやプレートになることもあります）。',
+        button: 'もう一度印刷',
+      },
+      stock: {
+        label: '部品は手元にある',
+        hint: '部品を在庫に入れます。注文はそこから使い、残りはプランが印刷します。',
+        button: '在庫に入れる',
+      },
+      withdraw: {
+        label: '注文を外す',
+        hint: '注文全体がスキップ済みになり、まだ始まっていない印刷はキューから外れます。',
+        hintMany: 'チェックした注文はスキップ済みになり、残りの注文向けにプレートを計画し直します。',
+        button: '外す',
+      },
+      back: '戻る',
+      choose: '選択',
+      stopNote: '{{orders}} 向けの印刷です。停止するとプランが自動でキューに戻します。注文が不要なら、代わりに注文を外してください。',
+      toast: {
+        replanned: '印刷をキャンセルし、プランを計算し直しました。',
+        stocked: '部品を在庫に入れ、プランを計算し直しました。',
+        withdrawn: '外した注文: {{orders}}',
+        short: '計画できない部品があります。製品のプレートを確認してください。',
+      },
+    },
   },
   // Fork: orders from Base (base.com), read-only (services/base_sync.py).
   baseSync: {
@@ -9311,6 +9341,8 @@ export default {
       undone: '元に戻しました：注文は再び待機中です。',
       withdrawn: '注文を生産から外しました。',
       restored: '注文は再び待機中です。',
+      requeued: '印刷がキューに戻りました。',
+      requeueShort: '計画し直しましたが、まだ印刷できない部品があります。製品のプレートを確認してください。',
     },
     acceptModal: {
       haveLabel: '手元の追加分：{{part}}（{{name}}）',
@@ -9345,6 +9377,8 @@ export default {
       saved: 'Baseの設定を保存しました',
     },
     withdraw: '生産から外す',
+    missing: 'キューにない: {{parts}}',
+    requeue: 'もう一度送る',
     withdrawTitle: '注文 {{number}} を生産から外しますか？',
     withdrawMessage: 'まだ始まっていない印刷はキューから外れます。Base側は何も変わりません。',
     print: '印刷',
