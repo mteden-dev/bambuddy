@@ -978,6 +978,10 @@ class QcJobOut(BaseModel):
     finished_at: UTCDatetime = None
     checked_at: UTCDatetime = None
     pieces: list[QcPiece]
+    # Queued by hand (no order brings its bad pieces back by itself).
+    by_hand: bool = False
+    # Its plate queued again from the check: how that print is doing.
+    reprint: Literal["waiting", "printing", "done"] | None = None
 
 
 class QcCheckIn(BaseModel):
@@ -985,6 +989,9 @@ class QcCheckIn(BaseModel):
     rejected: list[PartPieces] = Field(default_factory=list, max_length=20)
     # Where it was answered, kept with the verdict in the archive.
     source: Literal["dialog", "plate_clear"] = "dialog"
+    # With bad pieces: print the plate again, first in the queue or last.
+    # Ignored while a reprint from an earlier check still waits or prints.
+    reprint: Literal["end", "asap"] | None = None
 
 
 class QcCheckOut(BaseModel):
@@ -992,6 +999,8 @@ class QcCheckOut(BaseModel):
     # Bad pieces or a reopened order: the product was planned again.
     replanned: bool
     reopened_orders: list[int] = Field(default_factory=list)
+    # The queue job printing the plate again (``reprint`` asked for).
+    reprint_item_id: int | None = None
 
 
 async def _qc_out(db: AsyncSession, jobs: list[ProductJob]) -> list[QcJobOut]:
@@ -1001,11 +1010,14 @@ async def _qc_out(db: AsyncSession, jobs: list[ProductJob]) -> list[QcJobOut]:
         if product is not None:
             products[product_id] = product
     printer_names = dict((await db.execute(select(Printer.id, Printer.name))).all())
+    reprints = await svc.reprints_of(db, [job.id for job in jobs])
+    reprint_state = {"planned": "waiting", "printing": "printing", "done": "done"}
     result = []
     for job in jobs:
         product = products.get(job.product_id)
         if product is None:
             continue
+        reprint = reprints.get(job.id)
         names = {part.id: part.name for part in product.parts}
         plate = next((pl for pl in product.plates if pl.id == job.product_plate_id), None)
         bad = svc.rejected_pieces(job)
@@ -1025,6 +1037,8 @@ async def _qc_out(db: AsyncSession, jobs: list[ProductJob]) -> list[QcJobOut]:
                     QcPiece(part_id=pid, part_name=names[pid], pieces=n, rejected=bad.get(pid, 0))
                     for pid, n in svc.job_pieces(job, set(names))
                 ],
+                by_hand=bool(job.by_hand),
+                reprint=reprint_state.get(reprint.status) if reprint is not None else None,
             )
         )
     return result
@@ -1061,32 +1075,49 @@ async def check_job(
     """Say a finished job's pieces were checked, and how many of each part were bad.
 
     Bad pieces leave stock and the product is planned again, so they are
-    printed anew; an order already closed with one of them opens again.
-    Checking again replaces the earlier answer.
+    printed anew for the orders that need them; an order already closed with
+    one of them opens again. Pieces no order needs (a plate printed by hand)
+    come back only with ``reprint``: the plate is queued again, first or last.
+    Checking again replaces the earlier answer; all good takes a reprint that
+    has not started out of the queue.
     """
     job = await db.get(ProductJob, job_id)
     if job is None:
         raise HTTPException(404, "Job not found")
+    actor_id = actor.id if actor is not None else None
     try:
         reopened = await svc.check_job(db, job, {r.part_id: r.pieces for r in data.rejected}, source=data.source)
+        bad = bool(svc.rejected_pieces(job))
+        removed = 0
+        reprint_item_id: int | None = None
+        if not bad:
+            removed = await svc.remove_waiting_reprints(db, job)
+        elif data.reprint is not None and await svc.live_reprint(db, job) is None:
+            reprint = await svc.reprint_job(
+                db, job, asap=data.reprint == "asap", actor_id=actor_id, manual_start=review_required
+            )
+            printer_scope.ensure(reprint.printer_id)
+            reprint_item_id = reprint.queue_item_id
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    replan = bool(reopened) or any(r.pieces > 0 for r in data.rejected)
-    item_ids: list[int] = []
+    replan = bool(reopened) or bad or bool(removed)
+    item_ids: list[int] = [reprint_item_id] if reprint_item_id is not None else []
     if replan:
         outcome = await svc.replan(
             db,
             job.product_id,
-            actor_id=actor.id if actor is not None else None,
+            actor_id=actor_id,
             manual_start=review_required,
             printer_ids=printer_scope.printer_ids,
         )
-        item_ids = outcome.item_ids
+        item_ids += outcome.item_ids
     await db.commit()
     if item_ids:
         await svc.announce_planned(item_ids)
     [out] = await _qc_out(db, [await db.get(ProductJob, job_id)])
-    return QcCheckOut(job=out, replanned=replan, reopened_orders=[o.id for o in reopened])
+    return QcCheckOut(
+        job=out, replanned=replan, reopened_orders=[o.id for o in reopened], reprint_item_id=reprint_item_id
+    )
 
 
 @router.post("/jobs/{job_id}/uncheck", response_model=QcCheckOut)
@@ -1098,7 +1129,10 @@ async def uncheck_job(
     review_required: bool = QueueReviewRequired,
     printer_scope: PrinterScope = RequestPrinterScope,
 ):
-    """Take a check back (undo): the job waits to be checked again; bad pieces it had count again."""
+    """Take a check back (undo): the job waits to be checked again; bad pieces it had count again.
+
+    A reprint queued from the check that has not started leaves the queue.
+    """
     job = await db.get(ProductJob, job_id)
     if job is None:
         raise HTTPException(404, "Job not found")

@@ -183,7 +183,10 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     licznik „do sprawdzenia”, zakładka „Do sprawdzenia” na stronie Zamówienia zbiera wszystko (filtr po drukarce,
     sprawdzone z 7 dni do poprawienia, „Cofnij” po zapisie). Niesprawdzone liczą się jako dobre;
     wadliwe wypadają ze stanu i planer dodrukowuje je od razu, a zamówienie zamknięte z taką
-    sztuką otwiera się znowu. Ocena trafia też jako werdykt do archiwum (upstreamowe pytanie o
+    sztuką otwiera się znowu. Płyta wydrukowana ręcznie (bez zamówienia, które by ją dodrukowało)
+    ma przy wadliwych wybór „Wydrukować płytę ponownie?”: nie / na koniec kolejki / jak
+    najszybciej (pierwsza w kolejce, tam gdzie szła wtedy); „Cofnij” albo poprawka na „wszystko
+    OK” zdejmuje z kolejki taki dodruk, który jeszcze nie ruszył. Ocena trafia też jako werdykt do archiwum (upstreamowe pytanie o
     wynik jest dla zadań planera wyłączone). Na ekranach dotykowych przyciski mają 44 px, liczby
     wybiera się segmentami 0–3 albo − n +, a okna wysuwają się od dołu. Widok pokazuje zamówienia z postępem i prognozą gotowości, zadania w
     kolejce, stan części z korektą i braki, których nie ma w kolejce (np. ręcznie usunięte

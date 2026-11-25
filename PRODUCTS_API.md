@@ -186,12 +186,22 @@ curl -s -X POST "$BB/products/jobs/55/check" -H "X-API-Key: $KEY" -H 'Content-Ty
 curl -s -X POST "$BB/products/jobs/55/check" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
   -d '{"rejected": [{"part_id": 21, "pieces": 1}], "source": "plate_clear"}'
 
+# płyta wydrukowana ręcznie: wadliwe wracają do druku tylko na życzenie, pierwsze w kolejce albo na końcu
+curl -s -X POST "$BB/products/jobs/55/check" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"rejected": [{"part_id": 21, "pieces": 3}], "reprint": "asap"}'
+
 # cofnięcie: zadanie znowu czeka na sprawdzenie
 curl -s -X POST "$BB/products/jobs/55/uncheck" -H "X-API-Key: $KEY"
 ```
 
 Wadliwe sztuki wypadają ze stanu i produkt jest planowany od nowa (`replanned: true`); zamówienie, które
-zamknęło się z wadliwą sztuką, otwiera się znowu (`reopened_orders`). Odpowiedź trafia też jako werdykt
+zamknęło się z wadliwą sztuką, otwiera się znowu (`reopened_orders`). Sztuk, których żadne zamówienie
+nie potrzebuje (płyta wydrukowana ręcznie, `by_hand: true` na liście), planer sam nie dodrukuje:
+`reprint` (`"asap"` albo `"end"`) kolejkuje tę samą płytę jeszcze raz (tam, gdzie szła: ta drukarka albo
+dowolna danego modelu, z tymi samymi slotami i opcjami; gdy tamtego zadania już nie ma w historii, na
+drukarkę, która ją drukowała) i zwraca `reprint_item_id`. Lista mówi, jak idzie dodruk (`reprint`:
+`waiting`, `printing`, `done`); póki czeka albo się drukuje, kolejny `reprint` jest pomijany. Cofnięcie
+sprawdzenia albo poprawka na „wszystko dobre” zdejmuje z kolejki dodruk, który jeszcze nie ruszył. Odpowiedź trafia też jako werdykt
 do archiwum wydruku (dobry, albo odrzucony, gdy wszystkie sztuki były wadliwe; `source` to skąd), więc
 statystyki Dobry/Odrzucony ją widzą; upstreamowe pytanie o wynik jest dla zadań planera wyłączone.
 

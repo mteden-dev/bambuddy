@@ -1099,3 +1099,110 @@ async def test_a_job_moved_by_hand_stays_moved_at_the_next_plan_too(async_client
         assert result["held"] == 1
     db_session.expire_all()
     assert (await db_session.get(QueueReservation, tray_id)).printer_id == moved_to
+
+
+# --- a plate printed by hand, found bad, printed again ------------------------------------
+
+
+async def _hand_printed(db_session, box, *, printer_id: int | None, target_model: str | None = None) -> int:
+    """Two lids printed by hand from the library, finished and linked; returns the queue job."""
+    from backend.app.services import products
+
+    item = PrintQueueItem(
+        library_file_id=box.files[("lid", 2)],
+        printer_id=printer_id,
+        target_model=target_model,
+        status="pending",
+        position=1,
+        ams_mapping="[2, -1]",
+        timelapse=True,
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await products.link_hand_jobs(db_session, item_ids=[item.id])
+    item.status = "completed"
+    item.printer_id = item.printer_id or box.b
+    await db_session.commit()
+    await products.after_queue_items_changed(db_session, [item.id])
+    await db_session.commit()
+    return item.id
+
+
+async def test_bad_pieces_of_a_plate_printed_by_hand_can_be_printed_again_first_or_last(
+    async_client: AsyncClient, db_session, box
+):
+    connected = {box.a, box.b}
+    original = await _hand_printed(db_session, box, printer_id=box.a)
+    keychain = await _file(db_session, "keychain", "P1S", 600)
+    others = [await _add_by_hand(db_session, keychain, position) for position in (5, 6)]
+    [job] = (await async_client.get("/api/v1/products/qc")).json()
+    assert job["by_hand"] is True and job["reprint"] is None
+    lid = {"rejected": [{"part_id": box.parts["Lid"], "pieces": 1}]}
+
+    # Nobody ordered lids: without asking, nothing prints them again.
+    result = await _post(async_client, f"/api/v1/products/jobs/{job['id']}/check", lid, connected)
+    assert result["reprint_item_id"] is None
+    assert [i.id for i in await _queue(db_session)] == others
+
+    # As soon as possible: the plate goes first, to the printer it printed on, as it was set up.
+    result = await _post(
+        async_client, f"/api/v1/products/jobs/{job['id']}/check", {**lid, "reprint": "asap"}, connected
+    )
+    reprint_id = result["reprint_item_id"]
+    assert result["job"]["reprint"] == "waiting"
+    queue = await _queue(db_session)
+    assert [i.id for i in queue] == [reprint_id, *others]
+    first = queue[0]
+    assert (first.library_file_id, first.printer_id, first.ams_mapping, first.timelapse) == (
+        box.files[("lid", 2)],
+        box.a,
+        "[2, -1]",
+        True,
+    )
+    assert first.archive_id is None and first.id != original
+    reprint = (await db_session.execute(select(ProductJob).where(ProductJob.queue_item_id == reprint_id))).scalar_one()
+    assert (reprint.by_hand, reprint.reprint_of_id, reprint.pieces) == (True, job["id"], {str(box.parts["Lid"]): 2})
+
+    # Checked again while it waits: no second one.
+    result = await _post(async_client, f"/api/v1/products/jobs/{job['id']}/check", {**lid, "reprint": "end"}, connected)
+    assert result["reprint_item_id"] is None
+    assert len(await _queue(db_session)) == 3
+    checked = (await async_client.get("/api/v1/products/qc?checked=true")).json()
+    assert [(j["id"], j["reprint"]) for j in checked] == [(job["id"], "waiting")]
+
+    # Undo: the check is taken back and the plate leaves the queue.
+    result = await _post(async_client, f"/api/v1/products/jobs/{job['id']}/uncheck", None, connected)
+    assert result["replanned"] is True
+    assert [i.id for i in await _queue(db_session)] == others
+
+    # At the end of the queue.
+    result = await _post(async_client, f"/api/v1/products/jobs/{job['id']}/check", {**lid, "reprint": "end"}, connected)
+    assert [i.id for i in await _queue(db_session)] == [*others, result["reprint_item_id"]]
+
+    # All good after all: the plate that has not started leaves the queue.
+    await _post(async_client, f"/api/v1/products/jobs/{job['id']}/check", {}, connected)
+    assert [i.id for i in await _queue(db_session)] == others
+
+
+async def test_a_plate_printed_again_goes_where_it_went_or_to_the_printer_that_printed_it(
+    async_client: AsyncClient, db_session, box
+):
+    connected = {box.a, box.b}
+    lid = {"rejected": [{"part_id": box.parts["Lid"], "pieces": 2}], "reprint": "asap"}
+
+    # Queued for any P1S: so is the reprint, without the slots of the printer that took it.
+    original = await _hand_printed(db_session, box, printer_id=None, target_model="P1S")
+    [job] = (await async_client.get("/api/v1/products/qc")).json()
+    await _post(async_client, f"/api/v1/products/jobs/{job['id']}/check", lid, connected)
+    [reprint] = await _queue(db_session)
+    assert (reprint.printer_id, reprint.target_model, reprint.ams_mapping) == (None, "P1S", None)
+
+    # Its queue job is gone from the history: the plate goes to the printer that printed it.
+    await _post(async_client, f"/api/v1/products/jobs/{job['id']}/check", {}, connected)
+    db_session.expire_all()
+    await db_session.delete(await db_session.get(PrintQueueItem, original))
+    await db_session.commit()
+    await _post(async_client, f"/api/v1/products/jobs/{job['id']}/check", lid, connected)
+    [reprint] = await _queue(db_session)
+    assert (reprint.printer_id, reprint.target_model, reprint.library_file_id) == (box.b, None, box.files[("lid", 2)])
+    assert reprint.ams_mapping is None

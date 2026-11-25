@@ -45,9 +45,14 @@ beforeEach(() => {
       return HttpResponse.json({ job: JOB, replanned: false, reopened_orders: [] });
     }),
     http.post('/api/v1/products/jobs/:id/check', async ({ params, request }) => {
-      const body = (await request.json()) as { rejected: { pieces: number }[] };
+      const body = (await request.json()) as { rejected: { pieces: number }[]; reprint?: string };
       checks.push({ id: Number(params.id), body });
-      return HttpResponse.json({ job: { ...JOB, checked_at: '2026-11-24T11:00:00Z' }, replanned: body.rejected.length > 0, reopened_orders: [] });
+      return HttpResponse.json({
+        job: { ...JOB, checked_at: '2026-11-24T11:00:00Z' },
+        replanned: body.rejected.length > 0,
+        reopened_orders: [],
+        reprint_item_id: body.reprint ? 99 : null,
+      });
     }),
   );
 });
@@ -72,10 +77,50 @@ describe('ProductQcView', () => {
     render(<ProductQcView hasPermission={allowAll} />);
     const bad = await screen.findByRole('radiogroup', { name: 'Bad pieces of Lid' });
     await user.click(within(bad).getByRole('radio', { name: '1' }));
+    // An order's print: the planner prints the bad ones again by itself.
+    expect(screen.queryByText('Print the plate again?')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Save bad pieces' }));
     await waitFor(() =>
       expect(checks).toEqual([{ id: 7, body: { rejected: [{ part_id: 41, pieces: 1 }], source: 'dialog' } }]),
     );
+  });
+
+  it('a plate printed by hand with bad pieces can go back to the queue, first or last', async () => {
+    jobs = [{ ...JOB, by_hand: true }];
+    const user = userEvent.setup();
+    render(<ProductQcView hasPermission={allowAll} />);
+    const bad = await screen.findByRole('radiogroup', { name: 'Bad pieces of Lid' });
+    expect(screen.queryByText('Print the plate again?')).not.toBeInTheDocument();
+    await user.click(within(bad).getByRole('radio', { name: '1' }));
+    const reprint = screen.getByRole('radiogroup', { name: 'Print the plate again?' });
+    expect(within(reprint).getByRole('radio', { name: 'No' })).toHaveAttribute('aria-checked', 'true');
+    await user.click(within(reprint).getByRole('radio', { name: 'As soon as possible' }));
+    await user.click(screen.getByRole('button', { name: 'Save bad pieces' }));
+    await waitFor(() =>
+      expect(checks).toEqual([
+        { id: 7, body: { rejected: [{ part_id: 41, pieces: 1 }], source: 'dialog', reprint: 'asap' } },
+      ]),
+    );
+    expect(await screen.findByText('Checked: the plate prints again, first in the queue.')).toBeInTheDocument();
+  });
+
+  it('a plate already back in the queue is not queued twice', async () => {
+    checkedJobs = [
+      {
+        ...JOB,
+        by_hand: true,
+        reprint: 'waiting',
+        checked_at: '2026-11-24T11:00:00Z',
+        pieces: [{ part_id: 41, part_name: 'Lid', pieces: 3, rejected: 2 }],
+      },
+    ];
+    const user = userEvent.setup();
+    render(<ProductQcView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('tab', { name: 'Checked' }));
+    expect(await screen.findByText('In the queue again')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Correct' }));
+    expect(screen.queryByRole('radiogroup', { name: 'Print the plate again?' })).not.toBeInTheDocument();
+    expect(screen.getAllByText('In the queue again').length).toBeGreaterThan(0);
   });
 
   it('shows the prints checked lately, to correct an answer', async () => {
@@ -151,6 +196,23 @@ describe('usePlateClearQc', () => {
     await user.click(await screen.findByRole('button', { name: 'All good · plate cleared' }));
     await waitFor(() => expect(onClear).toHaveBeenCalledTimes(1));
     expect(checks).toEqual([{ id: 7, body: { rejected: [], source: 'plate_clear' } }]);
+  });
+
+  it('a plate printed by hand can go to the end of the queue as the plate is cleared', async () => {
+    jobs = [{ ...JOB, by_hand: true }];
+    const onClear = vi.fn();
+    const user = userEvent.setup();
+    render(<ClearButton onClear={onClear} />);
+    await user.click(screen.getByRole('button', { name: 'Plate cleared' }));
+    const bad = await screen.findByRole('radiogroup', { name: 'Bad pieces of Lid' });
+    await user.click(within(bad).getByRole('radio', { name: '3' }));
+    const reprint = screen.getByRole('radiogroup', { name: 'Print the plate again?' });
+    await user.click(within(reprint).getByRole('radio', { name: 'At the end of the queue' }));
+    await user.click(screen.getByRole('button', { name: 'Save bad pieces · plate cleared' }));
+    await waitFor(() => expect(onClear).toHaveBeenCalledTimes(1));
+    expect(checks).toEqual([
+      { id: 7, body: { rejected: [{ part_id: 41, pieces: 3 }], source: 'plate_clear', reprint: 'end' } },
+    ]);
   });
 
   it('closing the question clears nothing', async () => {

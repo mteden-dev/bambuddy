@@ -774,16 +774,19 @@ async def record_check_verdict(db: AsyncSession, job: ProductJob, source: str | 
 
 
 async def uncheck_job(db: AsyncSession, job: ProductJob) -> bool:
-    """Take a check back: the job waits to be checked again. Returns whether it had bad pieces.
+    """Take a check back: the job waits to be checked again. Returns whether a plan may change.
 
-    The caller replans (when it had) and commits.
+    It had bad pieces, or a reprint queued from the check that had not started
+    (it leaves the queue). The caller replans (when so) and commits.
     """
     had_bad = bool(rejected_pieces(job))
     job.checked_at = None
     job.rejected = None
     await record_check_verdict(db, job, None)
     await db.flush()
-    return had_bad
+    # A plate queued again from that check has no reason to print any more.
+    removed = await remove_waiting_reprints(db, job)
+    return had_bad or bool(removed)
 
 
 async def check_job(
@@ -810,6 +813,154 @@ async def check_job(
     await record_check_verdict(db, job, source)
     await db.flush()
     return await reopen_short_orders(db, product, await stock_pool(db, product))
+
+
+# --- printing a checked plate again ---------------------------------------------
+
+# What a reprint takes from the queue job that printed the plate: where it went
+# and how it printed, not its place in the queue, its state or how it ran.
+REPRINT_FIELDS = (
+    "printer_id",
+    "target_model",
+    "target_location",
+    "required_filament_types",
+    "archive_id",
+    "library_file_id",
+    "plate_id",
+    "cost_center_id",
+    "project_id",
+    "print_time_seconds",
+    "estimated_cost",
+    "ams_mapping",
+    "filament_overrides",
+    "nozzle_mapping",
+    "nozzle_rack_choice",
+    "auto_off_after",
+    "gcode_injection",
+    "bed_levelling",
+    "flow_cali",
+    "vibration_cali",
+    "layer_inspect",
+    "timelapse",
+    "use_ams",
+    "nozzle_offset_cali",
+    "confirm_outcome",
+    "preheat_override",
+    "preheat_chamber_target_override",
+)
+
+
+async def reprints_of(db: AsyncSession, job_ids: list[int]) -> dict[int, ProductJob]:
+    """Job id -> the newest job queued from its check to print it again (for the ones that have one)."""
+    if not job_ids:
+        return {}
+    rows = (
+        await db.execute(select(ProductJob).where(ProductJob.reprint_of_id.in_(job_ids)).order_by(ProductJob.id))
+    ).scalars()
+    return {job.reprint_of_id: job for job in rows}
+
+
+async def live_reprint(db: AsyncSession, job: ProductJob) -> ProductJob | None:
+    """The reprint of ``job`` still waiting or printing, if any."""
+    reprint = (await reprints_of(db, [job.id])).get(job.id)
+    return reprint if reprint is not None and reprint.status in JOB_ACTIVE else None
+
+
+async def remove_waiting_reprints(db: AsyncSession, job: ProductJob) -> int:
+    """Take the reprints of ``job`` that have not started out of the queue; returns how many."""
+    rows = (
+        await db.execute(select(ProductJob).where(ProductJob.reprint_of_id == job.id, ProductJob.status == "planned"))
+    ).scalars()
+    return await _remove_waiting_jobs(db, list(rows))
+
+
+async def reprint_job(
+    db: AsyncSession, job: ProductJob, *, asap: bool, actor_id: int | None, manual_start: bool
+) -> ProductJob:
+    """Queue a finished job's plate again, first in the queue (``asap``) or last; returns the new job.
+
+    For pieces found bad that no order brings back (a plate printed by hand).
+    It goes where the queue job that printed it went (that printer, or any of
+    the model), with its slots and print options; when that queue job is gone,
+    to the printer that printed it. The new job counts as queued by hand, so
+    plans keep it and count its pieces. The caller replans and commits.
+    """
+    from backend.app.api.routes.library_variants import normalize_model_name
+    from backend.app.api.routes.print_queue import library_file_disk_path, printed_plate_of_multi_plate_file
+    from backend.app.services.print_defaults import default_print_options
+    from backend.app.services.queue_position import lock_queue_positions
+
+    if job.status != "done":
+        raise ValueError("Only a finished job can be printed again")
+    product = await load_product(db, job.product_id)
+    plate = next((p for p in product.plates if p.id == job.product_plate_id), None) if product else None
+    if product is None or plate is None or not plate_usable(plate):
+        raise ValueError("The job's plate is gone")
+    pieces = plate_pieces(plate, {part.id for part in product.parts})
+    if not pieces:
+        raise ValueError("The job's plate prints no pieces")
+
+    original = await db.get(PrintQueueItem, job.queue_item_id) if job.queue_item_id is not None else None
+    if original is not None and (not _same_item(job, original) or not original.library_file_id):
+        original = None
+    if original is not None:
+        fields = {name: getattr(original, name) for name in REPRINT_FIELDS}
+        # The plate's file, as the planner prints it, not the archive of that run.
+        fields["archive_id"] = None
+        if original.target_model:
+            # It went to any printer of the model: so does this one. The slots
+            # were the ones of the printer that took it.
+            fields.update(printer_id=None, ams_mapping=None, nozzle_mapping=None)
+    else:
+        library_file = plate.library_file
+        target_model = None if job.printer_id is not None else normalize_model_name(plate_model(library_file))
+        if job.printer_id is None and not target_model:
+            raise ValueError("No printer to print the plate on")
+        fields = {
+            "printer_id": job.printer_id,
+            "target_model": target_model,
+            "library_file_id": library_file.id,
+            "plate_id": plate.plate_id or printed_plate_of_multi_plate_file(library_file_disk_path(library_file)),
+            "print_time_seconds": plate_duration(plate),
+            **(await default_print_options(db)),
+        }
+
+    await lock_queue_positions(db)
+    pending = list((await db.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars())
+    if asap and pending:
+        position = min(item.position or 0 for item in pending)
+        for other in pending:
+            if (other.position or 0) >= position:
+                other.position = (other.position or 0) + 1
+    else:
+        position = max((item.position or 0 for item in pending), default=0) + 1
+    item = PrintQueueItem(
+        **fields,
+        position=position,
+        status="pending",
+        manual_start=manual_start,
+        created_by_id=actor_id,
+    )
+    db.add(item)
+    await db.flush()
+    await db.refresh(item, ["created_at"])
+    reprint = ProductJob(
+        product_id=product.id,
+        product_plate_id=plate.id,
+        queue_item_id=item.id,
+        item_created_at=item.created_at,
+        printer_id=item.printer_id,
+        planned_printer_id=item.printer_id,
+        pinned=item.printer_id is not None,
+        by_hand=True,
+        status="planned",
+        pieces={str(part_id): n for part_id, n in pieces},
+        reprint_of_id=job.id,
+    )
+    db.add(reprint)
+    await db.flush()
+    logger.info("[PRODUCTS] Job %s printed again as queue job %s (%s)", job.id, item.id, "first" if asap else "last")
+    return reprint
 
 
 async def refresh_product(db: AsyncSession, product: Product) -> tuple[planner.Pool, list[ProductJob]]:

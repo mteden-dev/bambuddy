@@ -156,6 +156,9 @@ class ProductJob(Base):
     planner finds it), and one moved by hand to another printer than the plan
     put it on (``planned_printer_id``). A moved job the orders no longer need
     still leaves the queue; one queued by hand never does.
+
+    A finished job with bad pieces can be printed again from the check
+    (``reprint_of_id`` on the new job, which counts as queued by hand).
     """
 
     __tablename__ = "custom_product_jobs"
@@ -189,6 +192,8 @@ class ProductJob(Base):
     # Someone looked at the finished pieces; rejected: part id (string) -> bad pieces.
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     rejected: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Queued from the check of this finished job, to print its plate again.
+    reprint_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ProductStockAdjustment(Base):

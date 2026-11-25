@@ -2,9 +2,9 @@ import { useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, ClipboardCheck, ImageOff, Loader2, Pencil, X } from 'lucide-react';
+import { CheckCircle2, ClipboardCheck, ImageOff, Loader2, Pencil, RotateCcw, X } from 'lucide-react';
 import { api } from '../../api/client';
-import type { Permission, ProductQcJob } from '../../api/client';
+import type { Permission, ProductQcJob, ProductQcReprint } from '../../api/client';
 import { Card } from '../Card';
 import { Button } from '../Button';
 import { PieceStepper } from './PieceStepper';
@@ -17,6 +17,8 @@ import type { TimeFormat } from '../../utils/date';
 
 // part id -> bad pieces
 type Bad = Record<number, number>;
+// Print the plate again (a plate printed by hand): first in the queue, last, or not.
+type Reprint = ProductQcReprint | null;
 
 // Bigger tap targets on a touch screen (an iPad at a printer), whatever its width.
 const TOUCH = 'pointer-coarse:min-h-11!';
@@ -24,6 +26,13 @@ const TOUCH = 'pointer-coarse:min-h-11!';
 const WINDOW_DAYS = 7;
 // A plate finished this recently is likely still too warm to judge.
 const FRESH_MS = 10 * 60_000;
+
+const chip = (active: boolean) =>
+  `text-sm px-3.5 py-1.5 pointer-coarse:py-2.5 rounded-full border transition-colors ${
+    active
+      ? 'border-bambu-green bg-bambu-green/10 text-bambu-green'
+      : 'border-bambu-dark-tertiary text-bambu-gray hover:border-bambu-gray'
+  }`;
 
 function rejectedOf(bad: Bad | undefined) {
   return Object.entries(bad ?? {})
@@ -61,10 +70,18 @@ function useCheckJob(job: ProductQcJob, source: 'dialog' | 'plate_clear' = 'dial
     onError: (e: Error) => showToast(e.message, 'error'),
   });
   return useMutation({
-    mutationFn: (bad: Bad) => api.checkProductJob(job.id, rejectedOf(bad), source),
-    onSuccess: (result) => {
+    mutationFn: ({ bad, reprint }: { bad: Bad; reprint: Reprint }) =>
+      api.checkProductJob(job.id, rejectedOf(bad), source, rejectedOf(bad).length ? reprint : null),
+    onSuccess: (result, { reprint }) => {
       afterCheck();
-      undoToast(t(result.replanned ? 'products.qc.savedReplanned' : 'products.qc.saved'), () => undo.mutate());
+      const message = result.reprint_item_id
+        ? reprint === 'asap'
+          ? 'products.qc.savedReprintAsap'
+          : 'products.qc.savedReprintEnd'
+        : result.replanned
+          ? 'products.qc.savedReplanned'
+          : 'products.qc.saved';
+      undoToast(t(message), () => undo.mutate());
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
@@ -146,12 +163,66 @@ function BadPieces({ job, bad, onChange, disabled }: { job: ProductQcJob; bad: B
   );
 }
 
+/**
+ * For bad pieces of a plate printed by hand, which no order brings back: print
+ * the plate again, last or first in the queue. A reprint from an earlier
+ * check still waiting or printing is shown instead (no second one).
+ */
+function ReprintChoice({
+  job,
+  value,
+  onChange,
+  disabled,
+}: {
+  job: ProductQcJob;
+  value: Reprint;
+  onChange: (value: Reprint) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  if (job.reprint === 'waiting' || job.reprint === 'printing') {
+    return (
+      <p className="mt-3 text-sm text-bambu-gray-light flex items-center gap-1.5">
+        <RotateCcw className="w-4 h-4 shrink-0" />
+        {t(`products.qc.reprint.${job.reprint}`)}
+      </p>
+    );
+  }
+  const options: { id: Reprint; label: string }[] = [
+    { id: null, label: t('products.qc.reprint.no') },
+    { id: 'end', label: t('products.qc.reprint.end') },
+    { id: 'asap', label: t('products.qc.reprint.asap') },
+  ];
+  return (
+    <div className="mt-3" data-testid="qc-reprint">
+      <p className="text-sm text-white">{t('products.qc.reprint.label')}</p>
+      <p className="text-xs text-bambu-gray mt-0.5">{t('products.qc.reprint.hint')}</p>
+      <div role="radiogroup" aria-label={t('products.qc.reprint.label')} className="flex flex-wrap gap-1.5 mt-2">
+        {options.map((option) => (
+          <button
+            key={option.id ?? 'no'}
+            type="button"
+            role="radio"
+            aria-checked={value === option.id}
+            disabled={disabled}
+            onClick={() => onChange(option.id)}
+            className={`${chip(value === option.id)} disabled:opacity-50`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** One finished print in the list: check it, or (checked already) see and correct the answer. */
 function QcJobCard({ job, canAct }: { job: ProductQcJob; canAct: boolean }) {
   const { t } = useTranslation();
   const checked = job.checked_at != null;
   const [editing, setEditing] = useState(!checked);
   const [bad, setBad] = useState<Bad>(() => rejectedFromJob(job));
+  const [reprint, setReprint] = useState<Reprint>(null);
   const check = useCheckJob(job);
   const anyBad = rejectedOf(bad).length > 0;
   const result = rejectedOf(rejectedFromJob(job));
@@ -162,6 +233,9 @@ function QcJobCard({ job, canAct }: { job: ProductQcJob; canAct: boolean }) {
       {editing ? (
         <>
           <BadPieces job={job} bad={bad} onChange={setBad} disabled={!canAct || check.isPending} />
+          {canAct && job.by_hand && anyBad && (
+            <ReprintChoice job={job} value={reprint} onChange={setReprint} disabled={check.isPending} />
+          )}
           {canAct && (
             <div className="flex justify-end gap-2 mt-3">
               {checked && (
@@ -173,7 +247,7 @@ function QcJobCard({ job, canAct }: { job: ProductQcJob; canAct: boolean }) {
                 size="sm"
                 variant={anyBad ? 'danger' : 'primary'}
                 className={TOUCH}
-                onClick={() => check.mutate(bad, { onSuccess: () => checked && setEditing(false) })}
+                onClick={() => check.mutate({ bad, reprint }, { onSuccess: () => checked && setEditing(false) })}
                 disabled={check.isPending}
               >
                 {check.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : !anyBad && <CheckCircle2 className="w-4 h-4" />}
@@ -196,6 +270,12 @@ function QcJobCard({ job, canAct }: { job: ProductQcJob; canAct: boolean }) {
                 })
               : t('products.qc.resultGood')}
           </span>
+          {job.reprint && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-bambu-dark text-bambu-gray-light flex items-center gap-1">
+              <RotateCcw className="w-3 h-3" />
+              {t(`products.qc.reprint.${job.reprint}`)}
+            </span>
+          )}
           {canAct && (
             <Button size="sm" variant="secondary" className={`${TOUCH} ml-auto`} onClick={() => setEditing(true)}>
               <Pencil className="w-4 h-4" />
@@ -219,13 +299,6 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
     </div>
   );
 }
-
-const chip = (active: boolean) =>
-  `text-sm px-3.5 py-1.5 pointer-coarse:py-2.5 rounded-full border transition-colors ${
-    active
-      ? 'border-bambu-green bg-bambu-green/10 text-bambu-green'
-      : 'border-bambu-dark-tertiary text-bambu-gray hover:border-bambu-gray'
-  }`;
 
 /**
  * Fork (products): finished prints of products to check, and the ones checked
@@ -354,6 +427,7 @@ export function PlateQcModal({ job, olderCount, printerName, onClose, onDone }: 
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [bad, setBad] = useState<Bad>({});
+  const [reprint, setReprint] = useState<Reprint>(null);
   const anyBad = rejectedOf(bad).length > 0;
   // Still warm: "later" is the main answer.
   const [fresh] = useState(() => Date.now() - (parseUTCDate(job.finished_at)?.getTime() ?? 0) < FRESH_MS);
@@ -365,7 +439,7 @@ export function PlateQcModal({ job, olderCount, printerName, onClose, onDone }: 
       data-autofocus={!fresh || anyBad ? true : undefined}
       variant={anyBad ? 'danger' : fresh ? 'secondary' : 'primary'}
       className={`${TOUCH} w-full pointer-fine:sm:w-auto`}
-      onClick={() => check.mutate(bad, { onSuccess: onDone })}
+      onClick={() => check.mutate({ bad, reprint }, { onSuccess: onDone })}
       disabled={check.isPending}
     >
       {check.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -417,6 +491,9 @@ export function PlateQcModal({ job, olderCount, printerName, onClose, onDone }: 
         <div className="p-4 overflow-y-auto min-h-0">
           <JobHeader job={job} showExpiry={false} />
           <BadPieces job={job} bad={bad} onChange={setBad} disabled={check.isPending} />
+          {job.by_hand && anyBad && (
+            <ReprintChoice job={job} value={reprint} onChange={setReprint} disabled={check.isPending} />
+          )}
           {fresh && <p className="text-xs text-bambu-gray mt-3">{t('products.qc.stillWarm')}</p>}
           {olderCount > 0 && (
             <p className="text-xs text-amber-600 dark:text-amber-300 mt-3">

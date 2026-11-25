@@ -6178,6 +6178,8 @@ async def _run_migrations(conn):
         conn,
         f"ALTER TABLE custom_product_jobs ADD COLUMN by_hand BOOLEAN NOT NULL DEFAULT {'0' if is_sqlite() else 'FALSE'}",
     )
+    # Fork (products): a finished job's plate queued again from its check.
+    await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN reprint_of_id INTEGER")
 
     await _backfill_archive_run_photos(conn)
     await _migrate_h3c_queue_tray_ids(conn)

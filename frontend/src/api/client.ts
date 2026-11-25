@@ -4834,12 +4834,21 @@ export interface ProductQcJob {
   finished_at: string | null;
   checked_at: string | null;
   pieces: { part_id: number; part_name: string; pieces: number; rejected: number }[];
+  /** Queued by hand: no order brings its bad pieces back by itself. */
+  by_hand?: boolean;
+  /** Its plate queued again from the check, and how that print is doing. */
+  reprint?: 'waiting' | 'printing' | 'done' | null;
 }
+
+/** Fork (products): print a checked plate again, first in the queue or last. */
+export type ProductQcReprint = 'asap' | 'end';
 
 export interface ProductQcCheckResult {
   job: ProductQcJob;
   replanned: boolean;
   reopened_orders: number[];
+  /** The queue job printing the plate again, when that was asked for. */
+  reprint_item_id?: number | null;
 }
 
 /** Fork (products): an order a planner job prints for. */
@@ -8126,10 +8135,11 @@ export const api = {
     jobId: number,
     rejected: { part_id: number; pieces: number }[] = [],
     source: 'dialog' | 'plate_clear' = 'dialog',
+    reprint: ProductQcReprint | null = null,
   ) =>
     request<ProductQcCheckResult>(`/products/jobs/${jobId}/check`, {
       method: 'POST',
-      body: JSON.stringify({ rejected, source }),
+      body: JSON.stringify(reprint ? { rejected, source, reprint } : { rejected, source }),
     }),
   uncheckProductJob: (jobId: number) =>
     request<ProductQcCheckResult>(`/products/jobs/${jobId}/uncheck`, { method: 'POST' }),
