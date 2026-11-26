@@ -176,7 +176,24 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     każdą drukarką); znika dopiero, gdy żadne zamówienie go nie potrzebuje. Plik płyty wydrukowany
     ręcznie (z biblioteki, z historii, z karty drukarki) jest dołączany do produktu: jego części
     liczą się na stan, plan go nie usuwa i nie drukuje drugi raz; karta produktu oznacza takie
-    zadania „dodane ręcznie” / „przesunięte ręcznie”. Przy włączonym „najkrótsze najpierw”
+    zadania „dodane ręcznie” / „przesunięte ręcznie”. **Filament w planie**
+    (`services/product_filament.py`): planer zna typ, kolor i ilość na każdym slocie drukarki
+    (status AMS, magazyn: szpule slotów, Spoolman), odejmuje to, co zużyje kolejka przed produktem
+    (bieżący wydruk w całości i zadania z prognozy na tej drukarce), i dopasowuje filamenty płyty
+    do slotów jak scheduler. Płyta, której filamentu/koloru nie ma na drukarce albo której szpula
+    by nie starczyła (sprawdzenie per slot z marginesem), rusza dopiero, gdy ktoś jest przy
+    drukarkach (godziny obsady), plus czas wymiany (domyślnie 10 min); potem plan liczy pełną
+    szpulę 1 kg. Zadania planera dostają „wymuś kolor” z pliku (do wyłączenia w Planowaniu), żeby
+    scheduler nie drukował w innym kolorze, niż plan zakładał. **Preferowana drukarka**: po
+    „Drukuj” zamówienie z Base otwiera okno „Zaplanowane płyty” (też przycisk **Płyty** przy
+    zamówieniu w produkcji) z drukarką, godzinami i filamentem (ile zostanie, ostrzeżenie o
+    wymianie) każdej płyty i wyborem „Automatycznie” / drukarka tego modelu. Preferencja jest
+    zapisana przy zadaniu planera (`preferred_printer_id`), przechodzi na płytę, którą kolejny plan
+    drukuje w jej miejsce (ten sam plik albo płyta tego modelu z tymi samymi częściami), i znika,
+    gdy druk ruszy. To szturchnięcie, nie przypięcie: inna drukarka wygrywa tylko, gdy skończy
+    wcześniej o więcej niż większe z dwóch, 30 min albo 25% czasu druku płyty (Planowanie), albo
+    gdy preferowana musiałaby wymieniać szpulę, a inna nie; okno mówi wtedy dlaczego. Przy
+    częściach parowanych preferencja jednej płyty przenosi cały komplet. Przy włączonym „najkrótsze najpierw”
     strona ostrzega, że kolejka może nie trzymać kolejności z planu. **Stan części** jest liczony
     na drukarkę (zakończone zadania + korekty − to, co zabrały zrealizowane zamówienia);
     zamówienia biorą z niego po kolei (termin, potem kolejność), a zamówienie z kompletem części

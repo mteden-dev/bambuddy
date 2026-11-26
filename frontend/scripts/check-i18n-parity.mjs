@@ -546,6 +546,11 @@ const IDENTICAL_TO_EN_ALLOWED = {
   nl: new Set(NL_COGNATES),
   pl: new Set(PL_COGNATES),
 };
+// Fork (products, planned plates): grams are "g" and "offline" is the same word there.
+for (const code of ['de', 'es', 'fr', 'it', 'ja', 'ko', 'nl', 'pl', 'pt-BR', 'sv', 'tr']) {
+  IDENTICAL_TO_EN_ALLOWED[code].add('{{grams}} g');
+}
+for (const code of ['de', 'it', 'nl', 'pt-BR', 'sv']) IDENTICAL_TO_EN_ALLOWED[code].add('{{name}} (offline)');
 
 // Pure comparison logic, exported so tests can verify each failure mode
 // without going through file IO or the TypeScript parser.

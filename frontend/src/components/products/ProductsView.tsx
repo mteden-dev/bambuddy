@@ -19,7 +19,14 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api } from '../../api/client';
-import type { Permission, Product, ProductDetail, ProductOrder, ProductPlanResult } from '../../api/client';
+import type {
+  Permission,
+  Product,
+  ProductDetail,
+  ProductOrder,
+  ProductPlanResult,
+  ProductSettingsUpdate,
+} from '../../api/client';
 import { Card } from '../Card';
 import { Button } from '../Button';
 import { NumberInput } from '../NumberInput';
@@ -67,7 +74,8 @@ export function ProductsView({ hasPermission }: ProductsViewProps) {
   const { data: productSettings } = useQuery({ queryKey: ['product-settings'], queryFn: api.getProductSettings });
 
   const settingsMutation = useMutation({
-    mutationFn: (minutes: number) => api.updateProductSettings({ plate_cost_minutes: minutes }),
+    mutationFn: (patch: Partial<ProductSettingsUpdate>) =>
+      api.updateProductSettings({ plate_cost_minutes: productSettings?.plate_cost_minutes ?? 15, ...patch }),
     onSuccess: (saved) => {
       queryClient.setQueryData(['product-settings'], saved);
       showToast(t('products.settings.saved'), 'success');
@@ -139,12 +147,71 @@ export function ProductsView({ hasPermission }: ProductsViewProps) {
               className={`${inputClass} w-24`}
               onBlur={(e) => {
                 const minutes = Math.max(0, Math.min(1440, Number(e.target.value) || 0));
-                if (minutes !== productSettings.plate_cost_minutes) settingsMutation.mutate(minutes);
+                if (minutes !== productSettings.plate_cost_minutes) settingsMutation.mutate({ plate_cost_minutes: minutes });
               }}
             />
             {t('products.settings.minutes')}
           </label>
           <p className="text-xs text-bambu-gray mt-2">{t('products.settings.plateCostHint')}</p>
+
+          <div className="border-t border-bambu-dark-tertiary mt-4 pt-4 space-y-4">
+            <div>
+              <div className="flex flex-wrap items-center gap-2 text-sm text-white">
+                <span>{t('products.settings.preferMargin')}</span>
+                <span className="flex items-center gap-2">
+                  <SettingNumber
+                    value={productSettings.prefer_margin_minutes ?? 30}
+                    max={1440}
+                    label={t('products.settings.preferMargin')}
+                    disabled={!canSettings || settingsMutation.isPending}
+                    onSave={(n) => settingsMutation.mutate({ prefer_margin_minutes: n })}
+                  />
+                  {t('products.settings.minutes')}
+                </span>
+                <span>{t('products.settings.preferOr')}</span>
+                <span className="flex items-center gap-2">
+                  <SettingNumber
+                    value={productSettings.prefer_margin_pct ?? 25}
+                    max={100}
+                    label={t('products.settings.preferPct')}
+                    disabled={!canSettings || settingsMutation.isPending}
+                    onSave={(n) => settingsMutation.mutate({ prefer_margin_pct: n })}
+                  />
+                  {t('products.settings.preferPct')}
+                </span>
+              </div>
+              <p className="text-xs text-bambu-gray mt-2">{t('products.settings.preferHint')}</p>
+            </div>
+            <div>
+              <label className="flex flex-wrap items-center gap-2 text-sm text-white">
+                {t('products.settings.swap')}
+                <span className="flex items-center gap-2">
+                  <SettingNumber
+                    value={productSettings.filament_swap_minutes ?? 10}
+                    max={240}
+                    label={t('products.settings.swap')}
+                    disabled={!canSettings || settingsMutation.isPending}
+                    onSave={(n) => settingsMutation.mutate({ filament_swap_minutes: n })}
+                  />
+                  {t('products.settings.minutes')}
+                </span>
+              </label>
+              <p className="text-xs text-bambu-gray mt-2">{t('products.settings.swapHint')}</p>
+            </div>
+            <label className="flex items-start gap-3 min-h-11 cursor-pointer">
+              <input
+                type="checkbox"
+                className="w-5 h-5 mt-0.5 shrink-0 accent-bambu-green"
+                checked={productSettings.force_color ?? true}
+                disabled={!canSettings || settingsMutation.isPending}
+                onChange={(e) => settingsMutation.mutate({ force_color: e.target.checked })}
+              />
+              <span className="text-sm text-white">
+                {t('products.settings.forceColor')}
+                <span className="block text-xs text-bambu-gray">{t('products.settings.forceColorHint')}</span>
+              </span>
+            </label>
+          </div>
         </Card>
       )}
 
@@ -617,5 +684,38 @@ function StockCorrection({ detail, onDone }: { detail: ProductDetail; onDone: (r
         </Button>
       </div>
     </form>
+  );
+}
+
+/** A whole number setting saved when the field is left, if it changed. */
+function SettingNumber({
+  value,
+  max,
+  label,
+  disabled,
+  onSave,
+}: {
+  value: number;
+  max: number;
+  label: string;
+  disabled: boolean;
+  onSave: (value: number) => void;
+}) {
+  return (
+    <input
+      key={value}
+      type="number"
+      inputMode="numeric"
+      min={0}
+      max={max}
+      defaultValue={value}
+      aria-label={label}
+      disabled={disabled}
+      className="w-20 px-2 py-1 pointer-coarse:min-h-11 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-base sm:text-sm focus:border-bambu-green focus:outline-none"
+      onBlur={(e) => {
+        const next = Math.max(0, Math.min(max, Math.round(Number(e.target.value) || 0)));
+        if (next !== value) onSave(next);
+      }}
+    />
   );
 }

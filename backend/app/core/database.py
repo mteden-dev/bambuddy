@@ -404,6 +404,7 @@ NON_FK_ID_REFERENCES: dict[str, tuple[tuple[str, str], ...]] = {
         # Fork: products. Which printer made a part's pieces is history.
         ("custom_product_jobs", "printer_id"),
         ("custom_product_jobs", "planned_printer_id"),
+        ("custom_product_jobs", "preferred_printer_id"),
         ("custom_product_stock", "printer_id"),
     ),
     "api_keys": (("auth_ephemeral_tokens", "api_key_id"),),
@@ -6180,6 +6181,9 @@ async def _run_migrations(conn):
     )
     # Fork (products): a finished job's plate queued again from its check.
     await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN reprint_of_id INTEGER")
+    # Fork (products): the printer someone prefers for a waiting job, and the plan's notes on it.
+    await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN preferred_printer_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN plan_info JSON")
 
     await _backfill_archive_run_photos(conn)
     await _migrate_h3c_queue_tray_ids(conn)

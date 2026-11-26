@@ -52,7 +52,7 @@ from backend.app.models.products import (
     ProductStockAdjustment,
 )
 from backend.app.models.settings import Settings
-from backend.app.services import product_planner as planner
+from backend.app.services import product_filament, product_planner as planner
 from backend.app.services.queue_reservations import model_key
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,74 @@ async def read_plate_cost_minutes(db: AsyncSession) -> int:
 async def write_plate_cost_minutes(db: AsyncSession, minutes: int) -> None:
     """Store it. The caller commits."""
     await upsert_setting(db, Settings, PLATE_COST_KEY, str(max(0, min(MAX_PLATE_COST_MINUTES, minutes))))
+
+
+# A preferred printer loses to another only when that one is done this much
+# sooner: the larger of the minutes and the share of the plate's print time.
+PREFER_MINUTES_KEY = "product_prefer_margin_minutes"
+PREFER_PCT_KEY = "product_prefer_margin_pct"
+DEFAULT_PREFER_MINUTES = 30
+DEFAULT_PREFER_PCT = 25
+MAX_PREFER_MINUTES = 24 * 60
+# Loading a spool or changing one that runs out, once someone is there.
+SWAP_MINUTES_KEY = "product_filament_swap_minutes"
+DEFAULT_SWAP_MINUTES = 10
+MAX_SWAP_MINUTES = 4 * 60
+# The planner's jobs ask for their files' colours ("force colour match").
+FORCE_COLOR_KEY = "product_force_color"
+
+
+@dataclass(frozen=True)
+class PlanSettings:
+    prefer_minutes: int = DEFAULT_PREFER_MINUTES
+    prefer_pct: int = DEFAULT_PREFER_PCT
+    swap_minutes: int = DEFAULT_SWAP_MINUTES
+    force_color: bool = True
+
+
+def _bounded(raw: str | None, default: int, top: int) -> int:
+    try:
+        return max(0, min(top, int(raw))) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+async def read_plan_settings(db: AsyncSession) -> PlanSettings:
+    rows = dict(
+        (
+            await db.execute(
+                select(Settings.key, Settings.value).where(
+                    Settings.key.in_((PREFER_MINUTES_KEY, PREFER_PCT_KEY, SWAP_MINUTES_KEY, FORCE_COLOR_KEY))
+                )
+            )
+        ).all()
+    )
+    force = rows.get(FORCE_COLOR_KEY)
+    return PlanSettings(
+        prefer_minutes=_bounded(rows.get(PREFER_MINUTES_KEY), DEFAULT_PREFER_MINUTES, MAX_PREFER_MINUTES),
+        prefer_pct=_bounded(rows.get(PREFER_PCT_KEY), DEFAULT_PREFER_PCT, 100),
+        swap_minutes=_bounded(rows.get(SWAP_MINUTES_KEY), DEFAULT_SWAP_MINUTES, MAX_SWAP_MINUTES),
+        force_color=True if force is None else force.strip().lower() == "true",
+    )
+
+
+async def write_plan_settings(
+    db: AsyncSession,
+    *,
+    prefer_minutes: int | None = None,
+    prefer_pct: int | None = None,
+    swap_minutes: int | None = None,
+    force_color: bool | None = None,
+) -> None:
+    """Store the ones given. The caller commits."""
+    if prefer_minutes is not None:
+        await upsert_setting(db, Settings, PREFER_MINUTES_KEY, str(max(0, min(MAX_PREFER_MINUTES, prefer_minutes))))
+    if prefer_pct is not None:
+        await upsert_setting(db, Settings, PREFER_PCT_KEY, str(max(0, min(100, prefer_pct))))
+    if swap_minutes is not None:
+        await upsert_setting(db, Settings, SWAP_MINUTES_KEY, str(max(0, min(MAX_SWAP_MINUTES, swap_minutes))))
+    if force_color is not None:
+        await upsert_setting(db, Settings, FORCE_COLOR_KEY, "true" if force_color else "false")
 
 
 # --- reading -----------------------------------------------------------------
@@ -1039,9 +1107,18 @@ def _log_plan(
         filename = plate.library_file.filename if plate is not None and plate.library_file is not None else ""
         return f"{plate_id}:{filename}" if filename else str(plate_id)
 
+    def notes(p: planner.PlannedPlate) -> str:
+        text = " pinned" if p.pinned else ""
+        if p.swap:
+            text += f" spool {p.swap}"
+        if p.preferred is not None:
+            text += f" prefers {p.preferred}"
+            if p.overruled:
+                text += f" ({p.overruled}" + (f" {p.overruled_by_s // 60} min" if p.overruled_by_s else "") + ")"
+        return text
+
     plates = ", ".join(
-        f"{name(p.option.id)}@{p.printer_id} {p.start:%d %H:%M}-{p.end:%H:%M}" + (" pinned" if p.pinned else "")
-        for p in planned
+        f"{name(p.option.id)}@{p.printer_id} {p.start:%d %H:%M}-{p.end:%H:%M}{notes(p)}" for p in planned
     )
     others = ", ".join(f"{packing} {cost / 60:.0f}" for packing, cost in sorted(result.alternatives.items()))
     logger.info(
@@ -1056,6 +1133,103 @@ def _log_plan(
     )
 
 
+def plate_source(plate: ProductPlate) -> tuple[Path, int | None]:
+    """The plate's file on disk and the plate in it a print takes."""
+    from backend.app.api.routes.print_queue import library_file_disk_path, printed_plate_of_multi_plate_file
+
+    path = library_file_disk_path(plate.library_file)
+    return path, plate.plate_id or printed_plate_of_multi_plate_file(path)
+
+
+async def plate_printers(
+    db: AsyncSession, plates: list[ProductPlate], printer_ids: list[int]
+) -> dict[int, frozenset[int] | None]:
+    """Plate id -> the printers of ``printer_ids`` its file's printer tags let it go on; None for any."""
+    from backend.app.services.printer_tags import NO_TAGS, read_printer_tags
+
+    tags = await read_printer_tags(db)
+    used_tags = frozenset().union(*(t.tag_ids for t in tags.values())) if tags else frozenset()
+    file_tags = await _file_tag_ids(db, {plate.library_file_id for plate in plates})
+    exclusive = any(t.exclusive and t.tag_ids for t in tags.values())
+    result: dict[int, frozenset[int] | None] = {}
+    for plate in plates:
+        wanted = file_tags.get(plate.library_file_id, frozenset()) & used_tags
+        result[plate.id] = (
+            frozenset(pid for pid in printer_ids if tags.get(pid, NO_TAGS).accepts(wanted))
+            if wanted or exclusive
+            else None
+        )
+    return result
+
+
+@dataclass
+class FilamentInputs:
+    # plate id -> printer id -> what the plate takes there
+    use: dict[int, dict[int, tuple[planner.FilamentUse, ...]]] = field(default_factory=dict)
+    # printer id -> tray -> grams left after the queued work
+    left: dict[int, dict[int, float]] = field(default_factory=dict)
+    margin_pct: float = 0.0
+
+
+async def _filament_inputs(
+    db: AsyncSession,
+    inputs,
+    placements: list,
+    printers: list[planner.PlannerPrinter],
+    options: list[planner.PlateOption],
+    plates_by_id: dict[int, ProductPlate],
+    settings: PlanSettings,
+) -> FilamentInputs:
+    """What each printer's spools hold once its queued work is done, and what each plate takes there.
+
+    ``inputs`` is the queue forecast's inputs and ``placements`` the queue
+    without this product's waiting jobs, as the plan lays it out
+    (services/product_filament.py). Never fails a plan: without it the
+    planner simply checks no filament.
+    """
+    from backend.app.services.slot_spools import load_check_settings
+
+    try:
+        spools = await product_filament.load_spools(db, [p.id for p in printers])
+        if not spools:
+            return FilamentInputs()
+        check = await load_check_settings(db)
+        left = {pid: dict(s.left) for pid, s in spools.items()}
+        running = (
+            await db.execute(
+                select(PrintQueueItem)
+                .where(PrintQueueItem.status == "printing", PrintQueueItem.printer_id.in_(list(spools)))
+                .options(selectinload(PrintQueueItem.archive), selectinload(PrintQueueItem.library_file))
+            )
+        ).scalars()
+        for item in running:
+            product_filament.take(
+                left[item.printer_id], product_filament.item_uses(item, item.printer_id, spools[item.printer_id])
+            )
+        pending = {item.id: item for item in inputs.pending}
+        for placement in sorted(placements, key=lambda p: p.start):
+            item = pending.get(placement.item_id)
+            if item is not None and placement.printer_id in spools:
+                product_filament.take(
+                    left[placement.printer_id],
+                    product_filament.item_uses(item, placement.printer_id, spools[placement.printer_id]),
+                )
+        use: dict[int, dict[int, tuple[planner.FilamentUse, ...]]] = {}
+        for option in options:
+            reqs = product_filament.requirements(*plate_source(plates_by_id[option.id]))
+            if not reqs:
+                continue
+            for printer in printers:
+                if printer.id in spools and option.runs_on(printer):
+                    found = product_filament.match(reqs, spools[printer.id], force=settings.force_color)
+                    if found:
+                        use.setdefault(option.id, {})[printer.id] = found
+        return FilamentInputs(use=use, left=left, margin_pct=check.margin_pct)
+    except Exception as e:  # the plan goes on without filament rather than not at all
+        logger.warning("[PRODUCTS] Could not weigh the filament for a plan: %s", e)
+        return FilamentInputs()
+
+
 async def _file_tag_ids(db: AsyncSession, file_ids: set[int]) -> dict[int, frozenset[int]]:
     if not file_ids:
         return {}
@@ -1068,7 +1242,7 @@ async def _file_tag_ids(db: AsyncSession, file_ids: set[int]) -> dict[int, froze
     return {file_id: frozenset(ids) for file_id, ids in tags.items()}
 
 
-async def _waiting_jobs(db: AsyncSession, jobs: list[ProductJob]) -> list[ProductJob]:
+async def waiting_jobs(db: AsyncSession, jobs: list[ProductJob]) -> list[ProductJob]:
     """The planner's jobs still waiting in the queue and not being sent."""
     planned = [j for j in jobs if j.status == "planned" and j.queue_item_id is not None]
     if not planned:
@@ -1234,7 +1408,7 @@ async def _placed_on(db: AsyncSession, jobs: list[ProductJob], items: dict[int, 
 
 async def placed_by_hand(db: AsyncSession, jobs: list[ProductJob]) -> tuple[dict[int, int], set[int]]:
     """For the waiting ones of ``jobs``: job id -> the printer it is on now, and the ids moved by hand."""
-    waiting = await _waiting_jobs(db, jobs)
+    waiting = await waiting_jobs(db, jobs)
     if not waiting:
         return {}, set()
     items = {
@@ -1276,7 +1450,6 @@ async def replan(
     caller commits.
     """
     from backend.app.services.print_defaults import default_print_options
-    from backend.app.services.printer_tags import NO_TAGS, read_printer_tags
     from backend.app.services.queue_forecast import load_forecast_inputs, place_jobs
     from backend.app.services.queue_position import lock_queue_positions
     from backend.app.services.queue_reservations import reserve
@@ -1292,7 +1465,7 @@ async def replan(
     await complete_ready_orders(db, product, pool)
     orders = await open_orders(db, product.id)
     jobs = await active_jobs(db, product.id)
-    waiting = await _waiting_jobs(db, jobs)
+    waiting = await waiting_jobs(db, jobs)
     items = {
         item.id: item
         for item in (
@@ -1323,6 +1496,15 @@ async def replan(
     held = [job for job in held if job not in unneeded]
     waiting = [job for job in waiting if job not in held and job not in unneeded]
     waiting_items = {job.queue_item_id for job in waiting} | {job.queue_item_id for job in unneeded}
+    # The printers someone prefers for the waiting jobs the plan replaces: the
+    # plates that print them next carry the preference on.
+    preferences = [
+        planner.Preference(
+            job.preferred_printer_id, job.product_plate_id, frozenset(pid for pid, _ in job_pieces(job, part_ids))
+        )
+        for job in waiting
+        if job.preferred_printer_id is not None and job.product_plate_id is not None
+    ]
 
     inputs = await load_forecast_inputs(db)
     now = inputs.now
@@ -1356,9 +1538,7 @@ async def replan(
     online = [p for p in usable if p.available]
     printers = [planner.PlannerPrinter(p.id, model_key(p.model), lane_end[p.id]) for p in (online or usable)]
 
-    tags = await read_printer_tags(db)
-    used_tags = frozenset().union(*(t.tag_ids for t in tags.values())) if tags else frozenset()
-    file_tags = await _file_tag_ids(db, {plate.library_file_id for plate in product.plates})
+    allowed_by_plate = await plate_printers(db, product.plates, [p.id for p in printers])
     options: list[planner.PlateOption] = []
     plates_by_id: dict[int, ProductPlate] = {}
     skipped: list[tuple[int, str]] = []
@@ -1374,21 +1554,19 @@ async def replan(
         if not model:
             skipped.append((plate.id, "no_model"))
             continue
-        wanted = file_tags.get(plate.library_file_id, frozenset()) & used_tags
-        allowed = None
-        if wanted or any(t.exclusive and t.tag_ids for t in tags.values()):
-            allowed = frozenset(p.id for p in printers if tags.get(p.id, NO_TAGS).accepts(wanted))
         options.append(
             planner.PlateOption(
                 id=plate.id,
                 model=model_key(model),
                 duration_s=plate_duration(plate) or DEFAULT_DURATION_S,
                 pieces=pieces,
-                printers=allowed,
+                printers=allowed_by_plate.get(plate.id),
             )
         )
         plates_by_id[plate.id] = plate
 
+    settings = await read_plan_settings(db)
+    filament = await _filament_inputs(db, inputs, placements, printers, options, plates_by_id, settings)
     plate_cost = await read_plate_cost_minutes(db)
     result = planner.plan(
         planner.PlanInputs(
@@ -1401,6 +1579,14 @@ async def replan(
             arriving=arriving,
             plate_cost_s=plate_cost * 60,
             ready_after=ready_after,
+            filament_use=filament.use,
+            filament_left=filament.left,
+            filament_margin_pct=filament.margin_pct,
+            swap_s=settings.swap_minutes * 60,
+            staffed_at=inputs.turnaround.next_staffed,
+            preferences=preferences,
+            prefer_min_s=settings.prefer_minutes * 60,
+            prefer_pct=float(settings.prefer_pct),
         )
     )
 
@@ -1413,11 +1599,7 @@ async def replan(
         return outcome
 
     from backend.app.api.routes.library_variants import normalize_model_name
-    from backend.app.api.routes.print_queue import (
-        _extract_filament_types_from_3mf,
-        library_file_disk_path,
-        printed_plate_of_multi_plate_file,
-    )
+    from backend.app.api.routes.print_queue import _extract_filament_types_from_3mf
     from backend.app.models.printer import Printer
     from backend.app.services.print_cost_estimate import estimate_queue_source_cost
 
@@ -1478,14 +1660,15 @@ async def replan(
             item = items[job.queue_item_id]
             after = max(after, item.position or 0)
             job.pieces = {str(part_id): n for part_id, n in planned_plate.option.pieces}
+            job.preferred_printer_id = planned_plate.preferred
+            job.plan_info = product_filament.plan_info(planned_plate)
             if not pinned:
                 await reserve(db, item, planned_plate.printer_id)
             waiting.remove(job)
             outcome.kept += 1
             continue
         library_file = plate.library_file
-        path = library_file_disk_path(library_file)
-        plate_id = plate.plate_id or printed_plate_of_multi_plate_file(path)
+        path, plate_id = plate_source(plate)
         target_model = None if pinned else normalize_model_name(printer_models.get(planned_plate.printer_id))
         required_types = None
         if target_model:
@@ -1500,10 +1683,18 @@ async def replan(
             )
         except Exception:  # an estimate is a nicety; never block the plan on it
             cost = None
+        # Asks for the file's colours: the plan counted on them, so the
+        # scheduler holds the job for them rather than print another colour.
+        overrides = (
+            product_filament.force_color_overrides(product_filament.requirements(path, plate_id))
+            if settings.force_color
+            else None
+        )
         item = PrintQueueItem(
             printer_id=planned_plate.printer_id if pinned else None,
             target_model=target_model,
             required_filament_types=required_types,
+            filament_overrides=overrides,
             library_file_id=library_file.id,
             plate_id=plate_id,
             print_time_seconds=planned_plate.option.duration_s,
@@ -1532,6 +1723,8 @@ async def replan(
                 pinned=pinned,
                 status="planned",
                 pieces={str(part_id): n for part_id, n in planned_plate.option.pieces},
+                preferred_printer_id=planned_plate.preferred,
+                plan_info=product_filament.plan_info(planned_plate),
             )
         )
         outcome.item_ids.append(item.id)
@@ -1555,6 +1748,110 @@ async def announce_planned(item_ids: list[int]) -> None:
 
 
 # --- what the page shows ------------------------------------------------------------
+
+
+@dataclass
+class PlateChoice:
+    """A printer a job's plate may be preferred on: enabled, of the file's model, allowed by its tags."""
+
+    printer_id: int
+    name: str
+    # Can take work now (connected, or an Auto On plug wakes it).
+    available: bool
+
+
+@dataclass
+class OrderPlate:
+    """A plate the plan prints for an order: where and when, and the printers it may be preferred on."""
+
+    job: ProductJob
+    product: Product
+    plate: ProductPlate | None
+    status: str
+    printer_id: int | None
+    start: datetime | None
+    end: datetime | None
+    moved: bool
+    choices: list[PlateChoice]
+    orders: list[OrderTag]
+
+
+async def order_plates(db: AsyncSession, product_order_ids: set[int]) -> list[OrderPlate]:
+    """The planner's waiting and printing jobs that print for these product orders, the printing first.
+
+    Where a waiting job prints and when is the queue forecast's; a printing
+    one's end is its printer's.
+    """
+    from backend.app.models.printer import Printer
+    from backend.app.services.queue_forecast import build_queue_forecast
+
+    if not product_order_ids:
+        return []
+    by_item, _ = await order_tags(db)
+    item_ids = [
+        item_id
+        for item_id, entry in by_item.items()
+        if any(tag.product_order_id in product_order_ids for tag in entry.orders)
+    ]
+    if not item_ids:
+        return []
+    jobs = list(
+        (
+            await db.execute(
+                select(ProductJob).where(ProductJob.queue_item_id.in_(item_ids), ProductJob.status.in_(JOB_ACTIVE))
+            )
+        ).scalars()
+    )
+    forecast = await build_queue_forecast(db)
+    placed = {p.item_id: p for p in forecast.placements}
+    free_at = {p.printer_id: p.free_at for p in forecast.printers}
+    available = {p.printer_id: p.available for p in forecast.printers}
+    printers = list((await db.execute(select(Printer).order_by(Printer.id))).scalars())
+    placed_on, moved = await placed_by_hand(db, jobs)
+    products: dict[int, Product] = {}
+    result = []
+    for job in jobs:
+        if job.product_id not in products:
+            loaded = await load_product(db, job.product_id)
+            if loaded is None:
+                continue
+            products[job.product_id] = loaded
+        product = products[job.product_id]
+        plate = next((p for p in product.plates if p.id == job.product_plate_id), None)
+        choices: list[PlateChoice] = []
+        if plate is not None and plate.library_file is not None:
+            model = model_key(plate_model(plate.library_file))
+            allowed = (await plate_printers(db, [plate], [p.id for p in printers])).get(plate.id)
+            choices = [
+                PlateChoice(p.id, p.name, bool(available.get(p.id)))
+                for p in printers
+                if p.is_active and model and model_key(p.model) == model and (allowed is None or p.id in allowed)
+            ]
+        if job.status == "printing":
+            printer_id, start, end = job.printer_id, None, free_at.get(job.printer_id or 0)
+        else:
+            placement = placed.get(job.queue_item_id or -1)
+            if placement is not None:
+                printer_id, start, end = placement.printer_id, placement.start, placement.end
+            else:
+                printer_id, start, end = placed_on.get(job.id, job.printer_id), None, None
+        result.append(
+            OrderPlate(
+                job=job,
+                product=product,
+                plate=plate,
+                status=job.status,
+                printer_id=printer_id,
+                start=start,
+                end=end,
+                moved=job.id in moved,
+                choices=choices,
+                orders=by_item[job.queue_item_id].orders,
+            )
+        )
+    far = datetime.max.replace(tzinfo=timezone.utc)
+    result.sort(key=lambda p: (p.status != "printing", _aware(p.start) or far, p.job.id))
+    return result
 
 
 async def order_estimates(

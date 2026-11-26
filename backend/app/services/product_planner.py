@@ -34,13 +34,28 @@ The planner:
    picked up (its last print's end, moved to when someone clears the plate),
    lateness against due dates, a cost per plate, and pieces made beyond the
    orders.
+
+Filament, when the caller knows it (``PlanInputs.filament_use`` and
+``filament_left``): each printer's spools are followed plate by plate from what
+its queued work leaves on them. A plate whose filament (type and colour) no
+spool on the printer holds, or whose spool would run out first (the check's
+margin included), starts only once someone is there to load or change it, and
+that takes ``swap_s``; the spool is then a full one. So a printer with the
+right filament wins unless another is done much sooner all the same.
+
+A *preference* (someone would rather a plate printed on a given printer) is a
+nudge, not a pin: in the "who is done first" comparison the preferred printer
+counts as done ``max(prefer_min_s, prefer_pct % of the package's print time)``
+sooner, and a plan that puts the plate elsewhere costs that much more. Another
+printer wins only when it is done sooner by more than that, or when the
+preferred one needs a spool loaded or changed for the plate and it does not.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from itertools import product as cartesian
 
@@ -61,6 +76,14 @@ MAX_CAP_COMBINATIONS = 1000
 PACK_CHEAPEST = "cheapest"
 PACK_WHOLE = "whole"
 PACK_OWN = "own"
+# Why a plate is not on the printer someone preferred for it.
+OVERRULED_EARLIER = "earlier"  # another is done sooner by more than the margin
+OVERRULED_FILAMENT = "filament"  # the preferred one needs a spool loaded or changed, another does not
+OVERRULED_UNAVAILABLE = "unavailable"  # the preferred one cannot print it now (offline, other plates)
+OVERRULED_PIECES = "pieces"  # the set's other pieces are on another printer already
+# A spool loaded for a plate (no spool held its filament) or changed (it ran out first).
+SWAP_LOAD = "load"
+SWAP_CHANGE = "change"
 
 # part id -> printer id -> pieces
 Pool = dict[int, dict[int, int]]
@@ -141,6 +164,48 @@ class Allocation:
     left: Pool
 
 
+@dataclass(frozen=True)
+class FilamentUse:
+    """One filament a plate prints with on a given printer."""
+
+    type: str
+    # "#rrggbb"; with the type it says which spool serves it.
+    color: str
+    grams: float
+    # The tray (global tray id) it takes on that printer; None when no tray
+    # holds it: someone has to load it.
+    tray: int | None = None
+
+    @property
+    def key(self) -> str:
+        return f"{self.type.strip().upper()}|{self.color.strip().lower()}"
+
+
+@dataclass(frozen=True)
+class FilamentNote:
+    """What a planned plate takes of one filament, and what is left after it."""
+
+    type: str
+    color: str
+    grams: float
+    tray: int | None
+    # Grams left on the spool after the plate; None when the amount is not known.
+    left: float | None
+    # SWAP_LOAD or SWAP_CHANGE when someone has to before the plate, else None.
+    swap: str | None = None
+
+
+@dataclass(frozen=True)
+class Preference:
+    """A printer someone would rather a plate printed on: a nudge, not a pin."""
+
+    printer_id: int
+    plate_id: int
+    # The parts the plate prints: a plan printing them with another plate of
+    # the printer's model (more pieces at once) carries the preference too.
+    parts: frozenset[int]
+
+
 @dataclass
 class PlannedPlate:
     option: PlateOption
@@ -151,6 +216,15 @@ class PlannedPlate:
     ready: datetime
     # Prints matched parts: stays on its printer.
     pinned: bool
+    # The filament it takes on its printer (when known).
+    filament: tuple[FilamentNote, ...] = ()
+    # Someone loads (SWAP_LOAD) or changes (SWAP_CHANGE) a spool before it.
+    swap: str | None = None
+    # The printer someone preferred for it, and why it is elsewhere (OVERRULED_*).
+    preferred: int | None = None
+    overruled: str | None = None
+    # With OVERRULED_EARLIER: how much sooner its printer is done.
+    overruled_by_s: int = 0
 
 
 @dataclass
@@ -189,6 +263,24 @@ class PlanInputs:
     # When a print ending at a given time is cleared and its printer can go on;
     # None when nobody needs to.
     ready_after: Callable[[datetime], datetime] | None = None
+    # Plate id -> printer id -> the filament the plate takes there. A printer
+    # missing from it is not known (no status): nothing is checked there.
+    filament_use: Mapping[int, Mapping[int, tuple[FilamentUse, ...]]] = field(default_factory=dict)
+    # Printer id -> tray -> grams left once the work queued before this
+    # product is done; a tray missing from it holds an unknown amount.
+    filament_left: Mapping[int, Mapping[int, float]] = field(default_factory=dict)
+    # A spool must hold this much more than a plate takes (the check's margin).
+    filament_margin_pct: float = 0.0
+    # Loading or changing a spool takes this long, once someone is there.
+    swap_s: int = 600
+    # The first moment someone is there from a given time; None: always.
+    staffed_at: Callable[[datetime], datetime] | None = None
+    # What a fresh spool holds.
+    full_spool_g: float = 1000.0
+    # Printers someone prefers for plates, and how much sooner another must be done to win.
+    preferences: list[Preference] = field(default_factory=list)
+    prefer_min_s: int = 1800
+    prefer_pct: float = 25.0
 
 
 # --- pools -------------------------------------------------------------------
@@ -494,6 +586,80 @@ def _piece_times(inputs: PlanInputs) -> dict[int, float]:
 Caps = dict[tuple[str, str], int]
 
 
+class _Spools:
+    """One printer's spools as a plan goes on: its trays' known amounts, and spools loaded for its plates."""
+
+    def __init__(self, left: Mapping[int, float], margin_pct: float, full_g: float):
+        self.left = dict(left)
+        # Filament (FilamentUse.key) loaded for a plate no tray held -> grams left.
+        self.loaded: dict[str, float] = {}
+        self._factor = 1 + max(0.0, margin_pct) / 100
+        self._full = full_g
+
+    def copy(self) -> _Spools:
+        other = _Spools(self.left, 0.0, self._full)
+        other._factor = self._factor
+        other.loaded = dict(self.loaded)
+        return other
+
+    @staticmethod
+    def _needs(uses: Sequence[FilamentUse]) -> tuple[dict[int, float], dict[str, float]]:
+        """Grams per tray, and per filament no tray holds (two of a file's filaments may share one)."""
+        trays: dict[int, float] = {}
+        unheld: dict[str, float] = {}
+        for use in uses:
+            if use.tray is None:
+                unheld[use.key] = unheld.get(use.key, 0.0) + use.grams
+            else:
+                trays[use.tray] = trays.get(use.tray, 0.0) + use.grams
+        return trays, unheld
+
+    def _swaps(self, uses: Sequence[FilamentUse]) -> tuple[dict[int, str], dict[str, str]]:
+        trays, unheld = self._needs(uses)
+        by_tray = {
+            tray: SWAP_CHANGE
+            for tray, grams in trays.items()
+            if tray in self.left and self.left[tray] < grams * self._factor
+        }
+        by_key = {}
+        for key, grams in unheld.items():
+            have = self.loaded.get(key)
+            if have is None:
+                by_key[key] = SWAP_LOAD
+            elif have < grams * self._factor:
+                by_key[key] = SWAP_CHANGE
+        return by_tray, by_key
+
+    def swap_for(self, uses: Sequence[FilamentUse]) -> str | None:
+        """SWAP_LOAD when no spool holds a filament, SWAP_CHANGE when one runs out first, else None."""
+        by_tray, by_key = self._swaps(uses)
+        kinds = set(by_tray.values()) | set(by_key.values())
+        return SWAP_LOAD if SWAP_LOAD in kinds else SWAP_CHANGE if kinds else None
+
+    def take(self, uses: Sequence[FilamentUse]) -> tuple[FilamentNote, ...]:
+        """Print with ``uses``: a fresh spool first where one runs out or none is there."""
+        by_tray, by_key = self._swaps(uses)
+        trays, unheld = self._needs(uses)
+        for tray, grams in trays.items():
+            if tray in self.left:
+                start = self._full if tray in by_tray else self.left[tray]
+                self.left[tray] = max(0.0, start - grams)
+        for key, grams in unheld.items():
+            start = self._full if key in by_key else self.loaded[key]
+            self.loaded[key] = max(0.0, start - grams)
+        return tuple(
+            FilamentNote(
+                use.type,
+                use.color,
+                use.grams,
+                use.tray,
+                self.left.get(use.tray) if use.tray is not None else self.loaded.get(use.key),
+                by_tray.get(use.tray) if use.tray is not None else by_key.get(use.key),
+            )
+            for use in uses
+        )
+
+
 def _cap_values(inputs: PlanInputs, wanted: int) -> list[int]:
     """The package sizes worth trying: up to twice the products the fullest plate makes.
 
@@ -570,19 +736,50 @@ def _build(
     def finishing(option: PlateOption) -> int:
         return max((finish_of.get(part_id, 0) for part_id, _ in option.pieces), default=0)
 
-    def schedule(printer: PlannerPrinter, chosen: tuple[PlateOption, ...], pinned: bool) -> None:
+    def ordered(chosen: Sequence[PlateOption]) -> list[PlateOption]:
         # Pieces that still need work after printing (a base to glue a tray
         # into) go first; the rest prints while they dry.
-        for option in sorted(chosen, key=lambda o: -finishing(o)):
-            start = free[printer.id]
+        return sorted(chosen, key=lambda o: -finishing(o))
+
+    def fresh_spools(printer_id: int) -> _Spools:
+        return _Spools(inputs.filament_left.get(printer_id, {}), inputs.filament_margin_pct, inputs.full_spool_g)
+
+    spools = {p.id: fresh_spools(p.id) for p in inputs.printers}
+    swap = timedelta(seconds=inputs.swap_s)
+
+    def run(
+        printer_id: int, chosen: Sequence[PlateOption], at: datetime, state: _Spools, record: list | None
+    ) -> tuple[datetime, bool]:
+        """Print ``chosen`` in this order from ``at``: when the printer is free again, and whether a spool was swapped."""
+        swapped = False
+        for option in chosen:
+            uses = inputs.filament_use.get(option.id, {}).get(printer_id, ())
+            needs = state.swap_for(uses) if uses else None
+            start = at
+            if needs is not None:
+                swapped = True
+                start = (inputs.staffed_at(start) if inputs.staffed_at is not None else start) + swap
             end = start + timedelta(seconds=option.duration_s)
             ready = max(end, inputs.ready_after(end)) if inputs.ready_after is not None else end
-            plates.append(PlannedPlate(option, printer.id, start, end, ready, pinned))
-            free[printer.id] = ready
+            notes = state.take(uses) if uses else ()
+            if record is not None:
+                record.append((option, start, end, ready, notes, needs))
+            at = ready
+        return at, swapped
+
+    def schedule(printer: PlannerPrinter, chosen: tuple[PlateOption, ...], pinned: bool) -> list[PlannedPlate]:
+        record: list = []
+        free[printer.id], _ = run(printer.id, ordered(chosen), free[printer.id], spools[printer.id], record)
+        placed = []
+        for option, start, end, ready, notes, needs in record:
+            planned = PlannedPlate(option, printer.id, start, end, ready, pinned, filament=notes, swap=needs)
+            plates.append(planned)
+            placed.append(planned)
             for part_id, n in option.pieces:
                 made[part_id] = made.get(part_id, 0) + n
                 if part_id in missing:
                     missing[part_id] -= n
+        return placed
 
     def loose_needs(units: float, skip: int | None = None) -> tuple[tuple[int, int], ...]:
         """The loose parts still missing for ``units`` products (``whole`` packages)."""
@@ -622,12 +819,45 @@ def _build(
             schedule(printer, chosen, True)
             take_matched(printer, units, chosen)
 
-    def finish(printer: PlannerPrinter, chosen: tuple[PlateOption, ...]) -> datetime:
-        at = free[printer.id]
-        for option in chosen:
-            end = at + timedelta(seconds=option.duration_s)
-            at = max(end, inputs.ready_after(end)) if inputs.ready_after is not None else end
-        return at
+    def finish(printer: PlannerPrinter, chosen: tuple[PlateOption, ...]) -> tuple[datetime, bool]:
+        return run(printer.id, ordered(chosen), free[printer.id], spools[printer.id].copy(), None)
+
+    prefs = list(inputs.preferences)
+    matched_ids = frozenset(m.id for m in matched)
+    pref_penalty = 0.0
+
+    def margin_s(chosen: Sequence[PlateOption]) -> float:
+        """How much sooner another printer must be done to beat the preferred one."""
+        return max(inputs.prefer_min_s, inputs.prefer_pct / 100 * sum(o.duration_s for o in chosen))
+
+    def settle(relevant: list[Preference], placed: list[PlannedPlate], best: tuple, candidates: dict) -> float:
+        """Hand a placed package's preferences to its plates; returns the cost of those it overrules."""
+        winner = best[0].id
+        mine = [pr for pr in relevant if pr.printer_id == winner]
+        others = [pr for pr in relevant if pr.printer_id != winner]
+        penalty = 0.0
+        for planned in placed:
+            for pool in (mine, others):
+                pr = next((p for p in pool if p.plate_id == planned.option.id), pool[0] if pool else None)
+                if pr is not None:
+                    pool.remove(pr)
+                    prefs.remove(pr)
+                    break
+            if pr is None:
+                continue
+            planned.preferred = pr.printer_id
+            if pr.printer_id == winner:
+                continue
+            rival = candidates.get(pr.printer_id)
+            if rival is None:
+                planned.overruled = OVERRULED_UNAVAILABLE
+            elif rival[5] and not best[5]:
+                planned.overruled = OVERRULED_FILAMENT
+            else:
+                planned.overruled = OVERRULED_EARLIER
+                planned.overruled_by_s = max(0, int((rival[4] - best[4]).total_seconds()))
+                penalty += margin_s((planned.option,))
+        return penalty
 
     while missing_units > 0 or any(n > 0 for n in missing.values()):
         # The group with the most print time left goes first (matched parts on
@@ -647,8 +877,11 @@ def _build(
         groups.sort(reverse=True)
         placed = False
         for *_, kind, part_id in groups:
-            best_key = None
-            best = None
+            group_parts = matched_ids if kind == "matched" else frozenset((part_id,))
+            relevant = [pr for pr in prefs if pr.parts & group_parts]
+            preferred_ids = {pr.printer_id for pr in relevant}
+            # printer id -> (printer, units, chosen, products, done at, spool swapped)
+            candidates: dict[int, tuple] = {}
             for printer in inputs.printers:
                 cap = caps.get((printer.model, kind), wanted) or wanted
                 if kind == "matched":
@@ -666,25 +899,49 @@ def _build(
                     units = target
                 if chosen is None or (not chosen and kind != "matched"):
                     continue
-                done_at = finish(printer, chosen)
-                key = ((done_at - now).total_seconds() / products, done_at, rank[printer.id])
-                if best_key is None or key < best_key:
-                    best_key, best = key, (printer, units, chosen)
-            if best is None:
+                done_at, swapped = finish(printer, chosen)
+                candidates[printer.id] = (printer, units, chosen, products, done_at, swapped)
+            if not candidates:
                 continue
-            printer, units, chosen = best
-            schedule(printer, chosen, kind == "matched")
+            # A preferred printer that needs a spool swapped for the package
+            # loses its nudge to one that does not.
+            clean = any(not c[5] for c in candidates.values())
+            best_key = None
+            best: tuple = ()
+            for candidate in candidates.values():
+                printer, _, chosen, products, done_at, swapped = candidate
+                wait = (done_at - now).total_seconds()
+                if printer.id in preferred_ids and not (swapped and clean):
+                    wait -= margin_s(chosen)
+                key = (wait / products, done_at, rank[printer.id])
+                if best_key is None or key < best_key:
+                    best_key, best = key, candidate
+            printer, units, chosen = best[0], best[1], best[2]
+            placed_plates = schedule(printer, chosen, kind == "matched")
             if kind == "matched":
                 take_matched(printer, units, chosen)
+            if relevant:
+                pref_penalty += settle(relevant, placed_plates, best, candidates)
             placed = True
             break
         if not placed:
             break
 
+    # Preferences no package took (its set's pieces already on a printer):
+    # the plate printing their plate carries them on.
+    for pr in list(prefs):
+        planned = next((p for p in plates if p.preferred is None and p.option.id == pr.plate_id), None)
+        if planned is None:
+            continue
+        prefs.remove(pr)
+        planned.preferred = pr.printer_id
+        if planned.printer_id != pr.printer_id:
+            planned.overruled = OVERRULED_PIECES if planned.pinned else OVERRULED_UNAVAILABLE
+
     short = {m.id: missing_units * m.per_unit for m in matched if missing_units > 0}
     short |= {part_id: n for part_id, n in missing.items() if n > 0}
     extra = {part_id: n - to_make.get(part_id, 0) for part_id, n in made.items() if n - to_make.get(part_id, 0) > 0}
-    fixed_cost = inputs.plate_cost_s * len(plates)
+    fixed_cost = inputs.plate_cost_s * len(plates) + pref_penalty
     fixed_cost += sum(EXTRA_PIECE_WEIGHT * n * piece_time.get(part_id, 0.0) for part_id, n in extra.items())
     start_of = {p.id: max(p.free_at, now) for p in inputs.printers}
 
@@ -714,12 +971,10 @@ def _build(
                 result.extend(own)
                 continue
             moved = True
-            at = start_of[printer_id]
-            for planned in order:
-                end = at + timedelta(seconds=planned.option.duration_s)
-                ready = max(end, inputs.ready_after(end)) if inputs.ready_after is not None else end
-                result.append(PlannedPlate(planned.option, printer_id, at, end, ready, planned.pinned))
-                at = ready
+            record: list = []
+            run(printer_id, [p.option for p in order], start_of[printer_id], fresh_spools(printer_id), record)
+            for planned, (_, start, end, ready, notes, needs) in zip(order, record, strict=True):
+                result.append(replace(planned, start=start, end=end, ready=ready, filament=notes, swap=needs))
         return result if moved else None
 
     cost, ready_at = score(plates)

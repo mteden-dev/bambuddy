@@ -194,6 +194,13 @@ class ProductJob(Base):
     rejected: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Queued from the check of this finished job, to print its plate again.
     reprint_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The printer someone would rather it printed on: a nudge the next plans
+    # weigh, not a pin. A plan that puts the plate elsewhere says why in
+    # ``plan_info``, and the job that prints the plate next carries it on.
+    preferred_printer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # What the plan worked out for it: the filament it takes and what is left
+    # on the spools after it, and why it is not on the preferred printer.
+    plan_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class ProductStockAdjustment(Base):

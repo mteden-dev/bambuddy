@@ -752,6 +752,122 @@ async def requeue_order(
     return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
 
 
+class PlatePieceOut(BaseModel):
+    part_id: int
+    name: str
+    pieces: int
+
+
+class PlateFilamentOut(BaseModel):
+    type: str
+    color: str
+    grams: float
+    # The tray it takes (global tray id); None when no spool on the printer holds it.
+    tray: int | None = None
+    # Grams left on the spool after the plate; None when not known.
+    left: float | None = None
+    # "load" (no spool holds it) or "change" (the spool runs out first) before the plate.
+    swap: str | None = None
+
+
+class PlatePrinterOut(BaseModel):
+    id: int
+    name: str
+    # Can take work now (connected, or an Auto On plug wakes it).
+    available: bool
+
+
+class OrderPlateOut(BaseModel):
+    job_id: int
+    queue_item_id: int | None
+    product_id: int
+    product_name: str
+    library_file_id: int | None = None
+    filename: str | None = None
+    plate_index: int | None = None
+    has_thumbnail: bool = False
+    pieces: list[PlatePieceOut]
+    # "planned" (waiting in the queue) or "printing".
+    status: str
+    # Prints matched parts: pinned to its printer.
+    pinned: bool = False
+    by_hand: bool = False
+    moved: bool = False
+    printer_id: int | None = None
+    printer_name: str | None = None
+    # From the queue forecast (a printing plate: its end only).
+    start: UTCDatetime = None
+    end: UTCDatetime = None
+    preferred_printer_id: int | None = None
+    # Why it is not on the preferred printer: earlier, filament, unavailable, pieces.
+    overruled: str | None = None
+    overruled_by_s: int = 0
+    swap: str | None = None
+    filament: list[PlateFilamentOut] = Field(default_factory=list)
+    # The printers it may be preferred on: enabled, of the file's model, allowed by its tags.
+    printers: list[PlatePrinterOut] = Field(default_factory=list)
+    # A preferred printer can be set: a waiting plate of the plan's, not queued or moved by hand.
+    editable: bool = False
+    # The orders it prints for (one plate may print for several).
+    orders: list[str] = Field(default_factory=list)
+
+
+@router.get("/orders/{order_id}/plates", response_model=list[OrderPlateOut])
+async def order_plates(order_id: int, db: AsyncSession = Depends(get_db, scope="function"), _=ReadAccess):
+    """The plates the plan prints for an order, the printing ones first, then by forecast start.
+
+    Each says where and when it prints, the filament it takes and what is left
+    after it, and the printers it may be preferred on
+    (``PUT /products/jobs/{job_id}/preference``).
+    """
+    from backend.app.models.printer import Printer
+    from backend.app.services import products as product_service
+
+    await _get_order(db, order_id)
+    product_orders = {po.id for po in await svc.product_orders_of(db, order_id) if po.status == "open"}
+    plates = await product_service.order_plates(db, product_orders)
+    names = dict((await db.execute(select(Printer.id, Printer.name))).all())
+    result = []
+    for entry in plates:
+        job, plate, product = entry.job, entry.plate, entry.product
+        info = job.plan_info or {}
+        part_names = {p.id: p.name for p in product.parts}
+        library_file = plate.library_file if plate is not None else None
+        result.append(
+            OrderPlateOut(
+                job_id=job.id,
+                queue_item_id=job.queue_item_id,
+                product_id=product.id,
+                product_name=product.name,
+                library_file_id=library_file.id if library_file is not None else None,
+                filename=library_file.filename if library_file is not None else None,
+                plate_index=plate.plate_id if plate is not None else None,
+                has_thumbnail=bool(library_file is not None and library_file.thumbnail_path),
+                pieces=[
+                    PlatePieceOut(part_id=part_id, name=part_names.get(part_id, f"#{part_id}"), pieces=n)
+                    for part_id, n in product_service.job_pieces(job, set(part_names))
+                ],
+                status=entry.status,
+                pinned=bool(job.pinned),
+                by_hand=bool(job.by_hand),
+                moved=entry.moved,
+                printer_id=entry.printer_id,
+                printer_name=names.get(entry.printer_id) if entry.printer_id is not None else None,
+                start=_utc(entry.start),
+                end=_utc(entry.end),
+                preferred_printer_id=job.preferred_printer_id,
+                overruled=info.get("overruled") if job.preferred_printer_id is not None else None,
+                overruled_by_s=int(info.get("overruled_by_s") or 0),
+                swap=info.get("swap"),
+                filament=[PlateFilamentOut(**f) for f in info.get("filament") or [] if isinstance(f, dict)],
+                printers=[PlatePrinterOut(id=c.printer_id, name=c.name, available=c.available) for c in entry.choices],
+                editable=entry.status == "planned" and not job.by_hand and not entry.moved,
+                orders=[tag.label for tag in entry.orders],
+            )
+        )
+    return result
+
+
 class SkipIn(BaseModel):
     # Its done product orders too: what was printed for it goes back to stock
     # (the boxes are on the shelf), for the next orders of the product.

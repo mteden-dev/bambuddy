@@ -231,6 +231,35 @@ describe('BaseOrdersView', () => {
     await waitFor(() => expect(resets).toEqual([5001]));
   });
 
+  it('printing an order opens the plates the plan chose, and its row opens them again', async () => {
+    const opened: number[] = [];
+    server.use(
+      http.get('/api/v1/base-sync/orders/:id/plates', ({ params }) => {
+        opened.push(Number(params.id));
+        return HttpResponse.json([]);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Print' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Planned plates' });
+    await waitFor(() => expect(opened).toEqual([5001]));
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    expect(screen.queryByRole('dialog', { name: 'Planned plates' })).not.toBeInTheDocument();
+
+    orders = [{ ...ORDER, state: 'accepted' }];
+    await user.click(screen.getByRole('button', { name: 'In production' }));
+    await user.click(await screen.findByRole('button', { name: 'Plates' }));
+    expect(await screen.findByRole('dialog', { name: 'Planned plates' })).toBeInTheDocument();
+  });
+
+  it('a ready order has no plates to open', async () => {
+    orders = [{ ...ORDER, state: 'accepted', ready: true }];
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    expect(await screen.findByText('nick_5001')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Plates' })).not.toBeInTheDocument();
+  });
+
   it('lists Allegro by ship-by date, then the shop, under section headers', async () => {
     orders = [{ ...ORDER, order_id: 5003, label: 'nick_today', ship_by: at(0, 23) }, ORDER, SHOP_ORDER];
     render(<BaseOrdersView hasPermission={allowAll} />);

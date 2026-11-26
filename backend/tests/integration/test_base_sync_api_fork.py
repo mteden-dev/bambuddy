@@ -233,6 +233,38 @@ async def test_accepting_an_order_queues_its_prints(async_client: AsyncClient, d
     assert (await async_client.get("/api/v1/base-sync/skus")).json()["unmapped"] == []
 
 
+async def test_an_accepted_order_lists_its_plates_with_the_printers_to_prefer(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5001, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5001/accept")
+        assert response.status_code == 200, response.text
+        response = await async_client.get("/api/v1/base-sync/orders/5001/plates")
+    assert response.status_code == 200, response.text
+    plates = response.json()
+    assert sorted(p["filename"] for p in plates) == ["base.gcode.3mf", "lid.gcode.3mf"]
+    for plate in plates:
+        assert plate["status"] == "planned"
+        assert plate["printer_id"] == shop.printer and plate["printer_name"] == "P1S-A"
+        assert plate["pinned"] is True  # lid and base are matched
+        assert plate["editable"] is True
+        assert plate["preferred_printer_id"] is None
+        assert [p["id"] for p in plate["printers"]] == [shop.printer]
+        assert plate["orders"] == ["nick_5001"]
+        assert plate["start"].endswith("Z")
+    assert {p["pieces"][0]["name"] for p in plates} == {"Lid", "Base"}
+
+    # A waiting order has none yet.
+    fake_base.orders.append(_order(5002, [("SKU-BOX-100-B", 1)]))
+    await _sync(async_client, {shop.printer})
+    response = await async_client.get("/api/v1/base-sync/orders/5002/plates")
+    assert response.status_code == 200 and response.json() == []
+    assert (await async_client.get("/api/v1/base-sync/orders/999/plates")).status_code == 404
+
+
 async def test_auto_accepted_orders_follow_their_lines_and_cancellations(
     async_client: AsyncClient, db_session, shop, fake_base
 ):

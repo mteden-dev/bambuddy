@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Check, ChevronDown, ImageOff, Loader2, PackageCheck, RotateCcw, ShoppingBag } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ImageOff,
+  Layers,
+  Loader2,
+  PackageCheck,
+  RotateCcw,
+  ShoppingBag,
+} from 'lucide-react';
 import { api } from '../../api/client';
 import type { BaseOrder, BaseOrderLine } from '../../api/client';
 import { Card } from '../Card';
@@ -29,6 +39,8 @@ interface OrderRowProps {
   onWithdraw: () => void;
   /** Plan an order in production again, for the pieces it misses (its print left the queue). */
   onRequeue: () => void;
+  /** Open the plates the plan prints for an order in production (a preferred printer per plate). */
+  onPlates: () => void;
 }
 
 /** Allegro: an orange "A"; a shop: a bag. The account name says which Allegro account. */
@@ -264,6 +276,7 @@ export function OrderRow(props: OrderRowProps) {
     onRestore,
     onWithdraw,
     onRequeue,
+    onPlates,
   } = props;
   const { t } = useTranslation();
   const { data: ui } = useUiSettings();
@@ -371,6 +384,12 @@ export function OrderRow(props: OrderRowProps) {
               >
                 {t('baseSync.partsButton')}
                 <ChevronDown className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+              </Button>
+            )}
+            {hasProducts && order.state === 'accepted' && !order.ready && (
+              <Button size="sm" variant="secondary" className={TOUCH} onClick={onPlates}>
+                <Layers className="w-4 h-4" />
+                {t('baseSync.plates.button')}
               </Button>
             )}
             {missing && (

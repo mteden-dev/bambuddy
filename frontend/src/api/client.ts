@@ -4921,8 +4921,66 @@ export interface BaseSyncResult {
 
 export interface ProductSettings {
   plate_cost_minutes: number;
+  /** A preferred printer loses only to one done this much sooner: the larger of the minutes and the % of the plate's time. */
+  prefer_margin_minutes?: number;
+  prefer_margin_pct?: number;
+  /** Loading a spool or changing one that runs out, once someone is there. */
+  filament_swap_minutes?: number;
+  /** The planner's jobs ask for their files' colours ("force colour match"). */
+  force_color?: boolean;
   /** "Shortest first" is on: the queue may not keep the plan's order. */
   sjf_enabled?: boolean;
+}
+
+export type ProductSettingsUpdate = Omit<ProductSettings, 'sjf_enabled' | 'plate_cost_minutes'> & {
+  plate_cost_minutes: number;
+};
+
+/** Fork (products): one filament a planned plate takes, and what is left on its spool after it. */
+export interface BaseOrderPlateFilament {
+  type: string;
+  /** "#rrggbb" */
+  color: string;
+  grams: number;
+  tray: number | null;
+  /** Grams left on the spool after the plate; null when not known. */
+  left: number | null;
+  /** Someone loads ("load": no spool holds it) or changes ("change": it runs out first) a spool before it. */
+  swap: 'load' | 'change' | null;
+}
+
+/** Fork (products): a plate the plan prints for a Base order, and the printers it may be preferred on. */
+export interface BaseOrderPlate {
+  job_id: number;
+  queue_item_id: number | null;
+  product_id: number;
+  product_name: string;
+  library_file_id: number | null;
+  filename: string | null;
+  plate_index: number | null;
+  has_thumbnail: boolean;
+  pieces: { part_id: number; name: string; pieces: number }[];
+  status: 'planned' | 'printing';
+  /** Prints matched parts: pinned to its printer. */
+  pinned: boolean;
+  by_hand: boolean;
+  moved: boolean;
+  printer_id: number | null;
+  printer_name: string | null;
+  /** From the queue forecast (a printing plate: its end only). */
+  start: string | null;
+  end: string | null;
+  preferred_printer_id: number | null;
+  /** Why it is not on the preferred printer. */
+  overruled: 'earlier' | 'filament' | 'unavailable' | 'pieces' | null;
+  overruled_by_s: number;
+  swap: 'load' | 'change' | null;
+  filament: BaseOrderPlateFilament[];
+  printers: { id: number; name: string; available: boolean }[];
+  /** A preferred printer can be set: a waiting plate of the plan's, not queued or moved by hand. */
+  editable: boolean;
+  /** The orders it prints for (one plate may print for several). */
+  orders: string[];
 }
 
 /** Fork (slot spools): a roll taken out of a slot with filament left on it. */
@@ -8128,6 +8186,8 @@ export const api = {
   saveBaseOrderDraft: (orderId: number, data: { products: BaseOrderAcceptProduct[] }) =>
     request<BaseOrder>(`/base-sync/orders/${orderId}/draft`, { method: 'POST', body: JSON.stringify(data) }),
   getBaseOrderCounts: () => request<BaseOrderCounts>('/base-sync/orders/counts'),
+  /** The plates the plan prints for an order: where, when, the filament, and the printers to prefer. */
+  getBaseOrderPlates: (orderId: number) => request<BaseOrderPlate[]>(`/base-sync/orders/${orderId}/plates`),
   getBaseSkus: () => request<BaseSkus>('/base-sync/skus'),
   mapBaseSku: (sku: string, data: { product_id: number | null; units?: number }) =>
     request<BaseSkus['mapped'][number]>(`/base-sync/skus/${encodeURIComponent(sku)}`, {
@@ -8158,8 +8218,14 @@ export const api = {
   uncheckProductJob: (jobId: number) =>
     request<ProductQcCheckResult>(`/products/jobs/${jobId}/uncheck`, { method: 'POST' }),
   getProductSettings: () => request<ProductSettings>('/products/settings'),
-  updateProductSettings: (data: { plate_cost_minutes: number }) =>
+  updateProductSettings: (data: ProductSettingsUpdate) =>
     request<ProductSettings>('/products/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  /** Prefer a printer for a waiting plate of the plan's (null: "Automatic"); its product is planned again. */
+  setProductJobPreference: (jobId: number, printerId: number | null) =>
+    request<ProductPlanResult>(`/products/jobs/${jobId}/preference`, {
+      method: 'PUT',
+      body: JSON.stringify({ printer_id: printerId }),
+    }),
   getRestorableSlotSpools: (material?: string, rgba?: string) => {
     const params = new URLSearchParams();
     if (material) params.set('material', material);

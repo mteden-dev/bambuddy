@@ -285,4 +285,37 @@ describe('ProductsView', () => {
     expect(screen.queryByRole('button', { name: /New product/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Order/ })).not.toBeInTheDocument();
   });
+
+  it('keeps the preferred-printer margin, the spool swap time and the colours in the planning settings', async () => {
+    const saved: unknown[] = [];
+    server.use(
+      http.get('/api/v1/products/settings', () =>
+        HttpResponse.json({
+          plate_cost_minutes: 15,
+          prefer_margin_minutes: 30,
+          prefer_margin_pct: 25,
+          filament_swap_minutes: 10,
+          force_color: true,
+        }),
+      ),
+      http.put('/api/v1/products/settings', async ({ request }) => {
+        const body = await request.json();
+        saved.push(body);
+        return HttpResponse.json(body);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Planning' }));
+    const minutes = await screen.findByRole('spinbutton', { name: /A preferred printer loses/ });
+    expect(minutes).toHaveValue(30);
+    await user.clear(minutes);
+    await user.type(minutes, '45');
+    await user.tab();
+    await waitFor(() => expect(saved).toEqual([{ plate_cost_minutes: 15, prefer_margin_minutes: 45 }]));
+
+    await user.click(screen.getByRole('checkbox', { name: /Order plates ask for the colours/ }));
+    await waitFor(() => expect(saved[1]).toEqual({ plate_cost_minutes: 15, force_color: false }));
+    expect(screen.getByRole('spinbutton', { name: 'Loading or changing a spool takes' })).toHaveValue(10);
+  });
 });

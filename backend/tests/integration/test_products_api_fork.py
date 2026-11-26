@@ -593,6 +593,10 @@ async def test_the_settings_say_when_shortest_first_is_on(async_client: AsyncCli
     await db_session.commit()
     assert (await async_client.get("/api/v1/products/settings")).json() == {
         "plate_cost_minutes": 15,
+        "prefer_margin_minutes": 30,
+        "prefer_margin_pct": 25,
+        "filament_swap_minutes": 10,
+        "force_color": True,
         "sjf_enabled": True,
     }
 

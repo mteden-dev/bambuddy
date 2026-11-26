@@ -14,6 +14,7 @@ import { useUndoToast } from '../../hooks/useUndoToast';
 import { matchesSearch, SECTION_ORDER, sectionOf } from '../../utils/baseOrders';
 import type { OrderSection } from '../../utils/baseOrders';
 import { BaseSettingsModal } from './BaseSettingsModal';
+import { OrderPlatesModal } from './OrderPlatesModal';
 import { OrderRow } from './OrderRow';
 import { WithdrawOrderModal } from './WithdrawOrderModal';
 
@@ -91,6 +92,8 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
   const [showSettings, setShowSettings] = useState(false);
   // The accepted order about to be taken out of production.
   const [withdrawing, setWithdrawing] = useState<BaseOrder | null>(null);
+  // The order whose planned plates are open (after sending it, or from its row).
+  const [platesFor, setPlatesFor] = useState<BaseOrder | null>(null);
   const setFilter = (value: Filter) => {
     setFilterState(value);
     remember('baseOrders.filter', value);
@@ -203,6 +206,8 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       // Sending, skipping or withdrawing an order can be taken back for a moment.
       if (action === 'withdraw') undoToast(message, () => undoWithdrawMutation.mutate({ order }));
       else undoToast(message, () => resetMutation.mutate({ order, restore: false }));
+      // Sent to print: the plates the plan chose, to prefer a printer for any.
+      if (action === 'accept' && sent.state === 'accepted' && !sent.ready) setPlatesFor(sent);
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
@@ -448,6 +453,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                         onRestore={() => resetMutation.mutate({ order, restore: true })}
                         onWithdraw={() => setWithdrawing(order)}
                         onRequeue={() => requeueMutation.mutate({ order })}
+                        onPlates={() => setPlatesFor(order)}
                       />
                     ))}
                   </div>
@@ -459,6 +465,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       )}
 
       {showSettings && <BaseSettingsModal onClose={() => setShowSettings(false)} onSaved={refresh} />}
+      {platesFor && <OrderPlatesModal order={platesFor} canAct={canAct} onClose={() => setPlatesFor(null)} />}
       {withdrawing && (
         <WithdrawOrderModal
           order={withdrawing}

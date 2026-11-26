@@ -134,6 +134,28 @@ późniejszym terminem, inaczej na koniec. Zadanie w kolejce z plikiem i płytą
 dokładnie jednego produktu, jest do niego dołączane (`by_hand` w `jobs` produktu): jego części idą
 na stan; `moved` oznacza zadanie planera przesunięte ręcznie na inną drukarkę.
 
+### Preferowana drukarka płyty
+
+```bash
+# preferuj drukarkę 3 dla czekającej płyty planera (zadanie produktu 42); null = „Automatycznie”
+curl -s -X PUT "$BB/products/jobs/42/preference" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"printer_id": 3}'
+# płyty, które plan drukuje dla zamówienia z Base: drukarka, start/koniec z prognozy, filament,
+# drukarki do wyboru, preferencja i dlaczego płyta jest gdzie indziej
+curl -s "$BB/base-sync/orders/900001/plates" -H "X-API-Key: $KEY"
+```
+
+Preferencja to szturchnięcie, nie przypięcie: po zapisie produkt jest planowany od nowa (odpowiedź
+jak z `replan`), a płyta zostaje na preferowanej drukarce, chyba że inna skończy wcześniej o więcej
+niż `max(prefer_margin_minutes, prefer_margin_pct % czasu druku płyty)` albo preferowana musiałaby
+założyć lub wymienić szpulę, a inna nie. Płyta drukowana w miejsce tej zadania (ten sam plik albo
+płyta tego modelu z tymi samymi częściami) przejmuje preferencję także przy kolejnych planach.
+Tylko czekająca płyta planera (nie dodana ani przesunięta ręcznie, 409) i drukarka tego modelu co
+plik płyty (400). W `plates`: `overruled` to `earlier` (`overruled_by_s` sekund wcześniej),
+`filament`, `unavailable` albo `pieces` (reszta kompletu już z innej drukarki); `filament[]` ma
+`type`, `color`, `grams`, `left` (ile zostanie na szpuli po płycie, `null` gdy nieznane) i `swap`
+(`load` — trzeba założyć, `change` — szpula się skończy).
+
 ### Wydruk zamówienia anulowany w kolejce
 
 Zwykłe `POST /queue/{id}/cancel` na zadaniu planera zostawia zamówienia bez części i bez niczego w
@@ -304,6 +326,10 @@ jest zapisane pod numerem z Base, więc nigdy nie dubluje się ani ono, ani jego
 
 ## Ustawienia
 
-`GET /products/settings`: `plate_cost_minutes` (koszt płyty w minutach) i `sjf_enabled` (włączone
-„najkrótsze najpierw”, kolejka może nie trzymać kolejności z planu). Zmiana kosztu płyty
-(`PUT`) wymaga uprawnienia do ustawień, więc tylko z konta, nie z klucza API.
+`GET /products/settings`: `plate_cost_minutes` (koszt płyty w minutach), `prefer_margin_minutes`
+i `prefer_margin_pct` (o ile wcześniej musi skończyć inna drukarka, żeby wygrać z preferowaną;
+większe z dwóch, domyślnie 30 min i 25%), `filament_swap_minutes` (założenie lub wymiana szpuli,
+domyślnie 10), `force_color` (zadania planera wymagają kolorów z pliku, domyślnie tak) i
+`sjf_enabled` (włączone „najkrótsze najpierw”, kolejka może nie trzymać kolejności z planu). `PUT`
+wymaga `plate_cost_minutes`, pozostałe pola są opcjonalne (pominięte zostają bez zmian); wymaga
+uprawnienia do ustawień, więc tylko z konta, nie z klucza API.

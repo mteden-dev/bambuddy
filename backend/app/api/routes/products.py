@@ -219,6 +219,14 @@ class ProductSettings(IgnoresNullForRequiredColumns):
 
     # What one more plate costs, as minutes of waiting: work, a plate change.
     plate_cost_minutes: int = Field(ge=0, le=svc.MAX_PLATE_COST_MINUTES)
+    # A preferred printer loses only to one done this much sooner: the larger
+    # of the minutes and the share of the plate's print time. Left out: unchanged.
+    prefer_margin_minutes: int | None = Field(None, ge=0, le=svc.MAX_PREFER_MINUTES)
+    prefer_margin_pct: int | None = Field(None, ge=0, le=100)
+    # Loading a spool or changing one that runs out, once someone is there.
+    filament_swap_minutes: int | None = Field(None, ge=0, le=svc.MAX_SWAP_MINUTES)
+    # The planner's jobs ask for their files' colours ("force colour match").
+    force_color: bool | None = None
 
 
 # --- responses -------------------------------------------------------------------
@@ -231,6 +239,10 @@ class PartPieces(BaseModel):
 
 class ProductSettingsOut(BaseModel):
     plate_cost_minutes: int
+    prefer_margin_minutes: int = svc.DEFAULT_PREFER_MINUTES
+    prefer_margin_pct: int = svc.DEFAULT_PREFER_PCT
+    filament_swap_minutes: int = svc.DEFAULT_SWAP_MINUTES
+    force_color: bool = True
     # "Shortest first" is on: the scheduler takes jobs by print time, not in
     # the order the plan put them (pinned and reserved jobs keep their printer).
     sjf_enabled: bool = False
@@ -744,7 +756,15 @@ async def _settings_out(db: AsyncSession) -> ProductSettingsOut:
     from backend.app.api.routes.settings import get_setting
 
     sjf = (await get_setting(db, "queue_shortest_first") or "").lower() == "true"
-    return ProductSettingsOut(plate_cost_minutes=await svc.read_plate_cost_minutes(db), sjf_enabled=sjf)
+    plan = await svc.read_plan_settings(db)
+    return ProductSettingsOut(
+        plate_cost_minutes=await svc.read_plate_cost_minutes(db),
+        prefer_margin_minutes=plan.prefer_minutes,
+        prefer_margin_pct=plan.prefer_pct,
+        filament_swap_minutes=plan.swap_minutes,
+        force_color=plan.force_color,
+        sjf_enabled=sjf,
+    )
 
 
 @router.get("/settings", response_model=ProductSettingsOut)
@@ -759,6 +779,13 @@ async def put_product_settings(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SETTINGS_UPDATE),
 ):
     await svc.write_plate_cost_minutes(db, data.plate_cost_minutes)
+    await svc.write_plan_settings(
+        db,
+        prefer_minutes=data.prefer_margin_minutes,
+        prefer_pct=data.prefer_margin_pct,
+        swap_minutes=data.filament_swap_minutes,
+        force_color=data.force_color,
+    )
     await db.commit()
     return await _settings_out(db)
 
@@ -1152,6 +1179,61 @@ async def uncheck_job(
         await svc.announce_planned(item_ids)
     [out] = await _qc_out(db, [await db.get(ProductJob, job_id)])
     return QcCheckOut(job=out, replanned=had_bad)
+
+
+class PreferenceIn(BaseModel):
+    # None leaves the choice to the plan ("Automatic").
+    printer_id: int | None = None
+
+
+@router.put("/jobs/{job_id}/preference", response_model=PlanOut)
+async def set_job_preference(
+    job_id: int,
+    data: PreferenceIn,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+    review_required: bool = QueueReviewRequired,
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Prefer a printer for a waiting plate of the plan's (or none: "Automatic"), then replan its product.
+
+    A nudge, not a pin: the plan keeps the plate there unless another printer
+    is done much sooner or needs no spool swapped for it where the preferred
+    one does (services/product_planner.py). The plate printing it after the
+    replan carries the preference, also through later replans.
+    """
+    from backend.app.services import base_sync
+
+    job = await db.get(ProductJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    if job.status != "planned" or job.by_hand or job.queue_item_id is None:
+        raise HTTPException(409, "Only a waiting plate of the plan takes a preferred printer")
+    if not await svc.waiting_jobs(db, [job]):
+        raise HTTPException(409, "The plate is being sent to a printer already")
+    _, moved = await svc.placed_by_hand(db, [job])
+    if job.id in moved:
+        raise HTTPException(409, "The plate was moved by hand: it stays where it was put")
+    if data.printer_id is not None:
+        printer = await db.get(Printer, data.printer_id)
+        if printer is None or not printer.is_active:
+            raise HTTPException(400, "No such enabled printer")
+        plate = await db.get(ProductPlate, job.product_plate_id) if job.product_plate_id is not None else None
+        library_file = await db.get(LibraryFile, plate.library_file_id) if plate is not None else None
+        model = svc.model_key(svc.plate_model(library_file)) if library_file is not None else ""
+        if not model or svc.model_key(printer.model) != model:
+            raise HTTPException(400, "The printer is not of the model the plate is sliced for")
+    job.preferred_printer_id = data.printer_id
+    await db.flush()
+    # A plan for Base orders makes jobs that wait for Start when the Base settings say so.
+    open_orders = await svc.open_orders(db, job.product_id)
+    manual_start = review_required or (
+        any(o.external_source == base_sync.EXTERNAL_SOURCE for o in open_orders)
+        and (await base_sync.read_config(db)).manual_start
+    )
+    logger.info("[PRODUCTS] Job %s: preferred printer %s", job_id, data.printer_id)
+    return await _plan_response(db, job.product_id, actor, manual_start, printer_scope)
 
 
 @router.post("", response_model=ProductDetail)

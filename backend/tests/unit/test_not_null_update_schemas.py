@@ -31,6 +31,7 @@ NOT_A_ROW_UPDATE = {
     "SpoolTagLinkRequest": "a Spoolman spool, not a database row",
     "SpoolmanFilamentPatch": "a Spoolman filament, not a database row",
     "FilamentProfileDefaultWrite": "replaces a default as a whole; its validator reads a null key field as empty",
+    "PreferenceIn": "fork: one nullable field, where null means Automatic (clears the preferred printer)",
 }
 
 
