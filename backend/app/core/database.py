@@ -6184,6 +6184,22 @@ async def _run_migrations(conn):
     # Fork (products): the printer someone prefers for a waiting job, and the plan's notes on it.
     await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN preferred_printer_id INTEGER")
     await _safe_execute(conn, "ALTER TABLE custom_product_jobs ADD COLUMN plan_info JSON")
+    # Fork (products): whether a job's pieces count. Plates printed by hand do
+    # not by default, so the ones linked before the column (stock nobody can
+    # vouch for) stop counting once, when it is added.
+    counted_existed = await _table_has_column(conn, "custom_product_jobs", "counted")
+    await _safe_execute(
+        conn,
+        f"ALTER TABLE custom_product_jobs ADD COLUMN counted BOOLEAN NOT NULL DEFAULT {'1' if is_sqlite() else 'TRUE'}",
+    )
+    if not counted_existed:
+        async with conn.begin_nested():
+            await conn.execute(
+                text(
+                    f"UPDATE custom_product_jobs SET counted = {'0' if is_sqlite() else 'FALSE'} "
+                    f"WHERE by_hand = {'1' if is_sqlite() else 'TRUE'}"
+                )
+            )
 
     await _backfill_archive_run_photos(conn)
     await _migrate_h3c_queue_tray_ids(conn)

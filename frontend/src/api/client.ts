@@ -4653,6 +4653,8 @@ export interface ProductJob {
   /** The user's, kept as it is by a plan: queued by hand, or moved by hand to another printer. */
   by_hand: boolean;
   moved: boolean;
+  /** Its pieces count (stock, orders); false for a plate printed by hand while such prints don't count. */
+  counted?: boolean;
 }
 
 export interface ProductDetail extends Product {
@@ -4928,6 +4930,8 @@ export interface ProductSettings {
   filament_swap_minutes?: number;
   /** The planner's jobs ask for their files' colours ("force colour match"). */
   force_color?: boolean;
+  /** Plates printed by hand count (stock, orders), from when it is turned on. */
+  hand_prints_count?: boolean;
   /** "Shortest first" is on: the queue may not keep the plan's order. */
   sjf_enabled?: boolean;
 }

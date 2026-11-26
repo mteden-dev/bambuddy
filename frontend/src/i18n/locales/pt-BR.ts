@@ -9161,6 +9161,8 @@ export default {
       swapHint: 'Contado a partir de quando há alguém nas impressoras (horário de presença); depois o plano conta com um carretel cheio.',
       forceColor: 'Placas de pedidos exigem as cores do arquivo',
       forceColorHint: 'A fila espera a cor certa em vez de imprimir com qualquer carretel desse tipo.',
+      handPrints: 'Placas impressas à mão contam no estoque',
+      handPrintsHint: 'O arquivo de uma placa impresso da biblioteca, do histórico ou do cartão de uma impressora vai para o estoque e para os pedidos. Desligado: ele aparece, mas os pedidos são impressos por inteiro como se ele não existisse. Ligar conta só o que for impresso a partir de então.',
     },
     toast: {
       planned: 'Placas na fila: {{n}}.',
@@ -9269,6 +9271,8 @@ export default {
     byHand: 'adicionado à mão',
     movedByHand: 'movido à mão',
     handHint: 'Seu: o plano o deixa como está (um movido sai se nenhum pedido precisar dele).',
+    notCounted: 'não conta',
+    notCountedHint: 'Impressa à mão enquanto essas impressões não contam: não vai para o estoque nem para pedidos.',
     orderLabel: {
       forStock: 'para estoque',
       forStockTitle: 'Para estoque: nenhum pedido aberto precisa destas peças.',

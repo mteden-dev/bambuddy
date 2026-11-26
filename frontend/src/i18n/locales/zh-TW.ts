@@ -9159,6 +9159,8 @@ export default {
       swapHint: '從有人在印表機旁（值班時間）開始計算；之後計畫以滿線材盤計算。',
       forceColor: '訂單列印板要求檔案中的顏色',
       forceColorHint: '佇列會等待正確的顏色，而不是用該類型的任意線材盤列印。',
+      handPrints: '手動列印的列印板計入庫存',
+      handPrintsHint: '從檔案庫、歷史紀錄或印表機卡片列印的列印板檔案會計入庫存和訂單。關閉：仍會顯示，但訂單會當它不存在而完整列印。開啟後只計入此後列印的。',
     },
     toast: {
       planned: '已加入佇列的列印板：{{n}}。',
@@ -9267,6 +9269,8 @@ export default {
     byHand: '手動加入',
     movedByHand: '手動移動',
     handHint: '你的：計畫會保持原樣（手動移動的在沒有訂單需要時會移除）。',
+    notCounted: '不計入',
+    notCountedHint: '在手動列印不計入時列印：不計入庫存，也不用於訂單。',
     orderLabel: {
       forStock: '備庫存',
       forStockTitle: '備庫存：沒有未完成的訂單需要這些零件。',

@@ -8,7 +8,7 @@ See services/products.py and services/product_planner.py.
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, false, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, false, func, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -159,6 +159,10 @@ class ProductJob(Base):
 
     A finished job with bad pieces can be printed again from the check
     (``reprint_of_id`` on the new job, which counts as queued by hand).
+
+    A job queued by hand counts only when the products settings say plates
+    printed by hand count (``counted``); otherwise the planner prints the
+    orders as if it were not there.
     """
 
     __tablename__ = "custom_product_jobs"
@@ -185,6 +189,12 @@ class ProductJob(Base):
     # Queued by hand (a plate's file printed outside the planner), linked so its
     # pieces count; the planner never replaces or removes it.
     by_hand: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Its pieces count: in stock, as coming, for the orders. A plate printed by
+    # hand while the products settings say such prints do not count is linked
+    # (it shows, it can be checked) but counts for nothing, and its reprints
+    # neither. Set when the job is linked; changing the setting later leaves
+    # the jobs linked before as they are.
+    counted: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     status: Mapped[str] = mapped_column(String(20), default="planned")
     pieces: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

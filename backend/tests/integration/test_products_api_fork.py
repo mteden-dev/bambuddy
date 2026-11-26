@@ -597,6 +597,7 @@ async def test_the_settings_say_when_shortest_first_is_on(async_client: AsyncCli
         "prefer_margin_pct": 25,
         "filament_swap_minutes": 10,
         "force_color": True,
+        "hand_prints_count": False,
         "sjf_enabled": True,
     }
 
@@ -915,6 +916,14 @@ async def _add_by_hand(db_session, library_file_id: int, position: int, printer_
     return item.id
 
 
+async def _hand_prints_count(async_client: AsyncClient, on: bool = True) -> None:
+    response = await async_client.put(
+        "/api/v1/products/settings", json={"plate_cost_minutes": 15, "hand_prints_count": on}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["hand_prints_count"] is on
+
+
 async def test_a_replan_keeps_waiting_jobs_where_they_are_in_the_queue(async_client: AsyncClient, db_session, box):
     connected = {box.a, box.b}
     await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1, "notes": "first"}, connected)
@@ -1030,6 +1039,7 @@ async def test_a_plate_printed_by_hand_counts_and_is_not_printed_twice(async_cli
     from backend.app.services import products
 
     connected = {box.a, box.b}
+    await _hand_prints_count(async_client)
     await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
     tray = next(i for i in await _queue(db_session) if i.printer_id is None)
     response = await async_client.delete(f"/api/v1/queue/{tray.id}")
@@ -1061,6 +1071,7 @@ async def test_a_plate_printed_by_hand_is_linked_when_it_finishes(async_client: 
     from backend.app.services import products
 
     connected = {box.a, box.b}
+    await _hand_prints_count(async_client)
     # Nobody ordered anything yet; a lid printed from the library goes to stock.
     item_id = await _add_by_hand(db_session, box.files[("lid", 2)], 1, printer_id=box.a)
     item = (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))).scalar_one()
@@ -1070,6 +1081,101 @@ async def test_a_plate_printed_by_hand_is_linked_when_it_finishes(async_client: 
     await db_session.commit()
     detail = await _detail(async_client, box.id, connected)
     assert {(s["part_id"], s["printer_id"]): s["pieces"] for s in detail["stock"]} == {(box.parts["Lid"], box.a): 2}
+
+
+# --- plates printed by hand that do not count (the default) ---------------------------------
+
+
+async def _finish(db_session, item_id: int, printer_id: int) -> None:
+    from backend.app.services import products
+
+    db_session.expire_all()
+    item = (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))).scalar_one()
+    item.status = "completed"
+    item.printer_id = printer_id
+    await db_session.commit()
+    await products.after_queue_items_changed(db_session, [item_id])
+    await db_session.commit()
+
+
+def _stock(detail: dict) -> dict[tuple[int, int], int]:
+    return {(s["part_id"], s["printer_id"]): s["pieces"] for s in detail["stock"]}
+
+
+async def test_by_default_a_plate_printed_by_hand_is_shown_but_counts_for_nothing(
+    async_client: AsyncClient, db_session, box
+):
+    connected = {box.a, box.b}
+    settings = (await async_client.get("/api/v1/products/settings")).json()
+    assert settings["hand_prints_count"] is False
+
+    # A whole box printed from the library, beside the plan: nobody knows where it went.
+    hand = [
+        await _add_by_hand(db_session, box.files[(part, 1)], position, printer_id=box.a)
+        for position, part in enumerate(("lid", "base", "tray"), start=1)
+    ]
+    result = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    # Waiting in the queue, it is kept as it is, but the order prints in full beside it.
+    assert result["held"] == 3
+    assert result["created"] == 3
+    jobs = {j["queue_item_id"]: j for j in result["product"]["jobs"]}
+    assert all(jobs[item_id]["by_hand"] and not jobs[item_id]["counted"] for item_id in hand)
+    assert all(j["counted"] for item_id, j in jobs.items() if item_id not in hand)
+    assert _queued_pieces(result["product"]) == {"Lid": 2, "Base": 2, "Tray": 2}
+    # It prints for no order: no label in the queue.
+    tags = (await async_client.get("/api/v1/products/order-tags")).json()["items"]
+    assert not any(str(item_id) in tags for item_id in hand)
+
+    # Finished, it goes to no stock and closes no order.
+    for item_id in hand:
+        await _finish(db_session, item_id, box.a)
+    detail = await _detail(async_client, box.id, connected)
+    assert _stock(detail) == {}
+    [order] = [o for o in detail["orders"] if o["status"] == "open"]
+    assert order["units_ready"] == 0
+
+    # Another order later on prints in full too.
+    result = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    assert _queued_pieces(result["product"]) == {"Lid": 2, "Base": 2, "Tray": 2}
+    assert result["product"]["unplanned"] == []
+
+
+async def test_hand_prints_that_stop_counting_take_stock_to_zero_at_most(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    await _hand_prints_count(async_client)
+    # Counted: a box printed by hand closes an order, two more lids go to stock.
+    hand = [
+        await _add_by_hand(db_session, box.files[(part, n)], position, printer_id=box.a)
+        for position, (part, n) in enumerate((("lid", 1), ("base", 1), ("tray", 1), ("lid", 2)), start=1)
+    ]
+    for item_id in hand:
+        await _finish(db_session, item_id, box.a)
+    result = await _post(async_client, f"/api/v1/products/{box.id}/orders", {"quantity": 1}, connected)
+    assert result["planned_jobs"] == 0
+    [order] = result["product"]["orders"]
+    assert order["status"] == "done"
+    assert _stock(await _detail(async_client, box.id, connected)) == {(box.parts["Lid"], box.a): 2}
+
+    # They stop counting (as the jobs linked before the setting did): the lids
+    # left are theirs, the box the order took is not taken back.
+    await db_session.execute(ProductJob.__table__.update().where(ProductJob.by_hand.is_(True)).values(counted=False))
+    await db_session.commit()
+    detail = await _detail(async_client, box.id, connected)
+    assert _stock(detail) == {}
+    assert [o["status"] for o in detail["orders"]] == ["done"]
+
+
+async def test_hand_prints_count_only_from_when_the_setting_is_on(async_client: AsyncClient, db_session, box):
+    connected = {box.a, box.b}
+    before = await _add_by_hand(db_session, box.files[("tray", 1)], 1, printer_id=box.a)
+    await _finish(db_session, before, box.a)
+    await _hand_prints_count(async_client)
+    after = await _add_by_hand(db_session, box.files[("tray", 2)], 2, printer_id=box.a)
+    await _finish(db_session, after, box.a)
+    # Only the two trays printed with the setting on are in stock.
+    assert _stock(await _detail(async_client, box.id, connected)) == {(box.parts["Tray"], box.a): 2}
+    counted = dict((await db_session.execute(select(ProductJob.queue_item_id, ProductJob.counted))).all())
+    assert counted == {before: False, after: True}
 
 
 async def test_the_product_says_which_jobs_were_queued_or_moved_by_hand(async_client: AsyncClient, db_session, box):

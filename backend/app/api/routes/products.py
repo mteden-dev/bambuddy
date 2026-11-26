@@ -227,6 +227,8 @@ class ProductSettings(IgnoresNullForRequiredColumns):
     filament_swap_minutes: int | None = Field(None, ge=0, le=svc.MAX_SWAP_MINUTES)
     # The planner's jobs ask for their files' colours ("force colour match").
     force_color: bool | None = None
+    # Plates printed by hand count (stock, orders) from now on. Left out: unchanged.
+    hand_prints_count: bool | None = None
 
 
 # --- responses -------------------------------------------------------------------
@@ -243,6 +245,7 @@ class ProductSettingsOut(BaseModel):
     prefer_margin_pct: int = svc.DEFAULT_PREFER_PCT
     filament_swap_minutes: int = svc.DEFAULT_SWAP_MINUTES
     force_color: bool = True
+    hand_prints_count: bool = False
     # "Shortest first" is on: the scheduler takes jobs by print time, not in
     # the order the plan put them (pinned and reserved jobs keep their printer).
     sjf_enabled: bool = False
@@ -350,6 +353,8 @@ class JobOut(BaseModel):
     # printed outside the planner), or moved by hand to another printer.
     by_hand: bool = False
     moved: bool = False
+    # Its pieces count (stock, orders); not for a plate printed by hand while such prints do not count.
+    counted: bool = True
 
 
 class ProductDetail(ProductOut):
@@ -519,7 +524,7 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
     coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
     for job in jobs_rows:
         pieces = svc.job_pieces(job, part_ids)
-        planner.pool_add(coming, svc.piece_printer(job), pieces)
+        planner.pool_add(coming, svc.piece_printer(job), svc.counted_pieces(job, part_ids))
         plate = plates.get(job.product_plate_id or -1)
         printer_id = placed_on.get(job.id, job.printer_id)
         jobs.append(
@@ -531,6 +536,7 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
                 printer_name=printer_names.get(printer_id),
                 by_hand=bool(job.by_hand),
                 moved=job.id in moved,
+                counted=job.counted is not False,
                 pinned=job.pinned,
                 pieces=[PartPieces(part_id=pid, pieces=n) for pid, n in pieces],
                 product_plate_id=job.product_plate_id,
@@ -763,6 +769,7 @@ async def _settings_out(db: AsyncSession) -> ProductSettingsOut:
         prefer_margin_pct=plan.prefer_pct,
         filament_swap_minutes=plan.swap_minutes,
         force_color=plan.force_color,
+        hand_prints_count=plan.hand_prints_count,
         sjf_enabled=sjf,
     )
 
@@ -785,6 +792,7 @@ async def put_product_settings(
         prefer_pct=data.prefer_margin_pct,
         swap_minutes=data.filament_swap_minutes,
         force_color=data.force_color,
+        hand_prints_count=data.hand_prints_count,
     )
     await db.commit()
     return await _settings_out(db)

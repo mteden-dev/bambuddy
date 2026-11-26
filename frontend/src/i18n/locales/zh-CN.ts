@@ -9159,6 +9159,8 @@ export default {
       swapHint: '从有人在打印机旁（值守时间）开始计算；之后计划按满料盘计算。',
       forceColor: '订单打印板要求文件中的颜色',
       forceColorHint: '队列会等待正确的颜色，而不是用该类型的任意料盘打印。',
+      handPrints: '手动打印的打印板计入库存',
+      handPrintsHint: '从文件库、历史记录或打印机卡片打印的打印板文件会计入库存和订单。关闭：仍会显示，但订单会当它不存在而完整打印。开启后只计入此后打印的。',
     },
     toast: {
       planned: '已加入队列的打印板：{{n}}。',
@@ -9267,6 +9269,8 @@ export default {
     byHand: '手动加入',
     movedByHand: '手动移动',
     handHint: '你的：计划会保持原样（手动移动的在没有订单需要时会移除）。',
+    notCounted: '不计入',
+    notCountedHint: '在手动打印不计入时打印：不计入库存，也不用于订单。',
     orderLabel: {
       forStock: '备库存',
       forStockTitle: '备库存：没有未完成的订单需要这些零件。',

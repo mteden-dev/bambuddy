@@ -211,6 +211,19 @@ export function ProductsView({ hasPermission }: ProductsViewProps) {
                 <span className="block text-xs text-bambu-gray">{t('products.settings.forceColorHint')}</span>
               </span>
             </label>
+            <label className="flex items-start gap-3 min-h-11 cursor-pointer">
+              <input
+                type="checkbox"
+                className="w-5 h-5 mt-0.5 shrink-0 accent-bambu-green"
+                checked={productSettings.hand_prints_count ?? false}
+                disabled={!canSettings || settingsMutation.isPending}
+                onChange={(e) => settingsMutation.mutate({ hand_prints_count: e.target.checked })}
+              />
+              <span className="text-sm text-white">
+                {t('products.settings.handPrints')}
+                <span className="block text-xs text-bambu-gray">{t('products.settings.handPrintsHint')}</span>
+              </span>
+            </label>
           </div>
         </Card>
       )}
@@ -469,6 +482,14 @@ function ProductDetailPanel({ productId, canEdit, timeFormat, onEditOrder, onPla
                       title={t('products.handHint')}
                     >
                       {t(job.by_hand ? 'products.byHand' : 'products.movedByHand')}
+                    </span>
+                  )}
+                  {job.counted === false && (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                      title={t('products.notCountedHint')}
+                    >
+                      {t('products.notCounted')}
                     </span>
                   )}
                   {job.pinned && <Pin className="w-3.5 h-3.5" aria-label={t('products.pinned')} />}

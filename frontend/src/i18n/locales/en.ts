@@ -9229,6 +9229,8 @@ export default {
       swapHint: 'Counted from when someone is at the printers (staffed hours); after it the plan counts on a full spool.',
       forceColor: 'Order plates ask for the colours in their files',
       forceColorHint: 'The queue waits for the right colour instead of printing from any spool of that type.',
+      handPrints: 'Plates printed by hand count',
+      handPrintsHint: 'A plate\'s file printed from the library, the history or a printer card goes to stock and to the orders. Off: it shows, but the orders print in full as if it were not there. Turning it on counts only what prints from then on.',
     },
     toast: {
       planned: 'Queued plates: {{n}}.',
@@ -9337,6 +9339,8 @@ export default {
     byHand: 'queued by hand',
     movedByHand: 'moved by hand',
     handHint: 'Yours: a plan keeps it as it is (one moved by hand leaves when no order needs it).',
+    notCounted: 'doesn\'t count',
+    notCountedHint: 'Printed by hand while such prints don\'t count: it goes to no stock and no order.',
     orderLabel: {
       forStock: 'for stock',
       forStockTitle: 'For stock: no open order needs these pieces.',

@@ -9103,6 +9103,8 @@ export default {
       swapHint: 'Yazıcıların başında biri olduğu andan itibaren sayılır (mesai saatleri); sonrasında plan dolu bir makara varsayar.',
       forceColor: 'Sipariş tablaları dosyalarındaki renkleri ister',
       forceColorHint: 'Kuyruk, o türden herhangi bir makarayla basmak yerine doğru rengi bekler.',
+      handPrints: 'Elle basılan tablalar stoğa sayılır',
+      handPrintsHint: 'Kitaplıktan, geçmişten veya bir yazıcı kartından basılan bir tablanın dosyası stoğa ve siparişlere sayılır. Kapalı: görünür, ama siparişler o yokmuş gibi eksiksiz basılır. Açmak yalnızca o andan sonra basılanları sayar.',
     },
     toast: {
       planned: 'Kuyruğa alınan plaka: {{n}}.',
@@ -9211,6 +9213,8 @@ export default {
     byHand: 'elle eklendi',
     movedByHand: 'elle taşındı',
     handHint: 'Sizin: plan onu olduğu gibi bırakır (taşınan, hiçbir sipariş gerekmiyorsa çıkar).',
+    notCounted: 'sayılmaz',
+    notCountedHint: 'Bu tür baskılar sayılmazken elle basıldı: ne stoğa ne siparişe gider.',
     orderLabel: {
       forStock: 'stok için',
       forStockTitle: 'Stok için: açık hiçbir siparişin bu parçalara ihtiyacı yok.',

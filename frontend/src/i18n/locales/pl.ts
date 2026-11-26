@@ -9229,6 +9229,8 @@ export default {
       swapHint: 'Liczone od chwili, gdy ktoś jest przy drukarkach (godziny obsady); potem plan zakłada pełną szpulę.',
       forceColor: 'Płyty z zamówień wymagają koloru z pliku',
       forceColorHint: 'Kolejka poczeka na właściwy kolor zamiast drukować z dowolnej szpuli tego typu.',
+      handPrints: 'Płyty drukowane ręcznie liczą się na stan',
+      handPrintsHint: 'Plik płyty wydrukowany z biblioteki, historii albo karty drukarki trafia na stan i do zamówień. Wyłączone: widać go przy produkcie, ale zamówienia drukują się w całości, jakby go nie było. Włączenie liczy tylko to, co wydrukuje się od tej chwili.',
     },
     toast: {
       planned: 'Dodano do kolejki płyt: {{n}}.',
@@ -9337,6 +9339,8 @@ export default {
     byHand: 'dodane ręcznie',
     movedByHand: 'przesunięte ręcznie',
     handHint: 'Twoje: plan zostawia je tak, jak są (przesunięte znika, gdy żadne zamówienie go nie potrzebuje).',
+    notCounted: 'nie liczy się',
+    notCountedHint: 'Wydrukowane ręcznie, gdy takie wydruki się nie liczą: nie idzie na stan ani do zamówień.',
     orderLabel: {
       forStock: 'na stan',
       forStockTitle: 'Na stan: żadne otwarte zamówienie nie potrzebuje tych sztuk.',

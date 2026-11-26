@@ -77,6 +77,7 @@ jobs:
             backend/tests/unit/test_product_planner_fork.py \
             backend/tests/integration/test_products_api_fork.py \
             backend/tests/integration/test_base_sync_api_fork.py \
+            backend/tests/unit/test_product_jobs_counted_migration_fork.py \
             backend/tests/unit/test_not_null_update_schemas.py \
             backend/tests/unit/test_sqlite_fk.py \
             backend/tests/unit/test_sqlite_autoincrement.py \

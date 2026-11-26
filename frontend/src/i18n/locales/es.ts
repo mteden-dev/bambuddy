@@ -9184,6 +9184,8 @@ export default {
       swapHint: 'Se cuenta desde que hay alguien junto a las impresoras (horario de presencia); después el plan cuenta con una bobina llena.',
       forceColor: 'Las placas de pedidos exigen los colores de su archivo',
       forceColorHint: 'La cola espera el color correcto en lugar de imprimir con cualquier bobina de ese tipo.',
+      handPrints: 'Las placas impresas a mano cuentan para el stock',
+      handPrintsHint: 'El archivo de una placa impreso desde la biblioteca, el historial o la tarjeta de una impresora va al stock y a los pedidos. Desactivado: se muestra, pero los pedidos se imprimen completos como si no existiera. Activarlo cuenta solo lo que se imprima desde entonces.',
     },
     toast: {
       planned: 'Placas en la cola: {{n}}.',
@@ -9292,6 +9294,8 @@ export default {
     byHand: 'añadido a mano',
     movedByHand: 'movido a mano',
     handHint: 'Tuyo: el plan lo deja como está (uno movido sale si ningún pedido lo necesita).',
+    notCounted: 'no cuenta',
+    notCountedHint: 'Impresa a mano mientras esas impresiones no cuentan: no va al stock ni a ningún pedido.',
     orderLabel: {
       forStock: 'para stock',
       forStockTitle: 'Para stock: ningún pedido abierto necesita estas piezas.',

@@ -9258,6 +9258,8 @@ errors: {
       swapHint: 'Räknas från när någon är vid skrivarna (bemannade tider); därefter räknar planen med en full spole.',
       forceColor: 'Plattor från ordrar kräver färgerna i sin fil',
       forceColorHint: 'Kön väntar på rätt färg i stället för att skriva ut från valfri spole av den typen.',
+      handPrints: 'Plattor som skrivs ut för hand räknas till lagret',
+      handPrintsHint: 'En plattas fil som skrivs ut från biblioteket, historiken eller ett skrivarkort går till lagret och ordrarna. Av: den syns, men ordrarna skrivs ut helt som om den inte fanns. På räknar bara det som skrivs ut från och med då.',
     },
     toast: {
       planned: 'Köade plattor: {{n}}.',
@@ -9366,6 +9368,8 @@ errors: {
     byHand: 'tillagd för hand',
     movedByHand: 'flyttad för hand',
     handHint: 'Ditt: en plan låter det vara som det är (en flyttad försvinner om ingen beställning behöver den).',
+    notCounted: 'räknas inte',
+    notCountedHint: 'Utskriven för hand medan sådana utskrifter inte räknas: går varken till lagret eller till en order.',
     orderLabel: {
       forStock: 'till lager',
       forStockTitle: 'Till lager: ingen öppen beställning behöver dessa delar.',

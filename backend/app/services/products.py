@@ -7,7 +7,9 @@ A product is parts; its plates are sliced files that print pieces of them
 - **Stock** is what finished jobs printed, per part and per printer, plus
   corrections, minus what done orders took. Open orders share it in order
   (due date, then when they came in); an order is done the moment its parts
-  are all there, and takes them out of stock.
+  are all there, and takes them out of stock. A plate printed by hand counts
+  only when the settings say so (``ProductJob.counted``): otherwise it shows,
+  but its pieces are neither stock nor coming, and the orders print in full.
 - **Jobs** the planner made are ordinary queue jobs with a row here. A job
   still waiting belongs to the planner, which replaces it on the next plan; a
   job that started is left alone and its pieces count as coming. Parts marked
@@ -96,6 +98,10 @@ DEFAULT_SWAP_MINUTES = 10
 MAX_SWAP_MINUTES = 4 * 60
 # The planner's jobs ask for their files' colours ("force colour match").
 FORCE_COLOR_KEY = "product_force_color"
+# Plates printed by hand (a plate's file queued outside the planner) count:
+# their pieces are stock and serve the orders. Off unless set: prints made
+# beside the plan usually went into boxes the plan knows nothing about.
+HAND_PRINTS_KEY = "product_hand_prints_count"
 
 
 @dataclass(frozen=True)
@@ -104,6 +110,7 @@ class PlanSettings:
     prefer_pct: int = DEFAULT_PREFER_PCT
     swap_minutes: int = DEFAULT_SWAP_MINUTES
     force_color: bool = True
+    hand_prints_count: bool = False
 
 
 def _bounded(raw: str | None, default: int, top: int) -> int:
@@ -118,17 +125,21 @@ async def read_plan_settings(db: AsyncSession) -> PlanSettings:
         (
             await db.execute(
                 select(Settings.key, Settings.value).where(
-                    Settings.key.in_((PREFER_MINUTES_KEY, PREFER_PCT_KEY, SWAP_MINUTES_KEY, FORCE_COLOR_KEY))
+                    Settings.key.in_(
+                        (PREFER_MINUTES_KEY, PREFER_PCT_KEY, SWAP_MINUTES_KEY, FORCE_COLOR_KEY, HAND_PRINTS_KEY)
+                    )
                 )
             )
         ).all()
     )
     force = rows.get(FORCE_COLOR_KEY)
+    hand = rows.get(HAND_PRINTS_KEY)
     return PlanSettings(
         prefer_minutes=_bounded(rows.get(PREFER_MINUTES_KEY), DEFAULT_PREFER_MINUTES, MAX_PREFER_MINUTES),
         prefer_pct=_bounded(rows.get(PREFER_PCT_KEY), DEFAULT_PREFER_PCT, 100),
         swap_minutes=_bounded(rows.get(SWAP_MINUTES_KEY), DEFAULT_SWAP_MINUTES, MAX_SWAP_MINUTES),
         force_color=True if force is None else force.strip().lower() == "true",
+        hand_prints_count=hand is not None and hand.strip().lower() == "true",
     )
 
 
@@ -139,6 +150,7 @@ async def write_plan_settings(
     prefer_pct: int | None = None,
     swap_minutes: int | None = None,
     force_color: bool | None = None,
+    hand_prints_count: bool | None = None,
 ) -> None:
     """Store the ones given. The caller commits."""
     if prefer_minutes is not None:
@@ -149,6 +161,8 @@ async def write_plan_settings(
         await upsert_setting(db, Settings, SWAP_MINUTES_KEY, str(max(0, min(MAX_SWAP_MINUTES, swap_minutes))))
     if force_color is not None:
         await upsert_setting(db, Settings, FORCE_COLOR_KEY, "true" if force_color else "false")
+    if hand_prints_count is not None:
+        await upsert_setting(db, Settings, HAND_PRINTS_KEY, "true" if hand_prints_count else "false")
 
 
 # --- reading -----------------------------------------------------------------
@@ -198,6 +212,11 @@ def job_pieces(job: ProductJob, part_ids: set[int]) -> planner.Pieces:
         if part_id in part_ids and count > 0:
             result.append((part_id, count))
     return tuple(sorted(result))
+
+
+def counted_pieces(job: ProductJob, part_ids: set[int]) -> planner.Pieces:
+    """A job's pieces as they count for stock and orders: none for a job that does not count."""
+    return job_pieces(job, part_ids) if job.counted is not False else ()
 
 
 def rejected_pieces(job: ProductJob) -> dict[int, int]:
@@ -495,14 +514,25 @@ def piece_printer(job: ProductJob) -> int:
 
 
 async def stock_pool(db: AsyncSession, product: Product) -> planner.Pool:
-    """Pieces in stock now: printed (less the ones found bad), corrected, minus what done orders took."""
+    """Pieces in stock now: printed (less the ones found bad), corrected, minus what done orders took.
+
+    Pieces of jobs that do not count (plates printed by hand, see
+    ``ProductJob.counted``) are left out. Done orders may have taken some of
+    them already, so what is left of a part on a printer is taken to be
+    theirs first: leaving them out takes stock down to zero at most, and a
+    shortfall from pieces found bad later stays as it was.
+    """
     part_ids = {p.id for p in product.parts}
     pool: planner.Pool = {}
+    uncounted: planner.Pool = {}
     done = (
         await db.execute(select(ProductJob).where(ProductJob.product_id == product.id, ProductJob.status == "done"))
     ).scalars()
     for job in done:
-        planner.pool_add(pool, piece_printer(job), good_pieces(job, part_ids))
+        good = good_pieces(job, part_ids)
+        planner.pool_add(pool, piece_printer(job), good)
+        if job.counted is False:
+            planner.pool_add(uncounted, piece_printer(job), good)
     if part_ids:
         rows = await db.execute(
             select(
@@ -525,6 +555,12 @@ async def stock_pool(db: AsyncSession, product: Product) -> planner.Pool:
                     continue
                 if part_id in part_ids:
                     planner.pool_add(pool, printer_id, ((part_id, -count),))
+    for part_id, by_printer in uncounted.items():
+        for printer_id, n in by_printer.items():
+            left = pool.get(part_id, {}).get(printer_id, 0)
+            theirs = min(n, max(0, left))
+            if theirs:
+                planner.pool_add(pool, printer_id, ((part_id, -theirs),))
     return pool
 
 
@@ -672,7 +708,8 @@ async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, 
     the jobs' pieces in the order they print (the one printing, then the
     queue), each to the orders still short of that part, soonest due first.
     One plate may print for several orders; a job printing only for stock is
-    ``for_stock``.
+    ``for_stock``. A job that does not count (``ProductJob.counted``) has no
+    entry.
     """
     jobs = list((await db.execute(select(ProductJob).where(ProductJob.status.in_(JOB_ACTIVE)))).scalars())
     by_item: dict[int, JobOrders] = {}
@@ -694,8 +731,9 @@ async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, 
         specs = part_specs(product)
         part_ids = {p.id for p in specs}
         tags = await _order_tag_lookup(db, orders)
+        # A job that does not count prints for nothing the plan knows of: no label.
         own = sorted(
-            (j for j in jobs if j.product_id == product_id),
+            (j for j in jobs if j.product_id == product_id and j.counted is not False),
             key=lambda j: (j.status != "printing", positions.get(j.queue_item_id, 10**9), j.id),
         )
         serving = serve_in_order(
@@ -980,7 +1018,8 @@ async def reprint_job(
     It goes where the queue job that printed it went (that printer, or any of
     the model), with its slots and print options; when that queue job is gone,
     to the printer that printed it. The new job counts as queued by hand, so
-    plans keep it and count its pieces. The caller replans and commits.
+    plans keep it, and its pieces count when the job's did. The caller
+    replans and commits.
     """
     from backend.app.api.routes.library_variants import normalize_model_name
     from backend.app.api.routes.print_queue import library_file_disk_path, printed_plate_of_multi_plate_file
@@ -1050,6 +1089,7 @@ async def reprint_job(
         planned_printer_id=item.printer_id,
         pinned=item.printer_id is not None,
         by_hand=True,
+        counted=job.counted is not False,
         status="planned",
         pieces={str(part_id): n for part_id, n in pieces},
         reprint_of_id=job.id,
@@ -1308,7 +1348,9 @@ async def link_hand_jobs(
     job is linked when exactly one product plate is its file and plate (from
     the job, or the archive it reprints). With ``product`` its plates' waiting
     and printing jobs are looked at; with ``item_ids`` those queue jobs, in any
-    state (one that just finished). The caller commits.
+    state (one that just finished). Its pieces count only when the settings
+    say plates printed by hand count (``ProductJob.counted``). The caller
+    commits.
     """
     from sqlalchemy import or_
 
@@ -1345,6 +1387,7 @@ async def link_hand_jobs(
         )
     ).all()
     linked: list[ProductJob] = []
+    counts: bool | None = None
     for item, archive_file, archive_plate in rows:
         if any(
             item_id == item.id and _same_item(ProductJob(item_created_at=created), item) for item_id, created in known
@@ -1359,6 +1402,8 @@ async def link_hand_jobs(
         pieces: list[ProductPlatePart] = [piece for piece in plate.pieces if piece.pieces > 0]
         if not pieces:
             continue
+        if counts is None:
+            counts = (await read_plan_settings(db)).hand_prints_count
         job = ProductJob(
             product_id=plate.product_id,
             product_plate_id=plate.id,
@@ -1368,6 +1413,7 @@ async def link_hand_jobs(
             planned_printer_id=item.printer_id,
             pinned=item.printer_id is not None,
             by_hand=True,
+            counted=counts,
             status="printing" if item.status == "printing" else "planned",
             pieces={str(piece.part_id): piece.pieces for piece in pieces},
         )
@@ -1490,8 +1536,8 @@ async def replan(
     printing = [job for job in jobs if job.status == "printing"]
     coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
     for job in printing:
-        planner.pool_add(coming, piece_printer(job), job_pieces(job, part_ids))
-    needed = serve_in_order(specs, coming, orders, [job_pieces(job, part_ids) for job in held])
+        planner.pool_add(coming, piece_printer(job), counted_pieces(job, part_ids))
+    needed = serve_in_order(specs, coming, orders, [counted_pieces(job, part_ids) for job in held])
     unneeded = [job for job, served in zip(held, needed, strict=True) if not served and not job.by_hand]
     held = [job for job in held if job not in unneeded]
     waiting = [job for job in waiting if job not in held and job not in unneeded]
@@ -1520,7 +1566,7 @@ async def replan(
     printer_free = {p.id: max(_aware(p.free_at) or now, now) for p in inputs.printers}
 
     arriving = [
-        planner.Arrival(printer_free.get(job.printer_id or 0, now), piece_printer(job), job_pieces(job, part_ids))
+        planner.Arrival(printer_free.get(job.printer_id or 0, now), piece_printer(job), counted_pieces(job, part_ids))
         for job in printing
     ]
     placed = {placement.item_id: placement for placement in placements}
@@ -1530,7 +1576,7 @@ async def replan(
             at = ready_after(placement.end) if ready_after is not None else placement.end
         else:
             at = lane_end.get(job.printer_id or 0, now)
-        arriving.append(planner.Arrival(at, piece_printer(job), job_pieces(job, part_ids)))
+        arriving.append(planner.Arrival(at, piece_printer(job), counted_pieces(job, part_ids)))
 
     # Printers that can take work now; when none can (all switched off for the
     # night, no Auto On plug), every enabled one, so an order still gets planned.
@@ -1617,7 +1663,7 @@ async def replan(
     # against the other products' waiting jobs (the stock, the prints running
     # and the held jobs serve the orders first).
     for job in held:
-        planner.pool_add(coming, piece_printer(job), job_pieces(job, part_ids))
+        planner.pool_add(coming, piece_printer(job), counted_pieces(job, part_ids))
     plate_dues = [
         earliest_due(served) for served in serve_in_order(specs, coming, orders, [p.option.pieces for p in planned])
     ]
@@ -1871,7 +1917,7 @@ async def order_estimates(
     part_ids = {p.id for p in product.parts}
     arrivals = planner.stock_arrivals(pool, now)
     for job in await active_jobs(db, product.id):
-        pieces = job_pieces(job, part_ids)
+        pieces = counted_pieces(job, part_ids)
         if job.status == "printing":
             arrivals.append(
                 planner.Arrival(max(free_at.get(job.printer_id or 0, now), now), piece_printer(job), pieces)

@@ -8799,6 +8799,8 @@ export default {
       swapHint: '누군가 프린터 곁에 있는 시간(근무 시간)부터 계산합니다. 그 뒤에는 가득 찬 스풀로 봅니다.',
       forceColor: '주문 플레이트는 파일의 색상을 요구',
       forceColorHint: '그 종류의 아무 스풀로 인쇄하지 않고 맞는 색을 기다립니다.',
+      handPrints: '직접 인쇄한 플레이트를 재고에 포함',
+      handPrintsHint: '라이브러리, 기록, 프린터 카드에서 인쇄한 플레이트 파일은 재고와 주문에 포함됩니다. 끄면: 표시는 되지만 주문은 그것이 없는 것처럼 전부 인쇄됩니다. 켜면 그 이후에 인쇄한 것만 포함합니다.',
     },
     toast: {
       planned: '대기열에 넣은 플레이트: {{n}}.',
@@ -8907,6 +8909,8 @@ export default {
     byHand: '직접 추가',
     movedByHand: '직접 이동',
     handHint: '사용자 항목: 계획이 그대로 둡니다(이동한 항목은 필요한 주문이 없으면 빠집니다).',
+    notCounted: '포함 안 됨',
+    notCountedHint: '직접 인쇄를 포함하지 않는 동안 인쇄됨: 재고에도 주문에도 들어가지 않습니다.',
     orderLabel: {
       forStock: '재고용',
       forStockTitle: '재고용: 열린 주문 중 이 부품이 필요한 것이 없습니다.',

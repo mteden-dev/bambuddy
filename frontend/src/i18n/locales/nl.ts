@@ -9227,6 +9227,8 @@ export default {
       swapHint: 'Gerekend vanaf het moment dat er iemand bij de printers is (bemande uren); daarna rekent het plan op een volle spoel.',
       forceColor: 'Platen van bestellingen vragen de kleuren uit hun bestand',
       forceColorHint: 'De wachtrij wacht op de juiste kleur in plaats van te printen met een willekeurige spoel van dat type.',
+      handPrints: 'Met de hand geprinte platen tellen mee voor de voorraad',
+      handPrintsHint: 'Het bestand van een plaat, geprint vanuit de bibliotheek, de geschiedenis of een printerkaart, gaat naar de voorraad en de bestellingen. Uit: het is zichtbaar, maar bestellingen worden volledig geprint alsof het er niet is. Aan telt alleen wat vanaf dan wordt geprint.',
     },
     toast: {
       planned: 'Platen in de wachtrij: {{n}}.',
@@ -9335,6 +9337,8 @@ export default {
     byHand: 'handmatig toegevoegd',
     movedByHand: 'handmatig verplaatst',
     handHint: 'Van jou: een plan laat het zoals het is (een verplaatste verdwijnt als geen bestelling het nodig heeft).',
+    notCounted: 'telt niet mee',
+    notCountedHint: 'Met de hand geprint terwijl zulke prints niet meetellen: gaat niet naar de voorraad of een bestelling.',
     orderLabel: {
       forStock: 'voor voorraad',
       forStockTitle: 'Voor voorraad: geen open bestelling heeft deze stuks nodig.',

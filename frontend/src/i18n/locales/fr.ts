@@ -9162,6 +9162,8 @@ export default {
       swapHint: 'Compté à partir du moment où quelqu’un est aux imprimantes (heures de présence) ; ensuite le plan compte sur une bobine pleine.',
       forceColor: 'Les plateaux des commandes exigent les couleurs de leur fichier',
       forceColorHint: 'La file attend la bonne couleur au lieu d’imprimer avec n’importe quelle bobine de ce type.',
+      handPrints: 'Les plateaux imprimés à la main comptent dans le stock',
+      handPrintsHint: 'Le fichier d’un plateau imprimé depuis la bibliothèque, l’historique ou la carte d’une imprimante va au stock et aux commandes. Désactivé : il s’affiche, mais les commandes s’impriment en entier comme s’il n’existait pas. Activé, seul ce qui s’imprime à partir de ce moment compte.',
     },
     toast: {
       planned: 'Plateaux mis en file : {{n}}.',
@@ -9270,6 +9272,8 @@ export default {
     byHand: 'ajouté à la main',
     movedByHand: 'déplacé à la main',
     handHint: 'À vous : le plan le laisse tel quel (un déplacé part si aucune commande n\'en a besoin).',
+    notCounted: 'ne compte pas',
+    notCountedHint: 'Imprimé à la main alors que ces impressions ne comptent pas : il ne va ni au stock ni à une commande.',
     orderLabel: {
       forStock: 'pour le stock',
       forStockTitle: 'Pour le stock : aucune commande ouverte n\'a besoin de ces pièces.',

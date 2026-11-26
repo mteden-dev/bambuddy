@@ -131,8 +131,10 @@ zmianami w kolejce i na swoim miejscu), `held` (zadania dodane albo przesunięte
 tak, jak są), `replaced` (usunięte), `ready_at`, `finish_at`, `short` (części, dla których żadna
 drukarka nie ma płyty). Nowe zadania wchodzą przed pierwsze czekające zadanie innego produktu z
 późniejszym terminem, inaczej na koniec. Zadanie w kolejce z plikiem i płytą, które są płytą
-dokładnie jednego produktu, jest do niego dołączane (`by_hand` w `jobs` produktu): jego części idą
-na stan; `moved` oznacza zadanie planera przesunięte ręcznie na inną drukarkę.
+dokładnie jednego produktu, jest do niego dołączane (`by_hand` w `jobs` produktu). Jego części idą
+na stan i do zamówień tylko przy włączonym `hand_prints_count` w ustawieniach (domyślnie wyłączone);
+inaczej `counted: false`: zadanie widać i można je sprawdzić, ale zamówienia drukują się w całości,
+jakby go nie było. `moved` oznacza zadanie planera przesunięte ręcznie na inną drukarkę.
 
 ### Preferowana drukarka płyty
 
@@ -329,7 +331,9 @@ jest zapisane pod numerem z Base, więc nigdy nie dubluje się ani ono, ani jego
 `GET /products/settings`: `plate_cost_minutes` (koszt płyty w minutach), `prefer_margin_minutes`
 i `prefer_margin_pct` (o ile wcześniej musi skończyć inna drukarka, żeby wygrać z preferowaną;
 większe z dwóch, domyślnie 30 min i 25%), `filament_swap_minutes` (założenie lub wymiana szpuli,
-domyślnie 10), `force_color` (zadania planera wymagają kolorów z pliku, domyślnie tak) i
-`sjf_enabled` (włączone „najkrótsze najpierw”, kolejka może nie trzymać kolejności z planu). `PUT`
+domyślnie 10), `force_color` (zadania planera wymagają kolorów z pliku, domyślnie tak),
+`hand_prints_count` (płyty wydrukowane ręcznie liczą się na stan i do zamówień, domyślnie nie;
+włączenie liczy tylko zadania dołączone od tej chwili) i `sjf_enabled` (włączone „najkrótsze
+najpierw”, kolejka może nie trzymać kolejności z planu). `PUT`
 wymaga `plate_cost_minutes`, pozostałe pola są opcjonalne (pominięte zostają bez zmian); wymaga
 uprawnienia do ustawień, więc tylko z konta, nie z klucza API.

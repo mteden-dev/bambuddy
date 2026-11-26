@@ -9161,6 +9161,8 @@ export default {
       swapHint: 'Contato da quando qualcuno è presso le stampanti (orari di presenza); dopo il piano conta su una bobina piena.',
       forceColor: 'I piatti degli ordini richiedono i colori del loro file',
       forceColorHint: 'La coda aspetta il colore giusto invece di stampare con qualsiasi bobina di quel tipo.',
+      handPrints: 'I piatti stampati a mano contano per il magazzino',
+      handPrintsHint: 'Il file di un piatto stampato dalla libreria, dalla cronologia o dalla scheda di una stampante va in magazzino e agli ordini. Disattivato: si vede, ma gli ordini si stampano per intero come se non ci fosse. Attivarlo conta solo ciò che si stampa da quel momento.',
     },
     toast: {
       planned: 'Piatti in coda: {{n}}.',
@@ -9269,6 +9271,8 @@ export default {
     byHand: 'aggiunto a mano',
     movedByHand: 'spostato a mano',
     handHint: 'Tuo: il piano lo lascia com\'è (uno spostato esce se nessun ordine ne ha bisogno).',
+    notCounted: 'non conta',
+    notCountedHint: 'Stampato a mano mentre queste stampe non contano: non va in magazzino né agli ordini.',
     orderLabel: {
       forStock: 'per magazzino',
       forStockTitle: 'Per magazzino: nessun ordine aperto ha bisogno di questi pezzi.',

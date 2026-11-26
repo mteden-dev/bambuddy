@@ -174,9 +174,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     przesunięte ręcznie na inną drukarkę (przypięte albo zarezerwowane na osi czasu) plan
     zostawia tam, gdzie jest, i planuje wokół niego (część parowana przesunięta ręcznie paruje się z
     każdą drukarką); znika dopiero, gdy żadne zamówienie go nie potrzebuje. Plik płyty wydrukowany
-    ręcznie (z biblioteki, z historii, z karty drukarki) jest dołączany do produktu: jego części
-    liczą się na stan, plan go nie usuwa i nie drukuje drugi raz; karta produktu oznacza takie
-    zadania „dodane ręcznie” / „przesunięte ręcznie”. **Filament w planie**
+    ręcznie (z biblioteki, z historii, z karty drukarki) jest dołączany do produktu i plan go nie
+    usuwa; jego części liczą się na stan i do zamówień tylko przy włączonym ustawieniu „Płyty
+    drukowane ręcznie liczą się na stan” (domyślnie wyłączone, włączenie liczy tylko to, co
+    wydrukuje się od tej chwili), inaczej karta oznacza je „nie liczy się”, a zamówienia drukują się
+    w całości; karta produktu oznacza takie zadania „dodane ręcznie” / „przesunięte ręcznie”. **Filament w planie**
     (`services/product_filament.py`): planer zna typ, kolor i ilość na każdym slocie drukarki
     (status AMS, magazyn: szpule slotów, Spoolman), odejmuje to, co zużyje kolejka przed produktem
     (bieżący wydruk w całości i zadania z prognozy na tej drukarce), i dopasowuje filamenty płyty

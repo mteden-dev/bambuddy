@@ -116,6 +116,7 @@ const DETAIL: ProductDetail = {
       print_time_seconds: 1800,
       by_hand: true,
       moved: false,
+      counted: false,
     },
   ],
   unplanned: [{ part_id: 3, pieces: 1 }],
@@ -191,6 +192,8 @@ describe('ProductsView', () => {
     expect(moved).toHaveAttribute('title', expect.stringMatching(/a plan keeps it as it is/));
     expect(screen.getByText('queued by hand')).toBeInTheDocument();
     expect(screen.getAllByText(/by hand$/)).toHaveLength(2);
+    // Printed by hand while such prints don't count: said so, once.
+    expect(screen.getByText("doesn't count")).toHaveAttribute('title', expect.stringMatching(/no stock and no order/));
   });
 
   it('posts an order and reports the plan', async () => {
@@ -316,6 +319,12 @@ describe('ProductsView', () => {
 
     await user.click(screen.getByRole('checkbox', { name: /Order plates ask for the colours/ }));
     await waitFor(() => expect(saved[1]).toEqual({ plate_cost_minutes: 15, force_color: false }));
+
+    // Plates printed by hand: off unless set, turned on here.
+    const hand = screen.getByRole('checkbox', { name: /Plates printed by hand count/ });
+    expect(hand).not.toBeChecked();
+    await user.click(hand);
+    await waitFor(() => expect(saved[2]).toEqual({ plate_cost_minutes: 15, hand_prints_count: true }));
     expect(screen.getByRole('spinbutton', { name: 'Loading or changing a spool takes' })).toHaveValue(10);
   });
 });

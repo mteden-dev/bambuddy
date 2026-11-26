@@ -9176,6 +9176,8 @@ export default {
       swapHint: 'Gezählt ab dem Moment, in dem jemand an den Druckern ist (Anwesenheitszeiten); danach rechnet der Plan mit einer vollen Spule.',
       forceColor: 'Platten aus Bestellungen verlangen die Farben aus ihrer Datei',
       forceColorHint: 'Die Warteschlange wartet auf die richtige Farbe, statt von irgendeiner Spule dieses Typs zu drucken.',
+      handPrints: 'Von Hand gedruckte Platten zählen zum Bestand',
+      handPrintsHint: 'Die Datei einer Platte, aus der Bibliothek, dem Verlauf oder einer Druckerkarte gedruckt, geht in den Bestand und an die Bestellungen. Aus: Sie wird angezeigt, aber Bestellungen werden vollständig gedruckt, als gäbe es sie nicht. Eingeschaltet zählt nur, was ab dann gedruckt wird.',
     },
     toast: {
       planned: 'Eingereihte Platten: {{n}}.',
@@ -9284,6 +9286,8 @@ export default {
     byHand: 'von Hand eingereiht',
     movedByHand: 'von Hand verschoben',
     handHint: 'Deins: Ein Plan lässt es, wie es ist (ein verschobenes verschwindet, wenn keine Bestellung es braucht).',
+    notCounted: 'zählt nicht',
+    notCountedHint: 'Von Hand gedruckt, während solche Drucke nicht zählen: geht weder in den Bestand noch an Bestellungen.',
     orderLabel: {
       forStock: 'auf Lager',
       forStockTitle: 'Auf Lager: Keine offene Bestellung braucht diese Teile.',
