@@ -34,12 +34,13 @@ from backend.app.services.slot_spools import (
     SlotSpoolError,
     SlotSpoolLoad,
     clear_prompt,
+    drop_prompts,
     list_prompts,
     load_check_settings,
     load_slot_spool,
     parse_margin_pct,
+    presence_changes,
     record_refills,
-    refilled_slots,
     restorable_spools,
 )
 
@@ -84,35 +85,46 @@ async def _spool_by_id(db_session, spool_id: int) -> Spool:
     return result.scalar_one()
 
 
-class TestRefilledSlots:
+class TestPresenceChanges:
+    def test_a_slot_going_full_then_empty_is_emptied(self):
+        presence_changes(1, [_unit(0, {0: True, 1: True})])
+        changes = presence_changes(1, [_unit(0, {0: False, 1: True})])
+        assert changes.emptied == [(0, 0)]
+        assert changes.refilled == []
+        assert presence_changes(1, [_unit(0, {0: False, 1: True})]).emptied == []
+
+    def test_a_whole_unit_blanking_at_once_empties_nothing(self):
+        presence_changes(1, [_unit(0, {0: True, 1: True})])
+        assert presence_changes(1, [_unit(0, {0: False, 1: False})]).emptied == []
+
     def test_a_slot_going_empty_then_full_is_a_refill(self):
-        assert refilled_slots(1, [_unit(0, {0: True, 1: True})]) == []
-        assert refilled_slots(1, [_unit(0, {0: False, 1: True})]) == []
-        assert refilled_slots(1, [_unit(0, {0: True, 1: True})]) == [(0, 0)]
+        assert presence_changes(1, [_unit(0, {0: True, 1: True})]).refilled == []
+        assert presence_changes(1, [_unit(0, {0: False, 1: True})]).refilled == []
+        assert presence_changes(1, [_unit(0, {0: True, 1: True})]).refilled == [(0, 0)]
 
     def test_the_first_report_only_sets_the_baseline(self):
-        assert refilled_slots(1, [_unit(0, {0: True})]) == []
+        assert presence_changes(1, [_unit(0, {0: True})]).refilled == []
 
     def test_a_slot_seen_empty_at_start_and_filled_counts(self):
-        assert refilled_slots(1, [_unit(0, {0: False})]) == []
-        assert refilled_slots(1, [_unit(0, {0: True})]) == [(0, 0)]
+        assert presence_changes(1, [_unit(0, {0: False})]).refilled == []
+        assert presence_changes(1, [_unit(0, {0: True})]).refilled == [(0, 0)]
 
     def test_a_whole_unit_blanking_at_once_is_not_a_person(self):
         """#3186: an idle X1C blanked a whole unit for one push."""
-        refilled_slots(1, [_unit(0, {0: True, 1: True, 2: True})])
-        assert refilled_slots(1, [_unit(0, {0: False, 1: False, 2: False})]) == []
+        presence_changes(1, [_unit(0, {0: True, 1: True, 2: True})])
+        assert presence_changes(1, [_unit(0, {0: False, 1: False, 2: False})]).refilled == []
         # The glitch report was skipped, so its return is no refill either.
-        assert refilled_slots(1, [_unit(0, {0: True, 1: True, 2: True})]) == []
+        assert presence_changes(1, [_unit(0, {0: True, 1: True, 2: True})]).refilled == []
 
     def test_trays_without_a_presence_bit_are_left_out(self):
-        refilled_slots(1, [_unit(0, {0: None})])
-        refilled_slots(1, [_unit(0, {0: None})])
-        assert refilled_slots(1, [_unit(0, {0: None})]) == []
+        presence_changes(1, [_unit(0, {0: None})])
+        presence_changes(1, [_unit(0, {0: None})])
+        assert presence_changes(1, [_unit(0, {0: None})]).refilled == []
 
     def test_printers_and_units_are_kept_apart(self):
-        refilled_slots(1, [_unit(0, {0: False}), _unit(1, {0: True})])
-        refilled_slots(2, [_unit(0, {0: True})])
-        assert refilled_slots(1, [_unit(0, {0: True}), _unit(1, {0: True})]) == [(0, 0)]
+        presence_changes(1, [_unit(0, {0: False}), _unit(1, {0: True})])
+        presence_changes(2, [_unit(0, {0: True})])
+        assert presence_changes(1, [_unit(0, {0: True}), _unit(1, {0: True})]).refilled == [(0, 0)]
 
 
 class TestLoadSlotSpool:
@@ -324,6 +336,42 @@ class TestPrompts:
         await db_session.commit()
         assert await list_prompts(db_session) == []
         assert await clear_prompt(db_session, printer.id, 0, 0) is False
+
+    @pytest.mark.asyncio
+    async def test_a_slot_empty_again_drops_its_prompt(self, db_session, printer_factory):
+        printer = await printer_factory()
+        await _load(db_session, printer.id)
+        await _load(db_session, printer.id, tray_id=1)
+        await record_refills(db_session, printer.id, [(0, 0), (0, 1)])
+        await db_session.commit()
+
+        assert await drop_prompts(db_session, printer.id, [(0, 0), (0, 2)]) == 1
+        await db_session.commit()
+
+        assert [(p.ams_id, p.tray_id) for p in await list_prompts(db_session)] == [(0, 1)]
+
+    @pytest.mark.asyncio
+    async def test_a_runout_switched_to_backup_leaves_no_question(self, db_session, printer_factory, test_engine):
+        """Slot 1 ran out mid-print and AMS Filament Backup took over: the slot read
+        empty, full, empty. It ended up asking "same roll?" about a slot with
+        nothing in it."""
+        printer = await printer_factory()
+        await _load(db_session, printer.id)
+        await _load(db_session, printer.id, tray_id=2)
+
+        sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+        with (
+            patch("backend.app.core.database.async_session", sessions),
+            patch("backend.app.core.websocket.ws_manager.broadcast") as broadcast,
+        ):
+            for slot0 in (True, False, True):
+                await slot_spools.observe_ams(printer.id, [_unit(0, {0: slot0, 1: False, 2: True})])
+            assert [(p.ams_id, p.tray_id) for p in await list_prompts(db_session)] == [(0, 0)]
+
+            await slot_spools.observe_ams(printer.id, [_unit(0, {0: False, 1: False, 2: True})])
+
+        assert await list_prompts(db_session) == []
+        assert broadcast.await_count == 2
 
 
 class TestCheckSettings:

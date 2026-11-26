@@ -46,6 +46,13 @@ describe('slotSpoolState', () => {
     expect(slotSpoolState({ ...base, hasAssignment: true, hasPrompt: true, tray })).toBe('check');
   });
 
+  it('asks "same roll?" only while a roll is in the slot', () => {
+    // A runout switched to the backup slot read as empty, full, empty: the
+    // question was left on a slot showing "Empty".
+    expect(slotSpoolState({ ...base, hasAssignment: true, hasPrompt: true, tray: { exists: false, tray_type: '' } })).toBeNull();
+    expect(slotSpoolState({ ...base, hasAssignment: true, hasPrompt: true, tray: undefined })).toBeNull();
+  });
+
   it('lights a used-up slot spool with a roll in it as new', () => {
     const tray = { exists: true, tray_type: 'PETG' };
     expect(slotSpoolState({ ...base, hasAssignment: true, slotSpoolLeft: 3, tray })).toBe('new');

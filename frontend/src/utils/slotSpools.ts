@@ -13,7 +13,9 @@
  *   redeploy) or a quick swap can hide that; a used-up roll still in the slot
  *   is the case that matters.
  * - "check": the slot was emptied and refilled under its slot spool, and the
- *   printer cannot tell the same roll from another; the backend asks.
+ *   printer cannot tell the same roll from another; the backend asks. Only
+ *   while a roll is in the slot: a runout switched over by AMS Filament Backup
+ *   can read as empty, full, empty, and there is nothing to ask about then.
  *
  * Whatever lights up, a slot with a roll in it can always be given a new roll
  * by hand (`canLoadSlotRoll`), so a missed swap never leaves it stuck.
@@ -67,7 +69,7 @@ export function slotSpoolState({
 }): SlotSpoolState {
   if (!enabled) return null;
   if (hasAssignment) {
-    if (hasPrompt) return 'check';
+    if (hasPrompt && slotHasRoll(tray)) return 'check';
     if (slotSpoolLeft != null && slotSpoolLeft <= USED_UP_GRAMS && !isBambuSpool && slotHasRoll(tray)) return 'new';
     return null;
   }

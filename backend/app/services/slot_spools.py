@@ -30,7 +30,11 @@ What this module adds around that:
   from another one. Such a slot gets a prompt (``custom_slot_reload_prompts``)
   until the user says "same roll" or loads a new one. A runout refilled during a
   print is the same case: the spool stays assigned while printing, so without
-  the prompt a fresh roll would go on counting from the empty one.
+  the prompt a fresh roll would go on counting from the empty one. The question
+  is about the roll in the slot, so it lasts only while there is one: a slot
+  that reads empty again drops its prompt. A runout switched over by AMS
+  Filament Backup can read as empty, full, empty on the slot that ran out
+  (seen on a P1S), which left a "same roll?" on a slot with nothing in it.
 
 A slot with a roll in it and no spool at all is "new"; that needs no state of
 its own and is worked out by the client from the slot and its assignment.
@@ -178,8 +182,16 @@ install_hooks()
 _presence: dict[tuple[int, int, int], bool] = {}
 
 
-def refilled_slots(printer_id: int, ams_data: list | None) -> list[tuple[int, int]]:
-    """Slots that read empty on the previous AMS report and occupied on this one.
+@dataclass(frozen=True)
+class PresenceChanges:
+    """Slots whose presence bit flipped since the previous AMS report, as (ams_id, tray_id)."""
+
+    refilled: list[tuple[int, int]]
+    emptied: list[tuple[int, int]]
+
+
+def presence_changes(printer_id: int, ams_data: list | None) -> PresenceChanges:
+    """Slots that read empty before and occupied now (refilled), and the other way round.
 
     Only the firmware's presence bit counts (services/ams_slot_presence); a tray
     without one (the external spool, a payload without ``tray_exist_bits``) is
@@ -189,6 +201,7 @@ def refilled_slots(printer_id: int, ams_data: list | None) -> list[tuple[int, in
     (#3186). Such a report is skipped for that unit and its last reading kept.
     """
     refilled: list[tuple[int, int]] = []
+    emptied: list[tuple[int, int]] = []
     for unit in ams_data or []:
         if not isinstance(unit, dict):
             continue
@@ -216,7 +229,9 @@ def refilled_slots(printer_id: int, ams_data: list | None) -> list[tuple[int, in
             _presence[key] = present
             if before is False and present:
                 refilled.append((ams_id, tray_id))
-    return refilled
+            elif before is True and not present:
+                emptied.append((ams_id, tray_id))
+    return PresenceChanges(refilled=refilled, emptied=emptied)
 
 
 def forget_printer(printer_id: int) -> None:
@@ -271,11 +286,23 @@ async def record_refills(db: AsyncSession, printer_id: int, slots: list[tuple[in
     return written
 
 
+async def drop_prompts(db: AsyncSession, printer_id: int, slots: list[tuple[int, int]]) -> int:
+    """Drop the prompts of slots that read empty again: no roll left to ask about. Returns how many."""
+    dropped = 0
+    for ams_id, tray_id in slots:
+        if await clear_prompt(db, printer_id, ams_id, tray_id):
+            dropped += 1
+            logger.info(
+                "Printer %d AMS%d-T%d: slot empty again, dropping its same-roll question", printer_id, ams_id, tray_id
+            )
+    return dropped
+
+
 async def observe_ams(printer_id: int, ams_data: list | None) -> None:
-    """AMS change hook: prompt for slots refilled under a slot spool. Never raises."""
+    """AMS change hook: prompt for slots refilled under a slot spool, unprompt emptied ones. Never raises."""
     try:
-        slots = refilled_slots(printer_id, ams_data)
-        if not slots:
+        changes = presence_changes(printer_id, ams_data)
+        if not changes.refilled and not changes.emptied:
             return
         from backend.app.core.database import async_session
         from backend.app.services.inventory_mode import spoolman_owns_assignments
@@ -283,15 +310,16 @@ async def observe_ams(printer_id: int, ams_data: list | None) -> None:
         async with async_session() as db:
             if await spoolman_owns_assignments(db):
                 return
-            written = await record_refills(db, printer_id, slots)
-            if not written:
+            changed = await drop_prompts(db, printer_id, changes.emptied)
+            changed += await record_refills(db, printer_id, changes.refilled)
+            if not changed:
                 return
             await db.commit()
         from backend.app.core.websocket import ws_manager
 
         await ws_manager.broadcast({"type": "slot_spool_prompts_changed", "printer_id": printer_id})
     except Exception:
-        logger.exception("Slot spool refill check failed for printer %s", printer_id)
+        logger.exception("Slot spool presence check failed for printer %s", printer_id)
 
 
 async def list_prompts(db: AsyncSession) -> list[SlotSpoolPrompt]:
