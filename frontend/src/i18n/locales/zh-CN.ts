@@ -9326,7 +9326,8 @@ export default {
     map: '关联',
     notPrinted: '不打印',
     noOrders: '没有订单。',
-    movedOn: '已在 Base 中移动',
+    packed: '已打包',
+    packedHint: '已在 Base 中推进（待发货、已发货）：不再为其打印。',
     shipBy: '{{date}} 前发货',
     heldBack: '打印 {{total}} 件中的 {{print}} 件',
     heldAll: '已有现货',
@@ -9345,6 +9346,7 @@ export default {
       ready: '已完成',
       skipped: '已跳过',
       cancelled: '已取消',
+      packed: '已打包',
     },
     mapping: {
       not_printed: '不打印',
@@ -9442,6 +9444,7 @@ export default {
       later: '3 天以上后',
       allegroNoDate: 'Allegro · 无发货期限',
       shop: '网店 · 最早的在前',
+      packed: '已打包',
     },
     column: {
       when: '发货期限',

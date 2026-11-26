@@ -34,8 +34,11 @@ Due dates: the marketplace's ship-by deadline (``getOrderTransactionData``'s
 without one (a shop order) is due ``handling_days`` working days after
 confirmation (none for 0).
 
-An order that leaves the statuses (moved on by hand) keeps its product orders:
-moving it to "W produkcji" in Base must not stop its prints.
+An order that leaves the statuses without being cancelled is packed: it was
+moved on to "to send" or "sent" by hand. Nothing more is printed for it: its
+open product orders are done, taking what is in stock for them (that went
+into the box; the rest came from elsewhere), and it is listed with the ready
+ones. A check that finds its pieces bad does not reopen it.
 
 The token is stored write-only, like the other secrets in settings.
 """
@@ -519,11 +522,95 @@ async def cancel_orders_of(db: AsyncSession, order: BaseOrder, *, return_done: b
     return changed
 
 
+def is_packed(order: BaseOrder) -> bool:
+    """Gone from the statuses orders are taken from, not cancelled: packed (to send, or sent)."""
+    return not order.in_status and order.state != "cancelled"
+
+
+def base_id_of(product_order: ProductOrder) -> int | None:
+    """The Base order a product order came from; None for one of another source."""
+    if product_order.external_source != EXTERNAL_SOURCE or not product_order.external_ref:
+        return None
+    try:
+        return int(product_order.external_ref.split("/", 1)[0])
+    except ValueError:
+        return None
+
+
+async def packed_product_orders(db: AsyncSession, product_orders: list[ProductOrder]) -> set[int]:
+    """The ids of the product orders among these whose Base order is packed."""
+    base_ids = {po.id: base_id for po in product_orders if (base_id := base_id_of(po)) is not None}
+    if not base_ids:
+        return set()
+    rows = (await db.execute(select(BaseOrder).where(BaseOrder.order_id.in_(set(base_ids.values()))))).scalars()
+    packed = {row.order_id for row in rows if is_packed(row)}
+    return {po_id for po_id, base_id in base_ids.items() if base_id in packed}
+
+
+async def close_packed(db: AsyncSession, product_orders: list[ProductOrder]) -> set[int]:
+    """Mark these open product orders of packed orders done; returns the products changed.
+
+    Each takes what is in stock for it, ahead of every other order: printed for
+    it, it went into the box. Pieces of a product it could not complete count
+    too. What is missing came from elsewhere, so nothing more is printed for
+    it. The caller replans.
+    """
+    from backend.app.services import product_planner as planner, products as product_service
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    changed: set[int] = set()
+    for po in product_orders:
+        if po.status != "open":
+            continue
+        product = await product_service.load_product(db, po.product_id)
+        took: planner.Pool = {}
+        if product is not None and product.parts:
+            specs = product_service.part_specs(product)
+            pool = await product_service.stock_pool(db, product)
+            allocation = planner.allocate(specs, pool, [planner.OrderNeed(po.id, max(1, po.quantity))])
+            took = {part_id: dict(by_printer) for part_id, by_printer in allocation.taken.get(po.id, {}).items()}
+            for spec in specs:
+                more = allocation.pieces[po.id][spec.id] - allocation.units[po.id] * spec.per_unit
+                holding = allocation.left.get(spec.id, {})
+                for printer_id in sorted(holding, key=lambda r: (-holding[r], r)):
+                    if more <= 0:
+                        break
+                    n = min(holding[printer_id], more)
+                    if n > 0:
+                        planner.pool_add(took, printer_id, ((spec.id, n),))
+                        more -= n
+        po.status = "done"
+        po.completed_at = now
+        po.consumed = {
+            str(part_id): {str(printer_id): n for printer_id, n in by_printer.items() if n > 0}
+            for part_id, by_printer in took.items()
+            if any(n > 0 for n in by_printer.values())
+        } or None
+        changed.add(po.product_id)
+    await db.flush()
+    return changed
+
+
+async def close_packed_orders(db: AsyncSession) -> set[int]:
+    """Close the open product orders of every packed order (see ``close_packed``)."""
+    open_rows = list(
+        (
+            await db.execute(
+                select(ProductOrder).where(
+                    ProductOrder.external_source == EXTERNAL_SOURCE, ProductOrder.status == "open"
+                )
+            )
+        ).scalars()
+    )
+    packed = await packed_product_orders(db, open_rows)
+    return await close_packed(db, [po for po in open_rows if po.id in packed])
+
+
 def unmapped_lines(orders: list[BaseOrder], skus: dict[str, SkuTarget]) -> dict[str, dict]:
-    """SKU -> {"name", "orders"} for the lines of waiting or accepted orders that map to nothing."""
+    """SKU -> {"name", "orders"} for the lines of waiting or accepted orders (not packed) that map to nothing."""
     found: dict[str, dict] = {}
     for order in orders:
-        if order.state not in ("new", "accepted"):
+        if order.state not in ("new", "accepted") or is_packed(order):
             continue
         for line in order.items or []:
             sku = str(line.get("sku") or "")
@@ -543,6 +630,8 @@ class SyncResult:
     new: int = 0
     updated: int = 0
     cancelled: int = 0
+    # Left the statuses at this pass without being cancelled.
+    packed: int = 0
     replanned: list[int] = field(default_factory=list)
     unmapped: int = 0
 
@@ -684,6 +773,9 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
                     result.cancelled += 1
 
     await db.flush()
+    # Gone from the statuses and not cancelled: packed, nothing more to print for it.
+    result.packed = sum(1 for order_id, row in tracked.items() if was_in_status.get(order_id) and is_packed(row))
+    changed |= await close_packed_orders(db)
     result.unmapped = len(unmapped_lines(list(tracked.values()), skus))
     if changed:
         result.replanned = await replan_products(db, changed, config)

@@ -370,6 +370,27 @@ describe('BaseOrdersView', () => {
     expect(screen.queryByText(/to pack/)).not.toBeInTheDocument();
   });
 
+  it('orders packed in Base come after the ready ones, as packed, with nothing to do on them', async () => {
+    orders = [
+      { ...ORDER, state: 'accepted', ready: true, held: { '4': 2 } },
+      { ...SHOP_ORDER, state: 'accepted', ready: true, in_status: false, packed: true },
+      { ...ORDER, order_id: 5003, label: 'nick_5003', state: 'new', in_status: false, packed: true },
+    ];
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: /^Ready/ }));
+    const header = await screen.findByRole('heading', { name: /^Packed · 2/ });
+    // The ready one first, without a header; the packed ones under theirs.
+    const list = header.closest('section')!;
+    expect(within(list).getByText('#1243')).toBeInTheDocument();
+    expect(within(list).getByText('nick_5003')).toBeInTheDocument();
+    expect(within(list).queryByText('nick_5001')).not.toBeInTheDocument();
+    expect(within(list).getAllByText('Packed', { selector: 'span' })).toHaveLength(2);
+    // Nothing to send or skip on a packed order.
+    expect(within(list).queryByRole('button', { name: /Print|Skip|Parts/ })).not.toBeInTheDocument();
+    expect(screen.getByText('nick_5001')).toBeInTheDocument();
+  });
+
   it('an order in production shows its parts and changes apply at once', async () => {
     orders = [
       {

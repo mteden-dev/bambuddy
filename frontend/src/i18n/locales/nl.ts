@@ -9394,7 +9394,8 @@ export default {
     map: 'Koppelen',
     notPrinted: 'Wordt niet geprint',
     noOrders: 'Geen bestellingen.',
-    movedOn: 'verplaatst in Base',
+    packed: 'Ingepakt',
+    packedHint: 'Doorgezet in Base (te verzenden, verzonden): er wordt niets meer voor geprint.',
     shipBy: 'verzenden vóór {{date}}',
     heldBack: '{{print}} van {{total}} printen',
     heldAll: 'al klaar',
@@ -9413,6 +9414,7 @@ export default {
       ready: 'klaar',
       skipped: 'overgeslagen',
       cancelled: 'geannuleerd',
+      packed: 'ingepakt',
     },
     mapping: {
       not_printed: 'wordt niet geprint',
@@ -9510,6 +9512,7 @@ export default {
       later: 'Over 3+ dagen',
       allegroNoDate: 'Allegro · geen verzenddatum',
       shop: 'Webwinkel · oudste eerst',
+      packed: 'Ingepakt',
     },
     column: {
       when: 'Verzenden voor',

@@ -697,8 +697,10 @@ async def reopen_short_orders(db: AsyncSession, product: Product, pool: planner.
 
     A box closed the moment its last plate finished, then a piece of it was
     found bad at the check: the order is open again and its pieces go back to
-    stock, so the planner prints what is missing.
+    stock, so the planner prints what is missing. Not an order from Base that
+    is packed already: it is gone, nothing is printed for it again.
     """
+    from backend.app.services.base_sync import packed_product_orders
 
     def short() -> set[tuple[int, int]]:
         return {(part_id, r) for part_id, by in pool.items() for r, n in by.items() if n < 0}
@@ -706,17 +708,22 @@ async def reopen_short_orders(db: AsyncSession, product: Product, pool: planner.
     missing = short()
     if not missing:
         return []
-    rows = (
-        await db.execute(
-            select(ProductOrder)
-            .where(ProductOrder.product_id == product.id, ProductOrder.status == "done")
-            .order_by(ProductOrder.completed_at.desc().nulls_last(), ProductOrder.id.desc())
-        )
-    ).scalars()
+    rows = list(
+        (
+            await db.execute(
+                select(ProductOrder)
+                .where(ProductOrder.product_id == product.id, ProductOrder.status == "done")
+                .order_by(ProductOrder.completed_at.desc().nulls_last(), ProductOrder.id.desc())
+            )
+        ).scalars()
+    )
+    packed = await packed_product_orders(db, rows)
     reopened = []
     for order in rows:
         if not missing:
             break
+        if order.id in packed:
+            continue
         taken = []
         for part_key, by_printer in (order.consumed or {}).items():
             for printer_key, n in (by_printer or {}).items():

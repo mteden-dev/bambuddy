@@ -9351,7 +9351,8 @@ export default {
     map: 'Asignar',
     notPrinted: 'No se imprime',
     noOrders: 'No hay pedidos.',
-    movedOn: 'movido en Base',
+    packed: 'Empaquetado',
+    packedHint: 'Avanzado en Base (por enviar, enviado): ya no se imprime nada para él.',
     shipBy: 'enviar antes del {{date}}',
     heldBack: 'se imprimen {{print}} de {{total}}',
     heldAll: 'ya lo tengo',
@@ -9370,6 +9371,7 @@ export default {
       ready: 'listo',
       skipped: 'omitido',
       cancelled: 'cancelado',
+      packed: 'empaquetado',
     },
     mapping: {
       not_printed: 'no se imprime',
@@ -9467,6 +9469,7 @@ export default {
       later: 'En 3+ días',
       allegroNoDate: 'Allegro · sin fecha de envío',
       shop: 'Tienda · más antiguos primero',
+      packed: 'Empaquetados',
     },
     column: {
       when: 'Envío',

@@ -9342,7 +9342,8 @@ export default {
     map: '割り当て',
     notPrinted: '印刷しない',
     noOrders: '注文はありません。',
-    movedOn: 'Baseで移動済み',
+    packed: '梱包済み',
+    packedHint: 'Baseで次へ進みました（発送待ち・発送済み）。これ以上は印刷しません。',
     shipBy: '{{date}}までに発送',
     heldBack: '{{total}}個中{{print}}個を印刷',
     heldAll: '在庫あり',
@@ -9361,6 +9362,7 @@ export default {
       ready: '完了',
       skipped: 'スキップ済み',
       cancelled: 'キャンセル済み',
+      packed: '梱包済み',
     },
     mapping: {
       not_printed: '印刷しない',
@@ -9458,6 +9460,7 @@ export default {
       later: '3日以上先',
       allegroNoDate: 'Allegro・発送期限なし',
       shop: 'ショップ・古い順',
+      packed: '梱包済み',
     },
     column: {
       when: '発送期限',

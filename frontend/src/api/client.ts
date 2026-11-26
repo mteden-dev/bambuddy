@@ -4766,6 +4766,8 @@ export interface BaseOrder {
   ship_by: string | null;
   state: 'new' | 'accepted' | 'skipped' | 'cancelled';
   in_status: boolean;
+  /** Gone from the statuses, not cancelled: packed in Base (to send, or sent). Nothing more is printed for it. */
+  packed?: boolean;
   lines: BaseOrderLine[];
   product_orders: { id: number; product_id: number; quantity: number; status: string }[];
   ready: boolean;

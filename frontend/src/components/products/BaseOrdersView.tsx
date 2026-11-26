@@ -222,11 +222,18 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
   );
   // Sections only where the list is in the order of making.
   const sectioned = !search.trim() && (filter === 'new' || filter === 'accepted');
-  const groups: { section: OrderSection | null; orders: BaseOrder[] }[] = sectioned
+  // The ready ones still to pack first, then the ones packed in Base.
+  const packedApart = !search.trim() && filter === 'ready';
+  const groups: { section: OrderSection | 'packed' | null; orders: BaseOrder[] }[] = sectioned
     ? SECTION_ORDER.map((section) => ({ section, orders: orders.filter((o) => sectionOf(o) === section) })).filter(
         (g) => g.orders.length,
       )
-    : [{ section: null, orders }];
+    : packedApart
+      ? [
+          { section: null, orders: orders.filter((o) => !o.packed) },
+          { section: 'packed' as const, orders: orders.filter((o) => o.packed) },
+        ].filter((g) => g.orders.length)
+      : [{ section: null, orders }];
   const countFor = (state: string, kind: SourceFilter) => {
     const entry = counts?.[state];
     if (!entry) return null;

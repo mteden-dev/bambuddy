@@ -249,13 +249,6 @@ async def test_auto_accepted_orders_follow_their_lines_and_cancellations(
     [po] = await _product_orders(db_session)
     assert po.quantity == 3
 
-    # Moved on by hand in Base: the prints stay.
-    fake_base.orders = [_order(5002, [("SKU-BOX-100-B", 3)], status=100003)]
-    await _sync(async_client, {shop.printer})
-    [po] = await _product_orders(db_session)
-    assert po.status == "open"
-    assert (await db_session.get(BaseOrder, 5002)).in_status is False
-
     # Cancelled in Base: the product order is cancelled too.
     fake_base.orders = [_order(5002, [("SKU-BOX-100-B", 3)], status=CANCELLED)]
     result = await _sync(async_client, {shop.printer})
@@ -852,6 +845,137 @@ async def test_an_order_cancelled_in_base_before_it_left_gives_its_boxes_back(
     # The one still on the shelf is back in stock; the one that left stays done.
     assert statuses == {"5203": "cancelled", "5204": "done"}
     assert await _stock(async_client, shop.product_id, {shop.printer}) == {"Lid": 1, "Base": 1}
+
+
+async def _listed(client: AsyncClient, state: str, connected: set[int]) -> list[dict]:
+    online, status = _live(connected)
+    with online, status:
+        response = await client.get("/api/v1/base-sync/orders", params={"state": state})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def _finish(db_session, items: list[PrintQueueItem], printer_id: int) -> None:
+    from backend.app.services import products
+
+    for item in items:
+        item.status = "completed"
+        item.printer_id = printer_id
+    await db_session.commit()
+    await products.after_queue_items_changed(db_session, [i.id for i in items])
+    await db_session.commit()
+
+
+async def test_an_order_packed_in_base_prints_nothing_more(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5301, [("SKU-BOX-100-B", 2)]), _order(5302, [("SKU-BOX-100-B", 1), ("SKU-X", 1)])]
+    await _sync(async_client, {shop.printer})
+    await _accept(async_client, 5301, {shop.printer})
+    db_session.expire_all()
+    pending = list(
+        (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars()
+    )
+    files = {f.id: f.filename for f in (await db_session.execute(select(LibraryFile))).scalars()}
+    lids = [i for i in pending if files[i.library_file_id].startswith("lid")]
+    bases = [i for i in pending if files[i.library_file_id].startswith("base")]
+    assert (len(lids), len(bases)) == (2, 2)
+    # One box and one more lid are printed; a base still waits.
+    await _finish(db_session, [*lids, bases[0]], shop.printer)
+    assert [po.status for po in await _product_orders(db_session)] == ["open"]
+    assert [o["order_id"] for o in await _listed(async_client, "accepted", {shop.printer})] == [5301]
+
+    # Both are packed in Base (moved on to "to send"): the one in production
+    # takes what was printed for it and nothing more is printed; the waiting one
+    # was packed without Bambuddy.
+    fake_base.orders = [
+        _order(5301, [("SKU-BOX-100-B", 2)], status=100003),
+        _order(5302, [("SKU-BOX-100-B", 1), ("SKU-X", 1)], status=100003),
+    ]
+    result = await _sync(async_client, {shop.printer})
+    assert result["packed"] == 2
+    [po] = await _product_orders(db_session)
+    assert po.status == "done"
+    lid_id, base_id = sorted(int(k) for k in po.consumed)
+    assert {int(k): v for k, v in po.consumed.items()} == {
+        lid_id: {str(shop.printer): 2},
+        base_id: {str(shop.printer): 1},
+    }
+    db_session.expire_all()
+    assert (
+        list((await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars())
+        == []
+    )
+    assert await _stock(async_client, shop.product_id, {shop.printer}) == {}
+
+    # Listed with the ready ones, as packed; not waiting, not in production.
+    assert await _listed(async_client, "new", {shop.printer}) == []
+    assert await _listed(async_client, "accepted", {shop.printer}) == []
+    ready = await _listed(async_client, "ready", {shop.printer})
+    assert {o["order_id"]: o["packed"] for o in ready} == {5301: True, 5302: True}
+    counts = (await async_client.get("/api/v1/base-sync/orders/counts")).json()
+    assert counts["new"]["allegro"] == counts["accepted"]["allegro"] == 0
+    assert counts["ready"]["allegro"] == 2
+    # Its unmapped SKU is nobody's worry any more.
+    assert (await async_client.get("/api/v1/base-sync/skus")).json()["unmapped"] == []
+    # And it is not sent to production any more.
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post("/api/v1/base-sync/orders/5302/accept")
+    assert response.status_code == 409
+
+    # A lid of it found bad afterwards does not open it again.
+    db_session.expire_all()
+    lid_job = next(
+        j
+        for j in (await db_session.execute(select(ProductJob).where(ProductJob.status == "done"))).scalars()
+        if str(lid_id) in (j.pieces or {})
+    )
+    online, status = _live({shop.printer})
+    with online, status:
+        response = await async_client.post(
+            f"/api/v1/products/jobs/{lid_job.id}/check", json={"rejected": [{"part_id": lid_id, "pieces": 1}]}
+        )
+    assert response.status_code == 200, response.text
+    [po] = await _product_orders(db_session)
+    assert po.status == "done"
+    db_session.expire_all()
+    assert (
+        list((await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars())
+        == []
+    )
+
+
+async def test_a_packed_order_takes_its_pieces_ahead_of_an_earlier_one(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [
+        _order(5303, [("SKU-BOX-100-B", 1)]),
+        _order(5304, [("SKU-BOX-100-B", 1)], confirmed=1795111611),
+    ]
+    await _sync(async_client, {shop.printer})
+    await _accept(async_client, 5303, {shop.printer})
+    await _accept(async_client, 5304, {shop.printer})
+    # A box is in stock that is not counted yet: the earlier order would get it.
+    db_session.add_all(
+        [
+            ProductStockAdjustment(part_id=part_id, printer_id=shop.printer, delta=1)
+            for part_id in (await _part_ids(async_client, shop.product_id, {shop.printer}))
+        ]
+    )
+    await db_session.commit()
+
+    # The later one is packed: the box went into it, the earlier one still needs one.
+    fake_base.orders = [_order(5303, [("SKU-BOX-100-B", 1)]), _order(5304, [("SKU-BOX-100-B", 1)], status=100003)]
+    await _sync(async_client, {shop.printer})
+    statuses = {po.external_ref.split("/")[0]: po.status for po in await _product_orders(db_session)}
+    assert statuses == {"5303": "open", "5304": "done"}
+    assert await _stock(async_client, shop.product_id, {shop.printer}) == {}
+
+
+async def _part_ids(client: AsyncClient, product_id: int, connected: set[int]) -> list[int]:
+    online, status = _live(connected)
+    with online, status:
+        detail = (await client.get(f"/api/v1/products/{product_id}")).json()
+    return [p["id"] for p in detail["parts"]]
 
 
 async def _preview(client: AsyncClient, order_id: int, body: dict | None, connected: set[int]) -> dict:

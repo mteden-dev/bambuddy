@@ -8966,7 +8966,8 @@ export default {
     map: '연결',
     notPrinted: '인쇄 안 함',
     noOrders: '주문이 없습니다.',
-    movedOn: 'Base에서 이동됨',
+    packed: '포장됨',
+    packedHint: 'Base에서 다음 단계로 이동됨(발송 대기, 발송됨): 더 이상 출력하지 않습니다.',
     shipBy: '{{date}}까지 발송',
     heldBack: '{{total}}개 중 {{print}}개 인쇄',
     heldAll: '이미 있음',
@@ -8985,6 +8986,7 @@ export default {
       ready: '완료',
       skipped: '건너뜀',
       cancelled: '취소됨',
+      packed: '포장됨',
     },
     mapping: {
       not_printed: '인쇄 안 함',
@@ -9082,6 +9084,7 @@ export default {
       later: '3일 이상 후',
       allegroNoDate: 'Allegro · 발송 기한 없음',
       shop: '쇼핑몰 · 오래된 순',
+      packed: '포장됨',
     },
     column: {
       when: '발송 기한',

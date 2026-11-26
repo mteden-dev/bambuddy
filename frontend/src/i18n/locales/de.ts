@@ -9343,7 +9343,8 @@ export default {
     map: 'Zuordnen',
     notPrinted: 'Wird nicht gedruckt',
     noOrders: 'Keine Bestellungen.',
-    movedOn: 'in Base weitergeschoben',
+    packed: 'Verpackt',
+    packedHint: 'In Base weitergeschoben (zu versenden, versendet): dafür wird nichts mehr gedruckt.',
     shipBy: 'Versand bis {{date}}',
     heldBack: '{{print}} von {{total}} werden gedruckt',
     heldAll: 'schon fertig da',
@@ -9362,6 +9363,7 @@ export default {
       ready: 'fertig',
       skipped: 'übersprungen',
       cancelled: 'storniert',
+      packed: 'verpackt',
     },
     mapping: {
       not_printed: 'wird nicht gedruckt',
@@ -9459,6 +9461,7 @@ export default {
       later: 'In 3+ Tagen',
       allegroNoDate: 'Allegro · ohne Versandfrist',
       shop: 'Shop · älteste zuerst',
+      packed: 'Verpackt',
     },
     column: {
       when: 'Versand bis',

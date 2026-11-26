@@ -224,8 +224,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     na osi czasu i na karcie drukarki mają etykietę zamówienia (nick albo numer, „+N” dla kilku,
     „na stan”), z numerem z Base po najechaniu i przejściem do zamówienia; potem daje
     zamówienia produktów i przelicza plan;
-    póki jest w tych statusach, zmiany pozycji w Base idą za nim; przestawione w Base zachowuje
-    druki, a anulowane anuluje otwarte. Termin to termin wysyłki z platformy (Allegro), czytany z
+    póki jest w tych statusach, zmiany pozycji w Base idą za nim; wyjęte z tych statusów
+    (spakowane: „do wysłania”, „wysłane”) nic więcej nie drukuje, bierze, co jest dla niego na
+    stanie, i idzie do „Gotowe” pod „Spakowane”, a anulowane anuluje otwarte. Termin to termin wysyłki z platformy (Allegro), czytany z
     danych transakcji w Base raz na zamówienie; bez niego dni robocze od potwierdzenia. Token Base jest zapisywany tylko do zapisu. Całość jest dostępna przez API, także zdjęcie i płyty hurtem z folderu (zgadywane z
     nazw plików, z dodatkowymi słowami na część): [PRODUCTS_API.md](PRODUCTS_API.md). Logika:
     `services/products.py`, API `/products`; zadania śledzi odświeżanie batchy w

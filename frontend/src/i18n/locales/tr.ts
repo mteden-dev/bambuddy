@@ -9270,7 +9270,8 @@ export default {
     map: 'Bağla',
     notPrinted: 'Basılmaz',
     noOrders: 'Sipariş yok.',
-    movedOn: 'Base\'de taşındı',
+    packed: 'Paketlendi',
+    packedHint: 'Base\'de ilerletildi (gönderilecek, gönderildi): artık onun için bir şey basılmıyor.',
     shipBy: '{{date}} tarihine kadar gönder',
     heldBack: '{{total}} içinden {{print}} basılıyor',
     heldAll: 'zaten var',
@@ -9289,6 +9290,7 @@ export default {
       ready: 'hazır',
       skipped: 'atlandı',
       cancelled: 'iptal edildi',
+      packed: 'paketlendi',
     },
     mapping: {
       not_printed: 'basılmaz',
@@ -9386,6 +9388,7 @@ export default {
       later: '3+ gün sonra',
       allegroNoDate: 'Allegro · gönderim tarihi yok',
       shop: 'Mağaza · en eskiler önce',
+      packed: 'Paketlenenler',
     },
     column: {
       when: 'Gönderim',

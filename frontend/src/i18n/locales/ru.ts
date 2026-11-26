@@ -8948,7 +8948,8 @@ export default {
     map: 'Привязать',
     notPrinted: 'Не печатаем',
     noOrders: 'Заказов нет.',
-    movedOn: 'перемещён в Base',
+    packed: 'Упакован',
+    packedHint: 'Передвинут в Base дальше (к отправке, отправлен): для него больше ничего не печатается.',
     shipBy: 'отправить до {{date}}',
     heldBack: 'печатаем {{print}} из {{total}}',
     heldAll: 'уже есть',
@@ -8967,6 +8968,7 @@ export default {
       ready: 'готово',
       skipped: 'пропущен',
       cancelled: 'отменён',
+      packed: 'упакован',
     },
     mapping: {
       not_printed: 'не печатаем',
@@ -9064,6 +9066,7 @@ export default {
       later: 'Через 3+ дня',
       allegroNoDate: 'Allegro · без срока отправки',
       shop: 'Магазин · сначала старые',
+      packed: 'Упакованные',
     },
     column: {
       when: 'Отправка',

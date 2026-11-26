@@ -9326,7 +9326,8 @@ export default {
     map: '關聯',
     notPrinted: '不列印',
     noOrders: '沒有訂單。',
-    movedOn: '已在 Base 中移動',
+    packed: '已包裝',
+    packedHint: '已在 Base 中推進（待出貨、已出貨）：不再為其列印。',
     shipBy: '{{date}} 前出貨',
     heldBack: '列印 {{total}} 件中的 {{print}} 件',
     heldAll: '已有現貨',
@@ -9345,6 +9346,7 @@ export default {
       ready: '已完成',
       skipped: '已略過',
       cancelled: '已取消',
+      packed: '已包裝',
     },
     mapping: {
       not_printed: '不列印',
@@ -9442,6 +9444,7 @@ export default {
       later: '3 天以上後',
       allegroNoDate: 'Allegro · 無出貨期限',
       shop: '網店 · 最早的在前',
+      packed: '已包裝',
     },
     column: {
       when: '出貨期限',

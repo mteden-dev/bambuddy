@@ -180,6 +180,7 @@ async def sync_now(_: User | None = RequirePermissionIfAuthEnabled(Permission.QU
         "new": result.new,
         "updated": result.updated,
         "cancelled": result.cancelled,
+        "packed": result.packed,
         "replanned": result.replanned,
         "unmapped": result.unmapped,
     }
@@ -256,6 +257,8 @@ class BaseOrderOut(BaseModel):
     ship_by: UTCDatetime = None
     state: str
     in_status: bool
+    # Gone from the statuses, not cancelled: packed in Base (to send, or sent).
+    packed: bool = False
     lines: list[OrderLineOut]
     product_orders: list[ProductOrderRef]
     # product id -> products held back from printing for this order.
@@ -362,6 +365,7 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                 ship_by=row.ship_by,
                 state=row.state,
                 in_status=row.in_status,
+                packed=svc.is_packed(row),
                 lines=lines,
                 product_orders=own,
                 held=svc.held_products(row),
@@ -463,9 +467,7 @@ async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, P
         coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
         part_ids = {spec.id for spec in specs}
         for job in await product_service.queued_jobs(db, product_id):
-            planner.pool_add(
-                coming, product_service.piece_printer(job), product_service.job_pieces(job, part_ids)
-            )
+            planner.pool_add(coming, product_service.piece_printer(job), product_service.job_pieces(job, part_ids))
         with_queue = planner.allocate(specs, coming, needs)
         estimates = {}
         if open_rows:
@@ -508,15 +510,24 @@ async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, P
 async def order_counts(db: AsyncSession = Depends(get_db, scope="function"), _=ReadAccess) -> dict:
     """How many orders each state has, from Allegro and from the rest (for the filters).
 
-    Accepted orders that are ready count under ``ready``, not ``accepted``.
+    Accepted orders that are ready count under ``ready``, not ``accepted``; so
+    do waiting and accepted ones packed in Base (gone from the statuses).
     """
     counts = {state: {"allegro": 0, "shop": 0} for state in ("new", "accepted", "ready", "skipped", "cancelled")}
     rows = await db.execute(
-        select(BaseOrder.state, BaseOrder.source, func.count()).group_by(BaseOrder.state, BaseOrder.source)
+        select(BaseOrder.state, BaseOrder.source, BaseOrder.in_status, func.count()).group_by(
+            BaseOrder.state, BaseOrder.source, BaseOrder.in_status
+        )
     )
-    for state, source, n in rows.all():
+    for state, source, in_status, n in rows.all():
+        if state in ("new", "accepted") and not in_status:
+            state = "ready"
         counts.setdefault(state, {"allegro": 0, "shop": 0})["allegro" if source == "allegro" else "shop"] += n
-    accepted = list((await db.execute(select(BaseOrder).where(BaseOrder.state == "accepted"))).scalars())
+    accepted = list(
+        (
+            await db.execute(select(BaseOrder).where(BaseOrder.state == "accepted", BaseOrder.in_status.is_(True)))
+        ).scalars()
+    )
     ready = await _ready_orders(db, accepted)
     for row in accepted:
         if row.order_id in ready:
@@ -537,15 +548,18 @@ async def list_orders(
     too (``allegro``: every Allegro account; ``shop``: every other source).
 
     ``accepted`` is the orders in production; ``ready`` the accepted ones that
-    are ready (printed, or held back in full), which ``accepted`` leaves out.
+    are ready (printed, or held back in full), which ``accepted`` leaves out,
+    and after them the waiting and accepted ones packed in Base (gone from the
+    statuses; ``packed``), which ``new`` and ``accepted`` leave out.
 
     Waiting and accepted ones come in the order they are to be made: by ship-by
     deadline (today and tomorrow first, then the day after, then later), then
-    the ones without one (a shop's) oldest first. Ready ones the same while
-    they are in the Base statuses, then the ones moved on, newest first. The
-    rest newest first.
+    the ones without one (a shop's) oldest first. Ready ones the same, then the
+    packed ones, newest first. The rest newest first.
     """
-    if state in ("new", "accepted", "ready"):
+    if state == "ready":
+        return await _ready_list(db, source)
+    if state in ("new", "accepted"):
         query = select(BaseOrder).order_by(
             BaseOrder.ship_by.asc().nulls_last(),
             BaseOrder.date_confirmed.asc().nulls_last(),
@@ -554,26 +568,50 @@ async def list_orders(
     else:
         query = select(BaseOrder).order_by(BaseOrder.date_confirmed.desc().nulls_last(), BaseOrder.order_id.desc())
     if state:
-        query = query.where(BaseOrder.state == ("accepted" if state == "ready" else state))
-    if source == "allegro":
-        query = query.where(BaseOrder.source == "allegro")
-    elif source == "shop":
-        query = query.where(or_(BaseOrder.source.is_(None), BaseOrder.source != "allegro"))
-    if state not in ("accepted", "ready"):
+        query = query.where(BaseOrder.state == state)
+    if state in ("new", "accepted"):
+        query = query.where(BaseOrder.in_status.is_(True))
+    query = _of_source(query, source)
+    if state != "accepted":
         rows = list((await db.execute(query.limit(300))).scalars())
         return await _orders_out(db, rows)
     # Which accepted ones are ready is worked out here, so the limit comes after.
     rows = list((await db.execute(query)).scalars())
     ready = await _ready_orders(db, rows)
-    rows = [row for row in rows if (row.order_id in ready) == (state == "ready")]
-    if state == "ready":
-        moved_on = sorted(
-            (row for row in rows if not row.in_status),
-            key=lambda row: (row.date_confirmed or datetime.min, row.order_id),
-            reverse=True,
-        )
-        rows = [row for row in rows if row.in_status] + moved_on
-    return await _orders_out(db, rows[:300])
+    return await _orders_out(db, [row for row in rows if row.order_id not in ready][:300])
+
+
+def _of_source(query, source: str | None):
+    if source == "allegro":
+        return query.where(BaseOrder.source == "allegro")
+    if source == "shop":
+        return query.where(or_(BaseOrder.source.is_(None), BaseOrder.source != "allegro"))
+    return query
+
+
+async def _ready_list(db: AsyncSession, source: str | None) -> list[BaseOrderOut]:
+    """The ready orders in the statuses in the order of making, then the packed ones newest first."""
+    in_status = _of_source(
+        select(BaseOrder)
+        .where(BaseOrder.state == "accepted", BaseOrder.in_status.is_(True))
+        .order_by(
+            BaseOrder.ship_by.asc().nulls_last(),
+            BaseOrder.date_confirmed.asc().nulls_last(),
+            BaseOrder.order_id.asc(),
+        ),
+        source,
+    )
+    rows = list((await db.execute(in_status)).scalars())
+    ready = await _ready_orders(db, rows)
+    rows = [row for row in rows if row.order_id in ready][:300]
+    packed = _of_source(
+        select(BaseOrder)
+        .where(BaseOrder.state.in_(("new", "accepted")), BaseOrder.in_status.is_(False))
+        .order_by(BaseOrder.date_confirmed.desc().nulls_last(), BaseOrder.order_id.desc()),
+        source,
+    )
+    rows += list((await db.execute(packed.limit(300 - len(rows)))).scalars()) if len(rows) < 300 else []
+    return await _orders_out(db, rows)
 
 
 async def _get_order(db: AsyncSession, order_id: int) -> BaseOrder:
@@ -624,6 +662,8 @@ async def accept_order(
     row = await _get_order(db, order_id)
     if row.state == "cancelled":
         raise HTTPException(409, "The order was cancelled in Base")
+    if svc.is_packed(row):
+        raise HTTPException(409, "The order is packed in Base: nothing to print for it")
     choices = None
     if data is not None and data.products is not None:
         choices = [
@@ -834,9 +874,7 @@ async def _withdraw_preview(db: AsyncSession, row: BaseOrder, return_done: bool)
             ids = {spec.id for spec in specs}
             coming = await product_service.stock_pool(db, product)
             for job in await product_service.queued_jobs(db, product.id):
-                planner.pool_add(
-                    coming, product_service.piece_printer(job), product_service.job_pieces(job, ids)
-                )
+                planner.pool_add(coming, product_service.piece_printer(job), product_service.job_pieces(job, ids))
             needs = product_service.needs_of(await product_service.open_orders(db, product.id))
             taken = planner.allocate(specs, coming, needs)
             for spec in specs:

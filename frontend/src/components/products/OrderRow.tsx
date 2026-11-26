@@ -68,7 +68,7 @@ function WhenCell({ order }: { order: BaseOrder }) {
   }
   const kind = shipKind(order.ship_by);
   const date = formatDateOnly(order.ship_by, { weekday: 'short', day: 'numeric', month: 'short' });
-  const done = order.ready || order.state === 'cancelled' || !order.in_status;
+  const done = order.ready || order.state === 'cancelled' || !!order.packed;
   const style: Record<string, string> = {
     late: 'bg-red-500/20 text-red-600 dark:text-red-300',
     today: 'bg-amber-500/20 text-amber-700 dark:text-amber-300',
@@ -163,6 +163,17 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
   const { data: ui } = useUiSettings();
   const timeFormat: TimeFormat = ui?.time_format || 'system';
   const missing = missingParts(order);
+  if (order.packed) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded bg-bambu-dark-tertiary text-bambu-gray-light"
+        title={t('baseSync.packedHint')}
+      >
+        <PackageCheck className="w-3.5 h-3.5" />
+        {t('baseSync.packed')}
+      </span>
+    );
+  }
   if (order.ready) {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded bg-bambu-green/15 text-bambu-green">
@@ -260,6 +271,9 @@ export function OrderRow(props: OrderRowProps) {
   const [allLines, setAllLines] = useState(false);
   const hasProducts = order.lines.some((line) => line.mapping === 'product');
   const waiting = order.state === 'new' || order.state === 'skipped';
+  // Packed in Base: done, listed with the ready ones; nothing to do on it any more.
+  const packedState = !!order.packed && (order.state === 'new' || order.state === 'accepted');
+  const act = canAct && !order.packed;
   const missing = missingParts(order).length > 0;
   // Three lines; the rest behind "+N" (all of them once the row is open).
   const shownLines = allLines || expanded ? order.lines : order.lines.slice(0, 3);
@@ -268,7 +282,7 @@ export function OrderRow(props: OrderRowProps) {
   return (
     <Card
       id={`order-${order.order_id}`}
-      className={`p-3 ${!order.in_status && order.state !== 'cancelled' ? 'opacity-60' : ''} ${
+      className={`p-3 ${order.packed ? 'opacity-60' : ''} ${
         expanded ? 'ring-1 ring-bambu-green/40' : ''
       }`}
     >
@@ -294,7 +308,13 @@ export function OrderRow(props: OrderRowProps) {
               </span>
               {showState && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-dark-tertiary text-bambu-gray-light shrink-0">
-                  {t(order.ready ? 'baseSync.state.ready' : `baseSync.state.${order.state}`)}
+                  {t(
+                    packedState
+                      ? 'baseSync.state.packed'
+                      : order.ready
+                        ? 'baseSync.state.ready'
+                        : `baseSync.state.${order.state}`,
+                  )}
                 </span>
               )}
             </div>
@@ -304,9 +324,6 @@ export function OrderRow(props: OrderRowProps) {
                 .join(' · ')}
               <span className="hidden lg:inline"> · Base {order.order_id}</span>
             </div>
-            {!order.in_status && order.state !== 'cancelled' && (
-              <div className="text-xs text-bambu-gray">{t('baseSync.movedOn')}</div>
-            )}
           </div>
           <span className="lg:hidden ml-auto text-xs text-bambu-gray shrink-0">Base {order.order_id}</span>
         </div>
@@ -332,7 +349,7 @@ export function OrderRow(props: OrderRowProps) {
           <ProgressCell order={order} partNames={partNames} />
         </div>
 
-        {canAct && (
+        {act && (
           <div className="flex flex-wrap justify-end gap-2">
             {order.state === 'new' && (
               <Button size="sm" variant="ghost" className={TOUCH} onClick={onSkip} disabled={busy}>
@@ -372,7 +389,7 @@ export function OrderRow(props: OrderRowProps) {
         )}
       </div>
       {expanded && hasProducts && (
-        <OrderPartsPanel order={order} canAct={canAct} onPrint={onPrint} printing={busy} onWithdraw={onWithdraw} />
+        <OrderPartsPanel order={order} canAct={act} onPrint={onPrint} printing={busy} onWithdraw={onWithdraw} />
       )}
     </Card>
   );

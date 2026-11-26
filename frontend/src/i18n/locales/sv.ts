@@ -9425,7 +9425,8 @@ errors: {
     map: 'Koppla',
     notPrinted: 'Skrivs inte ut',
     noOrders: 'Inga beställningar.',
-    movedOn: 'flyttad i Base',
+    packed: 'Packad',
+    packedHint: 'Flyttad vidare i Base (att skicka, skickad): inget mer skrivs ut för den.',
     shipBy: 'skickas senast {{date}}',
     heldBack: '{{print}} av {{total}} skrivs ut',
     heldAll: 'finns redan',
@@ -9444,6 +9445,7 @@ errors: {
       ready: 'klar',
       skipped: 'överhoppad',
       cancelled: 'avbruten',
+      packed: 'packad',
     },
     mapping: {
       not_printed: 'skrivs inte ut',
@@ -9541,6 +9543,7 @@ errors: {
       later: 'Om 3+ dagar',
       allegroNoDate: 'Allegro · utan leveransdatum',
       shop: 'Butik · äldst först',
+      packed: 'Packade',
     },
     column: {
       when: 'Skickas senast',

@@ -9396,7 +9396,8 @@ export default {
     map: 'Przypisz',
     notPrinted: 'Nie drukujemy',
     noOrders: 'Brak zamówień.',
-    movedOn: 'przestawione w Base',
+    packed: 'Spakowane',
+    packedHint: 'Poszło w Base dalej (do wysłania, wysłane): nic więcej się dla niego nie drukuje.',
     shipBy: 'wysyłka do {{date}}',
     heldBack: 'drukujemy {{print}} z {{total}}',
     heldAll: 'mam gotowe',
@@ -9415,6 +9416,7 @@ export default {
       ready: 'gotowe',
       skipped: 'pominięte',
       cancelled: 'anulowane',
+      packed: 'spakowane',
     },
     mapping: {
       not_printed: 'nie drukujemy',
@@ -9512,6 +9514,7 @@ export default {
       later: 'Za 3+ dni',
       allegroNoDate: 'Allegro · bez terminu',
       shop: 'Sklep · od najstarszego',
+      packed: 'Spakowane',
     },
     column: {
       when: 'Termin',

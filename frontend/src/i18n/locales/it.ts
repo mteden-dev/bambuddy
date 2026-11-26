@@ -9328,7 +9328,8 @@ export default {
     map: 'Associa',
     notPrinted: 'Non si stampa',
     noOrders: 'Nessun ordine.',
-    movedOn: 'spostato in Base',
+    packed: 'Imballato',
+    packedHint: 'Avanzato in Base (da spedire, spedito): non si stampa più nulla per esso.',
     shipBy: 'spedire entro {{date}}',
     heldBack: 'si stampano {{print}} su {{total}}',
     heldAll: 'già pronto',
@@ -9347,6 +9348,7 @@ export default {
       ready: 'pronto',
       skipped: 'saltato',
       cancelled: 'annullato',
+      packed: 'imballato',
     },
     mapping: {
       not_printed: 'non si stampa',
@@ -9444,6 +9446,7 @@ export default {
       later: 'Tra 3+ giorni',
       allegroNoDate: 'Allegro · senza data di spedizione',
       shop: 'Negozio · prima i più vecchi',
+      packed: 'Imballati',
     },
     column: {
       when: 'Spedizione',

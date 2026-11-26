@@ -9396,7 +9396,8 @@ export default {
     map: 'Map',
     notPrinted: 'Not printed',
     noOrders: 'No orders here.',
-    movedOn: 'moved on in Base',
+    packed: 'Packed',
+    packedHint: 'Moved on in Base (to send, sent): nothing more is printed for it.',
     shipBy: 'ship by {{date}}',
     heldBack: 'printing {{print}} of {{total}}',
     heldAll: 'have it ready',
@@ -9415,6 +9416,7 @@ export default {
       ready: 'ready',
       skipped: 'skipped',
       cancelled: 'cancelled',
+      packed: 'packed',
     },
     mapping: {
       not_printed: 'not printed',
@@ -9512,6 +9514,7 @@ export default {
       later: 'In 3+ days',
       allegroNoDate: 'Allegro · no ship date',
       shop: 'Shop · oldest first',
+      packed: 'Packed',
     },
     column: {
       when: 'Ship by',

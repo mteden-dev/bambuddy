@@ -258,10 +258,15 @@ i pozycje (SKU, nazwa, ilość). Imienia, adresu, telefonu ani maila nie zapisuj
   źródłem i terminem; `for_stock`, gdy płyta nie jest dla żadnego zamówienia. Stan idzie
   do zamówień najpierw, potem zadania w kolejności druku, najbliższy termin pierwszy; jedna płyta
   bywa dla kilku zamówień. Dopóki zamówienie jest w którymś z tych statusów, zmiany pozycji w Base (ilość,
-  nowa pozycja, dopisane SKU) idą za nim. Zamówienie przestawione w Base dalej (np. „W produkcji”)
-  zachowuje swoje druki; to w statusie anulowanych (`cancel_status_id`) anuluje otwarte zamówienia
-  produktów, a jeśli było jeszcze w tych statusach (nie spakowane, nie wysłane), także gotowe: ich
-  pudełka wracają na stan.
+  nowa pozycja, dopisane SKU) idą za nim. Zamówienie, które wyszło z tych statusów i nie jest
+  anulowane, jest **spakowane** (`packed: true`; przestawione na „do wysłania” albo „wysłane”):
+  nic więcej się dla niego nie drukuje. Jego otwarte zamówienia produktów stają się gotowe i
+  biorą to, co jest dla nich na stanie, przed innymi zamówieniami (to poszło do paczki; reszta
+  była skądinąd), a czekające wydruki znikają z kolejki. Wadliwe znalezione potem przy sprawdzaniu
+  go nie otwierają, a `accept` odpowiada 409. Spakowane są w `state=ready` po gotowych (najnowsze
+  pierwsze), nie w `new` ani `accepted`, i w liczbach `ready`. Zamówienie w statusie anulowanych
+  (`cancel_status_id`) anuluje otwarte zamówienia produktów, a jeśli było jeszcze w tych statusach
+  (nie spakowane, nie wysłane), także gotowe: ich pudełka wracają na stan.
 - **Termin** to termin wysyłki z platformy: `ship_date_to` z `getOrderTransactionData` w Base
   (dla Allegro koniec dnia, w którym trzeba wysłać). Bambuddy czyta go raz na zamówienie (do 40
   zamówień na odczyt, reszta przy następnym) i pokazuje jako `ship_by` w `GET /base-sync/orders`;

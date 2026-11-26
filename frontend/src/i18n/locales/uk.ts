@@ -9384,7 +9384,8 @@ export default {
     map: 'Прив\'язати',
     notPrinted: 'Не друкуємо',
     noOrders: 'Замовлень немає.',
-    movedOn: 'переміщено в Base',
+    packed: 'Запаковано',
+    packedHint: 'Пересунуто в Base далі (до відправки, відправлено): для нього більше нічого не друкується.',
     shipBy: 'відправити до {{date}}',
     heldBack: 'друкуємо {{print}} з {{total}}',
     heldAll: 'уже є',
@@ -9403,6 +9404,7 @@ export default {
       ready: 'готово',
       skipped: 'пропущено',
       cancelled: 'скасовано',
+      packed: 'запаковано',
     },
     mapping: {
       not_printed: 'не друкуємо',
@@ -9500,6 +9502,7 @@ export default {
       later: 'Через 3+ дні',
       allegroNoDate: 'Allegro · без терміну відправки',
       shop: 'Магазин · спершу старші',
+      packed: 'Запаковані',
     },
     column: {
       when: 'Відправка',
