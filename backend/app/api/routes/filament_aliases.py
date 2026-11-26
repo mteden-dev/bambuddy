@@ -14,12 +14,16 @@ from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.models.user import User
+from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.services import filament_aliases as service
 
 router = APIRouter(prefix="/filament-aliases", tags=["filament-aliases"])
 
 
-class AliasesIn(BaseModel):
+class AliasesIn(IgnoresNullForRequiredColumns):
+    # Stored in one settings row, so no column says a field can't be null.
+    __orm_table__ = "settings"
+
     # Each group: colours ("#RRGGBB" or "RRGGBB") or profiles (tray_info_idx) that are one.
     colors: list[list[str]] = Field(default_factory=list, max_length=service.MAX_GROUPS)
     presets: list[list[str]] = Field(default_factory=list, max_length=service.MAX_GROUPS)
