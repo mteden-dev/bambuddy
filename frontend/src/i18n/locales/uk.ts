@@ -7773,6 +7773,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Однакові кольори й профілі',
+    description: 'Для файлів, що називають один філамент по-різному: нарізані на різних профілях одного філаменту або з кольором, обраним пізніше наново. Завдання, які вимагають колір із файлу, тоді беруть котушку будь-якого кольору чи профілю з його групи. Те, що повідомляють файли й принтери, не змінюється.',
+    presets: 'Профілі філаменту',
+    presetsHint: 'Профіль, на якому нарізано файл, і той, що повідомляє слот AMS, наприклад GFG99 (Generic PETG) і ваш власний пресет того ж PETG.',
+    colors: 'Кольори',
+    colorsHint: 'Кольори, які є одним кольором філаменту, наприклад старий і новий вибір того самого FDE.',
+    none: 'Поки немає.',
+    addPresetGroup: 'Нова група профілів',
+    addColorGroup: 'Нова група кольорів',
+    addPreset: 'Додати профіль…',
+    addColor: 'Додати колір…',
+    typeOther: 'Ввести інший…',
+    add: 'Додати',
+    removeMember: 'Видалити {{value}}',
+    removeGroup: 'Видалити групу',
+    needsTwo: 'Група потребує щонайменше двох; один не зберігається.',
+    invalidColor: 'Колір — це шість шістнадцяткових цифр, наприклад #E2DF60.',
+    invalidPreset: 'Введіть id профілю, наприклад GFG99.',
+    queue: 'черга',
+    saved: 'Збережено',
+  },
   slotSpool: {
     sectionTitle: 'Котушка в цьому слоті',
     full: 'Повна котушка – {{grams}} г',

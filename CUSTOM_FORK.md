@@ -130,6 +130,14 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     pyta też o slot AMS, którego ilości nikt nie liczy. Dwa filamenty pliku zmapowane na jeden slot
     są ważone razem. Tylko wbudowany magazyn (nie Spoolman). Logika: `services/slot_spools.py`,
     API `/slot-spools`,
+  - **te same kolory i profile** (Ustawienia → Filament, jak scalanie w SimplyPrint): grupy
+    kolorów (np. stary i nowy FDE) i profili filamentu (`tray_info_idx`, np. GFG99 i własny
+    preset tego samego PETG), które dopasowanie w kolejce traktuje jak jedno. Zadanie
+    z wymuszonym kolorem bierze wtedy szpulę w dowolnym kolorze lub profilu z grupy; dotyczy też
+    planera produktów, filtra kolejki na karcie drukarki i oceny koloru w oknie druku. To, co
+    raportują pliki i drukarki, się nie zmienia. Logika: `services/filament_aliases.py`
+    (wpięta w `_normalize_color_for_compare` i porównania presetu w `print_scheduler.py`),
+    API `/filament-aliases`, jeden wiersz ustawień `filament_aliases`,
   - **produkty z części** (osobna pozycja **Produkty** w menu bocznym, pod kolejką; tu będzie
     rosła synchronizacja zamówień): produkt to części z liczbą sztuk na
     produkt (np. pudełko: góra, dół, tray) i płyty, czyli pocięte pliki z biblioteki, każdy dla

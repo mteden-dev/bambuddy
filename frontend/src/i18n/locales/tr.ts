@@ -7676,6 +7676,29 @@ export default {
 
   // AMS Yuva Yapılandırma Modali
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Aynı renkler ve profiller',
+    description: 'Bir filamenti iki şekilde adlandıran dosyalar için: aynı filamentin farklı profilleriyle dilimlenmiş ya da rengi sonradan yeniden seçilmiş. Dosyanın rengini isteyen işler o zaman grubundaki herhangi bir renk veya profildeki makarayı alır. Dosyaların ve yazıcıların bildirdikleri aynı kalır.',
+    presets: 'Filament profilleri',
+    presetsHint: 'Bir dosyanın dilimlendiği profil ile bir AMS yuvasının bildirdiği profil, örn. GFG99 (Generic PETG) ve aynı PETG için kendi ön ayarınız.',
+    colors: 'Renkler',
+    colorsHint: 'Tek bir filament rengi olan renkler, örn. aynı FDE\'nin eski ve yeni seçimi.',
+    none: 'Henüz yok.',
+    addPresetGroup: 'Yeni profil grubu',
+    addColorGroup: 'Yeni renk grubu',
+    addPreset: 'Profil ekle…',
+    addColor: 'Renk ekle…',
+    typeOther: 'Başka yaz…',
+    add: 'Ekle',
+    removeMember: '{{value}} kaldır',
+    removeGroup: 'Grubu kaldır',
+    needsTwo: 'Bir grup en az iki tane ister; tek başına olan kaydedilmez.',
+    invalidColor: 'Renk altı onaltılık basamaktır, örn. #E2DF60.',
+    invalidPreset: 'Bir profil kimliği girin, örn. GFG99.',
+    queue: 'kuyruk',
+    saved: 'Kaydedildi',
+  },
   slotSpool: {
     sectionTitle: 'Bu yuvadaki makara',
     full: 'Dolu makara – {{grams}} g',

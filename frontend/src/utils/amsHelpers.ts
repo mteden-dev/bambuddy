@@ -3,6 +3,7 @@
  * These functions handle color normalization, slot labeling, and tray ID calculations
  * for AMS, AMS-HT, and external spool configurations.
  */
+import { aliasColor } from './filamentAliases';
 import { parseUTCDate } from './date';
 import { settingIdToFilamentId } from './filamentIds';
 import {
@@ -41,7 +42,8 @@ export function normalizeColor(color: string | null | undefined): string {
  */
 export function normalizeColorForCompare(color: string | undefined): string {
   if (!color) return '';
-  return color.replace('#', '').toLowerCase().substring(0, 6);
+  // Fork: a colour marked as the same as another compares as that one (utils/filamentAliases).
+  return aliasColor(color.replace('#', '').toLowerCase().substring(0, 6));
 }
 
 /**

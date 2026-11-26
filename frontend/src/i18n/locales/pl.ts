@@ -7785,6 +7785,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Te same kolory i profile',
+    description: 'Dla plików, które nazywają jeden filament na dwa sposoby: pocięte na różnych profilach tego samego filamentu albo z kolorem wybranym później na nowo. Zadania wymagające koloru z pliku biorą wtedy szpulę w dowolnym kolorze lub profilu z jego grupy. To, co raportują pliki i drukarki, zostaje bez zmian.',
+    presets: 'Profile filamentu',
+    presetsHint: 'Profil, na którym pocięto plik, i ten, który raportuje slot AMS, np. GFG99 (Generic PETG) i Twój własny preset tego samego PETG.',
+    colors: 'Kolory',
+    colorsHint: 'Kolory, które są jednym kolorem filamentu, np. stary i nowy odcień tego samego FDE.',
+    none: 'Na razie brak.',
+    addPresetGroup: 'Nowa grupa profili',
+    addColorGroup: 'Nowa grupa kolorów',
+    addPreset: 'Dodaj profil…',
+    addColor: 'Dodaj kolor…',
+    typeOther: 'Wpisz inny…',
+    add: 'Dodaj',
+    removeMember: 'Usuń {{value}}',
+    removeGroup: 'Usuń grupę',
+    needsTwo: 'Grupa potrzebuje co najmniej dwóch; pojedyncza nie zostanie zapisana.',
+    invalidColor: 'Kolor to sześć cyfr szesnastkowych, np. #E2DF60.',
+    invalidPreset: 'Wpisz identyfikator profilu, np. GFG99.',
+    queue: 'kolejka',
+    saved: 'Zapisano',
+  },
   slotSpool: {
     sectionTitle: 'Szpula w tym slocie',
     full: 'Pełna szpula – {{grams}} g',

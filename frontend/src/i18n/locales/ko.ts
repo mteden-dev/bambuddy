@@ -7422,6 +7422,29 @@ export default {
     }
   },
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: '같은 색상과 프로필',
+    description: '하나의 필라멘트를 두 가지로 부르는 파일용: 같은 필라멘트의 다른 프로필로 슬라이스했거나 나중에 색을 다시 고른 경우. 파일의 색을 요구하는 작업은 그 그룹의 어떤 색이나 프로필의 스풀이든 사용합니다. 파일과 프린터가 보고하는 내용은 그대로입니다.',
+    presets: '필라멘트 프로필',
+    presetsHint: '파일을 슬라이스한 프로필과 AMS 슬롯이 보고하는 프로필. 예: GFG99(Generic PETG)와 같은 PETG의 사용자 프리셋.',
+    colors: '색상',
+    colorsHint: '하나의 필라멘트 색인 색상. 예: 같은 FDE의 예전 선택과 새 선택.',
+    none: '아직 없음.',
+    addPresetGroup: '새 프로필 그룹',
+    addColorGroup: '새 색상 그룹',
+    addPreset: '프로필 추가…',
+    addColor: '색상 추가…',
+    typeOther: '다른 값 입력…',
+    add: '추가',
+    removeMember: '{{value}} 제거',
+    removeGroup: '그룹 제거',
+    needsTwo: '그룹에는 최소 두 개가 필요합니다. 하나만 있으면 저장되지 않습니다.',
+    invalidColor: '색상은 16진수 6자리입니다(예: #E2DF60).',
+    invalidPreset: '프로필 ID를 입력하세요(예: GFG99).',
+    queue: '대기열',
+    saved: '저장됨',
+  },
   slotSpool: {
     sectionTitle: '이 슬롯의 스풀',
     full: '새 스풀 – {{grams}} g',

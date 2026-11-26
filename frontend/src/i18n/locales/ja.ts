@@ -7733,6 +7733,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: '同じ色とプロファイル',
+    description: '1つのフィラメントを2通りに呼ぶファイル向け：同じフィラメントの別プロファイルでスライスしたもの、または後から色を選び直したもの。ファイルの色を要求するジョブは、そのグループのどの色・プロファイルのスプールでも使います。ファイルとプリンターの報告内容は変わりません。',
+    presets: 'フィラメントプロファイル',
+    presetsHint: 'ファイルをスライスしたプロファイルと AMS スロットが報告するもの。例：GFG99（Generic PETG）と同じ PETG の自作プリセット。',
+    colors: '色',
+    colorsHint: '1つのフィラメント色である色。例：同じ FDE の古い選択と新しい選択。',
+    none: 'まだありません。',
+    addPresetGroup: '新しいプロファイルグループ',
+    addColorGroup: '新しい色グループ',
+    addPreset: 'プロファイルを追加…',
+    addColor: '色を追加…',
+    typeOther: 'ほかを入力…',
+    add: '追加',
+    removeMember: '{{value}} を削除',
+    removeGroup: 'グループを削除',
+    needsTwo: 'グループには2つ以上必要です。1つだけでは保存されません。',
+    invalidColor: '色は16進数6桁です（例：#E2DF60）。',
+    invalidPreset: 'プロファイル ID を入力してください（例：GFG99）。',
+    queue: 'キュー',
+    saved: '保存しました',
+  },
   slotSpool: {
     sectionTitle: 'このスロットのスプール',
     full: '新品スプール – {{grams}} g',

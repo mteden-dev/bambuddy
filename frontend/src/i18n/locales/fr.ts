@@ -7720,6 +7720,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Mêmes couleurs et profils',
+    description: 'Pour les fichiers qui nomment un filament de deux façons : tranchés avec différents profils du même filament, ou avec une couleur choisie à nouveau plus tard. Les travaux qui exigent la couleur de leur fichier prennent alors une bobine de n’importe quelle couleur ou profil de son groupe. Ce que signalent les fichiers et les imprimantes ne change pas.',
+    presets: 'Profils de filament',
+    presetsHint: 'Le profil avec lequel un fichier a été tranché et celui qu’un emplacement AMS signale, p. ex. GFG99 (Generic PETG) et votre propre préréglage du même PETG.',
+    colors: 'Couleurs',
+    colorsHint: 'Des couleurs qui sont une seule couleur de filament, p. ex. un ancien et un nouveau choix du même FDE.',
+    none: 'Aucun pour l’instant.',
+    addPresetGroup: 'Nouveau groupe de profils',
+    addColorGroup: 'Nouveau groupe de couleurs',
+    addPreset: 'Ajouter un profil…',
+    addColor: 'Ajouter une couleur…',
+    typeOther: 'Saisir un autre…',
+    add: 'Ajouter',
+    removeMember: 'Retirer {{value}}',
+    removeGroup: 'Retirer le groupe',
+    needsTwo: 'Un groupe en demande au moins deux ; un seul n’est pas enregistré.',
+    invalidColor: 'Une couleur, ce sont six chiffres hexadécimaux, p. ex. #E2DF60.',
+    invalidPreset: 'Saisissez un id de profil, p. ex. GFG99.',
+    queue: 'file',
+    saved: 'Enregistré',
+  },
   slotSpool: {
     sectionTitle: 'Bobine dans cet emplacement',
     full: 'Bobine pleine – {{grams}} g',

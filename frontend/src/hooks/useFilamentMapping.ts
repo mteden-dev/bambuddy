@@ -15,6 +15,7 @@ import {
   rackExternalLabel,
 } from '../utils/amsHelpers';
 import { externalSlotIndex, trayLayoutOf } from '../utils/trayIds';
+import { aliasPreset } from '../utils/filamentAliases';
 import type { PrinterStatus, SlotSpoolIdentity } from '../api/client';
 
 /** Global-tray-id → the identity of the spool Bambuddy has bound to that slot. */
@@ -385,7 +386,8 @@ export function buildFilamentComparison(
 
     // Check if tray_info_idx is unique among available trays
     if (reqTrayInfoIdx) {
-      const idxMatches = available.filter((f) => f.trayInfoIdx === reqTrayInfoIdx);
+      // Fork: profiles marked as the same count as one (utils/filamentAliases).
+      const idxMatches = available.filter((f) => aliasPreset(f.trayInfoIdx) === aliasPreset(reqTrayInfoIdx));
       if (idxMatches.length === 1) {
         // Unique tray_info_idx - use it as definitive match
         idxMatch = idxMatches[0];

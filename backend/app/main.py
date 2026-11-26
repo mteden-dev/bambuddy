@@ -12286,6 +12286,10 @@ async def lifespan(app: FastAPI):
     from backend.app.services import slot_spools
 
     await slot_spools.seed_settings()
+    # Fork: colours and filament profiles marked as the same (services/filament_aliases).
+    from backend.app.services import filament_aliases
+
+    await filament_aliases.load_at_startup()
 
     # Browser download tokens expire after five minutes. Remove abandoned
     # prepared ZIPs at startup as well as before each new preparation so a
@@ -13491,6 +13495,11 @@ app.include_router(printer_tags.router, prefix=app_settings.api_prefix)
 from backend.app.api.routes import slot_spools as slot_spools_routes  # noqa: E402
 
 app.include_router(slot_spools_routes.router, prefix=app_settings.api_prefix)
+
+# Fork: colours and filament profiles that are the same (services/filament_aliases.py).
+from backend.app.api.routes import filament_aliases as filament_aliases_routes  # noqa: E402
+
+app.include_router(filament_aliases_routes.router, prefix=app_settings.api_prefix)
 
 # Fork: products made of parts; orders become queue jobs (services/products.py).
 from backend.app.api.routes import products as products_routes  # noqa: E402

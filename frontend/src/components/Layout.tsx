@@ -13,6 +13,7 @@ import { api, supportApi, pendingUploadsApi, type Permission } from '../api/clie
 import { getIconByName } from './IconPicker';
 import { useIsSidebarCompact } from '../hooks/useIsSidebarCompact';
 import { useColorCatalogVersion } from '../hooks/useColorCatalogVersion';
+import { useFilamentAliasesSync } from '../hooks/useFilamentAliasesSync';
 import { useSponsorPrompt } from '../hooks/useSponsorPrompt';
 import { useUnknownTagPrompt } from '../hooks/useUnknownTagPrompt';
 import { UnknownSpoolModal } from './UnknownSpoolModal';
@@ -117,6 +118,8 @@ export function Layout() {
   // render — refresh with the real catalog names. See #857.
   useColorCatalogVersion();
   const { user, authEnabled, logout, hasPermission, hasAnyPermission, loading: authLoading } = useAuth();
+  // Fork: colours and filament profiles marked as the same, for the matching hints.
+  useFilamentAliasesSync(!authLoading && hasPermission('settings:read'));
   const { showToast } = useToast();
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [changePasswordData, setChangePasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });

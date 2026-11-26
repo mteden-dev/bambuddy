@@ -7814,6 +7814,29 @@ errors: {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Samma färger och profiler',
+    description: 'För filer som kallar ett filament på två sätt: slicade med olika profiler av samma filament eller med en färg som valts om senare. Jobb som kräver sin fils färg tar då en spole i valfri färg eller profil i gruppen. Det som filerna och skrivarna rapporterar förblir som det är.',
+    presets: 'Filamentprofiler',
+    presetsHint: 'Profilen en fil slicades med och den som en AMS-plats rapporterar, t.ex. GFG99 (Generic PETG) och din egen förinställning av samma PETG.',
+    colors: 'Färger',
+    colorsHint: 'Färger som är en filamentfärg, t.ex. ett gammalt och ett nytt val av samma FDE.',
+    none: 'Inga än.',
+    addPresetGroup: 'Ny profilgrupp',
+    addColorGroup: 'Ny färggrupp',
+    addPreset: 'Lägg till profil…',
+    addColor: 'Lägg till färg…',
+    typeOther: 'Skriv en annan…',
+    add: 'Lägg till',
+    removeMember: 'Ta bort {{value}}',
+    removeGroup: 'Ta bort grupp',
+    needsTwo: 'En grupp behöver minst två; en ensam sparas inte.',
+    invalidColor: 'En färg är sex hexadecimala siffror, t.ex. #E2DF60.',
+    invalidPreset: 'Ange ett profil-id, t.ex. GFG99.',
+    queue: 'kö',
+    saved: 'Sparad',
+  },
   slotSpool: {
     sectionTitle: 'Spole i detta fack',
     full: 'Full spole – {{grams}} g',

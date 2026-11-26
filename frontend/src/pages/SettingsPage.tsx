@@ -22,6 +22,7 @@ import { PreheatFilamentTargetsEditor } from '../components/PreheatFilamentTarge
 import type { Printer as PrinterInfo, APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode, ModelDispatchOrder } from '../api/client';
 import { Card, CardContent, CardDensityProvider, CardHeader } from '../components/Card';
 import { SlotSpoolCheckSettings } from '../components/slotSpool/SlotSpoolCheckSettings';
+import { FilamentAliasesCard } from '../components/filamentAliases/FilamentAliasesCard';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { CameraTokensSection } from './CameraTokensPage';
 import { ConnectedAppsSection } from '../components/ConnectedAppsSection';
@@ -6443,6 +6444,9 @@ export function SettingsPage() {
                 />
               </CardContent>
             </Card>
+
+            {/* Fork: colours and filament profiles that count as the same */}
+            <FilamentAliasesCard />
 
             {/* Per-Printer Mapping Default */}
             <Card id="card-printmodal">

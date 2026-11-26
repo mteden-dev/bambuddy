@@ -7732,6 +7732,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Gleiche Farben und Profile',
+    description: 'Für Dateien, die ein Filament auf zwei Arten benennen: mit verschiedenen Profilen desselben Filaments gesliced oder mit einer später neu gewählten Farbe. Aufträge, die die Farbe ihrer Datei verlangen, nehmen dann eine Spule in jeder Farbe oder jedem Profil ihrer Gruppe. Was Dateien und Drucker melden, bleibt unverändert.',
+    presets: 'Filamentprofile',
+    presetsHint: 'Das Profil, mit dem eine Datei gesliced wurde, und das, das ein AMS-Slot meldet, z. B. GFG99 (Generic PETG) und dein eigenes Preset desselben PETG.',
+    colors: 'Farben',
+    colorsHint: 'Farben, die eine Filamentfarbe sind, z. B. eine alte und eine neue Wahl desselben FDE.',
+    none: 'Noch keine.',
+    addPresetGroup: 'Neue Profilgruppe',
+    addColorGroup: 'Neue Farbgruppe',
+    addPreset: 'Profil hinzufügen…',
+    addColor: 'Farbe hinzufügen…',
+    typeOther: 'Andere eingeben…',
+    add: 'Hinzufügen',
+    removeMember: '{{value}} entfernen',
+    removeGroup: 'Gruppe entfernen',
+    needsTwo: 'Eine Gruppe braucht mindestens zwei; eine einzelne wird nicht gespeichert.',
+    invalidColor: 'Eine Farbe sind sechs Hex-Ziffern, z. B. #E2DF60.',
+    invalidPreset: 'Gib eine Profil-ID ein, z. B. GFG99.',
+    queue: 'Warteschlange',
+    saved: 'Gespeichert',
+  },
   slotSpool: {
     sectionTitle: 'Spule in diesem Slot',
     full: 'Volle Spule – {{grams}} g',

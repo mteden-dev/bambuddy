@@ -7717,6 +7717,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: '相同的颜色和预设',
+    description: '适用于用两种方式命名同一耗材的文件：用同一耗材的不同预设切片，或后来重新选了颜色。要求文件颜色的任务会使用该组中任一颜色或预设的料盘。文件和打印机报告的内容保持不变。',
+    presets: '耗材预设',
+    presetsHint: '切片文件所用的预设与 AMS 槽位报告的预设，例如 GFG99（Generic PETG）和你自己的同款 PETG 预设。',
+    colors: '颜色',
+    colorsHint: '属于同一耗材颜色的颜色，例如同一 FDE 的旧选择和新选择。',
+    none: '暂无。',
+    addPresetGroup: '新建预设组',
+    addColorGroup: '新建颜色组',
+    addPreset: '添加预设…',
+    addColor: '添加颜色…',
+    typeOther: '输入其他…',
+    add: '添加',
+    removeMember: '移除 {{value}}',
+    removeGroup: '移除组',
+    needsTwo: '一个组至少需要两个；只有一个不会保存。',
+    invalidColor: '颜色为六位十六进制数，例如 #E2DF60。',
+    invalidPreset: '请输入预设 ID，例如 GFG99。',
+    queue: '队列',
+    saved: '已保存',
+  },
   slotSpool: {
     sectionTitle: '此槽位的料卷',
     full: '整卷 – {{grams}} g',

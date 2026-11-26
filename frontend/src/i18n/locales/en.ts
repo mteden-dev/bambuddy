@@ -7785,6 +7785,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Same colours and profiles',
+    description: 'For files that name one filament two ways: sliced on different profiles of the same filament, or with a colour picked again later. Jobs that ask for their file\'s colour then take a spool in any colour or profile of its group. What the files and printers report stays as it is.',
+    presets: 'Filament profiles',
+    presetsHint: 'The profile a file was sliced with and the one an AMS slot reports, e.g. GFG99 (Generic PETG) and your own preset of the same PETG.',
+    colors: 'Colours',
+    colorsHint: 'Colours that are one filament colour, e.g. an old and a new pick of the same FDE.',
+    none: 'None yet.',
+    addPresetGroup: 'New profile group',
+    addColorGroup: 'New colour group',
+    addPreset: 'Add a profile…',
+    addColor: 'Add a colour…',
+    typeOther: 'Type another…',
+    add: 'Add',
+    removeMember: 'Remove {{value}}',
+    removeGroup: 'Remove group',
+    needsTwo: 'A group needs at least two; one alone is not saved.',
+    invalidColor: 'A colour is six hex digits, e.g. #E2DF60.',
+    invalidPreset: 'Enter a profile id, e.g. GFG99.',
+    queue: 'queue',
+    saved: 'Saved',
+  },
   slotSpool: {
     sectionTitle: 'Roll in this slot',
     full: 'Full roll – {{grams}} g',

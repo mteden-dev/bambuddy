@@ -7719,6 +7719,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Mesmas cores e perfis',
+    description: 'Para arquivos que chamam um filamento de duas formas: fatiados com perfis diferentes do mesmo filamento ou com uma cor escolhida de novo depois. Trabalhos que exigem a cor do arquivo pegam então um carretel de qualquer cor ou perfil do grupo. O que os arquivos e as impressoras informam continua igual.',
+    presets: 'Perfis de filamento',
+    presetsHint: 'O perfil com que um arquivo foi fatiado e o que um slot do AMS informa, p. ex. GFG99 (Generic PETG) e seu próprio preset do mesmo PETG.',
+    colors: 'Cores',
+    colorsHint: 'Cores que são uma só cor de filamento, p. ex. uma escolha antiga e uma nova do mesmo FDE.',
+    none: 'Nenhum ainda.',
+    addPresetGroup: 'Novo grupo de perfis',
+    addColorGroup: 'Novo grupo de cores',
+    addPreset: 'Adicionar perfil…',
+    addColor: 'Adicionar cor…',
+    typeOther: 'Digitar outro…',
+    add: 'Adicionar',
+    removeMember: 'Remover {{value}}',
+    removeGroup: 'Remover grupo',
+    needsTwo: 'Um grupo precisa de pelo menos dois; um sozinho não é salvo.',
+    invalidColor: 'Uma cor são seis dígitos hexadecimais, p. ex. #E2DF60.',
+    invalidPreset: 'Digite um id de perfil, p. ex. GFG99.',
+    queue: 'fila',
+    saved: 'Salvo',
+  },
   slotSpool: {
     sectionTitle: 'Carretel neste slot',
     full: 'Carretel cheio – {{grams}} g',

@@ -1,4 +1,5 @@
 import type { KProfileWriteResult } from '../utils/kprofileWrite';
+import type { FilamentAliasGroups } from '../utils/filamentAliases';
 import type { BambuCatalogColor } from '../utils/colors';
 import type { ArchivePlatesResponse, LibraryFilePlatesResponse } from '../types/plates';
 import { batched, byField, byId } from './batch';
@@ -9038,6 +9039,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ file_ids: fileIds, tag_ids: tagIds, action }),
     }),
+  // ============ Filament aliases (fork) ============
+  // Colours and filament profiles that count as the same in the queue's
+  // matching (backend services/filament_aliases.py).
+  getFilamentAliases: () => request<FilamentAliases>('/filament-aliases'),
+  setFilamentAliases: (data: FilamentAliasGroups) =>
+    request<FilamentAliases>('/filament-aliases', { method: 'PUT', body: JSON.stringify(data) }),
   // ============ Printer tags (fork) ============
   // Library tags given to printers: an "Any <model>" job goes only to printers
   // with every tag it asks for (backend services/printer_tags.py).
@@ -9913,6 +9920,29 @@ export interface LibraryTagBulkAssignResult {
 }
 
 // Printer tags (fork). Only tagged printers are listed.
+/** Fork (filament aliases): a colour the printers' slots hold or a waiting job asks for. */
+export interface SeenFilamentColor {
+  /** 6-digit lowercase hex, no '#'. */
+  color: string;
+  types: string[];
+  /** Printer names, and "queue" for a waiting job. */
+  where: string[];
+}
+
+/** Fork (filament aliases): a filament profile (tray_info_idx) seen on the printers or in the queue. */
+export interface SeenFilamentPreset {
+  preset: string;
+  types: string[];
+  /** What the printers and the inventory call it. */
+  names: string[];
+  where: string[];
+}
+
+export interface FilamentAliases extends FilamentAliasGroups {
+  seen_colors: SeenFilamentColor[];
+  seen_presets: SeenFilamentPreset[];
+}
+
 export interface PrinterTagsEntry {
   printer_id: number;
   tag_ids: number[];

@@ -33,7 +33,13 @@ from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
-from backend.app.services import drying_preflight, kprofile_drift, print_dispatch_context, stock_forecast
+from backend.app.services import (
+    drying_preflight,
+    filament_aliases,  # fork: colours and profiles that are the same
+    kprofile_drift,
+    print_dispatch_context,
+    stock_forecast,
+)
 from backend.app.services.bambu_ftp import (
     BambuFTPClient,
     FtpFailureKind,
@@ -1825,6 +1831,8 @@ class PrintScheduler:
         self._filament_req_memo.clear()
         self._unmatched_memo.clear()
         async with async_session() as db:
+            # Fork: the colours and profiles someone marked as the same (services/filament_aliases).
+            await filament_aliases.refresh(db)
             # Check if shortest-job-first scheduling is enabled
             sjf_enabled = await self._get_bool_setting(db, "queue_shortest_first")
 
@@ -4005,12 +4013,20 @@ class PrintScheduler:
                 tray_type = tray.get("tray_type")
                 if tray_type:
                     color_norm = self._normalize_color_for_compare(self._normalize_color(tray.get("tray_color")))
-                    loaded.append((canonical_filament_type(tray_type), color_norm, tray.get("tray_info_idx", "") or ""))
+                    loaded.append(
+                        (
+                            canonical_filament_type(tray_type),
+                            color_norm,
+                            filament_aliases.preset(tray.get("tray_info_idx")),
+                        )
+                    )
         for vt in raw_data.get("vt_tray") or []:
             vt_type = vt.get("tray_type")
             if vt_type:
                 color_norm = self._normalize_color_for_compare(self._normalize_color(vt.get("tray_color")))
-                loaded.append((canonical_filament_type(vt_type), color_norm, vt.get("tray_info_idx", "") or ""))
+                loaded.append(
+                    (canonical_filament_type(vt_type), color_norm, filament_aliases.preset(vt.get("tray_info_idx")))
+                )
 
         # One spool per slot, the way the matcher assigns them: two slots asking
         # for the same filament need two spools of it (#3280). Slots naming a
@@ -4020,8 +4036,8 @@ class PrintScheduler:
         taken: set[int] = set()
         for o in sorted(force_overrides, key=lambda o: not o.get("tray_info_idx")):
             o_type = canonical_filament_type(o.get("type") or "")
-            o_color = (o.get("color") or "").replace("#", "").lower()[:6]
-            o_idx = o.get("tray_info_idx") or ""
+            o_color = self._normalize_color_for_compare(o.get("color"))
+            o_idx = filament_aliases.preset(o.get("tray_info_idx"))
             fits = [
                 i
                 for i, (t_type, t_color, t_idx) in enumerate(loaded)
@@ -4653,8 +4669,8 @@ class PrintScheduler:
 
             # A forced slot fits only a tray the matcher would give it (#3280).
             if req.get("force_color_match"):
-                want_idx = req.get("tray_info_idx") or ""
-                have_idx = loaded_tray.get("tray_info_idx") or ""
+                want_idx = filament_aliases.preset(req.get("tray_info_idx"))
+                have_idx = filament_aliases.preset(loaded_tray.get("tray_info_idx"))
                 if self._normalize_color_for_compare(req.get("color")) != self._normalize_color_for_compare(
                     loaded_tray.get("color")
                 ) or (want_idx and have_idx and want_idx != have_idx):
@@ -5079,10 +5095,14 @@ class PrintScheduler:
         return f"#{hex_color}"
 
     def _normalize_color_for_compare(self, color: str | None) -> str:
-        """Normalize color for comparison (lowercase, no hash)."""
+        """Normalize color for comparison (lowercase, no hash).
+
+        Fork: a colour someone marked as the same as another compares as that
+        one (services/filament_aliases).
+        """
         if not color:
             return ""
-        return color.replace("#", "").lower()[:6]
+        return filament_aliases.color(color.replace("#", "").lower()[:6])
 
     def _color_distance(self, color1: str | None, color2: str | None) -> float | None:
         """Perceptual (CIEDE2000) distance, or None when either colour is unusable.
@@ -5293,6 +5313,9 @@ class PrintScheduler:
         """
         if not required:
             return None
+        # Fork: profiles someone marked as the same compare as one (services/filament_aliases).
+        required = filament_aliases.with_presets(required)
+        loaded = filament_aliases.with_presets(loaded)
 
         # Track used trays to avoid duplicate assignment
         used_tray_ids: set[int] = set()

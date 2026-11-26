@@ -58,6 +58,7 @@ export function getWifiStrength(rssi: number): { labelKey: string; color: string
   return { labelKey: 'printers.wifiSignal.veryWeak', color: 'text-red-400', bars: 1 };
 }
 
+import { colorAliases, presetAliases } from './filamentAliases';
 import type { PrinterStatus, PrintQueueItem } from '../api/client';
 
 /** Gcode states with no print loaded. */
@@ -131,14 +132,18 @@ export function filterCompatibleQueueItems(
       if (forceOverrides.length > 0) {
         const allForceMatch = forceOverrides.every(o => {
           const oType = (o.type || '').toUpperCase();
-          const oColor = (o.color || '').replace('#', '').toLowerCase().slice(0, 6);
+          // Fork: any colour or profile marked as the same counts (utils/filamentAliases).
+          const oColors = colorAliases((o.color || '').replace('#', '').toLowerCase().slice(0, 6));
           const oIdx = o.tray_info_idx || '';
           // No variant on the override, or no variant data supplied → type+colour only.
           if (!oIdx || loadedVariants === undefined) {
-            return loadedFilaments.has(`${oType}:${oColor}`);
+            return oColors.some(c => loadedFilaments.has(`${oType}:${c}`));
           }
           // Variant-specific: same idx, or a same-colour tray that reports no idx.
-          return loadedVariants.has(`${oType}:${oColor}:${oIdx}`) || loadedVariants.has(`${oType}:${oColor}:`);
+          const oIdxs = presetAliases(oIdx);
+          return oColors.some(
+            c => loadedVariants.has(`${oType}:${c}:`) || oIdxs.some(i => loadedVariants.has(`${oType}:${c}:${i}`))
+          );
         });
         if (!allForceMatch) return false;
       }
@@ -147,8 +152,8 @@ export function filterCompatibleQueueItems(
       if (prefOverrides.length > 0 && forceOverrides.length === 0) {
         const hasColorMatch = prefOverrides.some(o => {
           const oType = (o.type || '').toUpperCase();
-          const oColor = (o.color || '').replace('#', '').toLowerCase().slice(0, 6);
-          return loadedFilaments.has(`${oType}:${oColor}`);
+          const oColors = colorAliases((o.color || '').replace('#', '').toLowerCase().slice(0, 6));
+          return oColors.some(c => loadedFilaments.has(`${oType}:${c}`));
         });
         if (!hasColorMatch) return false;
       }

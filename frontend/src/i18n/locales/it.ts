@@ -7719,6 +7719,29 @@ export default {
 
   // Configure AMS Slot Modal
   // Fork: slot spools (a roll counted per AMS slot without naming it).
+  // Fork: colours and filament profiles that count as the same
+  filamentAliases: {
+    title: 'Stessi colori e profili',
+    description: 'Per i file che chiamano un filamento in due modi: slicati con profili diversi dello stesso filamento o con un colore scelto di nuovo in seguito. I lavori che richiedono il colore del loro file prendono allora una bobina di qualsiasi colore o profilo del suo gruppo. Ciò che riportano file e stampanti resta com’è.',
+    presets: 'Profili filamento',
+    presetsHint: 'Il profilo con cui è stato slicato un file e quello riportato da uno slot AMS, ad es. GFG99 (Generic PETG) e il tuo preset dello stesso PETG.',
+    colors: 'Colori',
+    colorsHint: 'Colori che sono un unico colore di filamento, ad es. una scelta vecchia e una nuova dello stesso FDE.',
+    none: 'Ancora nessuno.',
+    addPresetGroup: 'Nuovo gruppo di profili',
+    addColorGroup: 'Nuovo gruppo di colori',
+    addPreset: 'Aggiungi un profilo…',
+    addColor: 'Aggiungi un colore…',
+    typeOther: 'Scrivine un altro…',
+    add: 'Aggiungi',
+    removeMember: 'Rimuovi {{value}}',
+    removeGroup: 'Rimuovi gruppo',
+    needsTwo: 'Un gruppo ne richiede almeno due; uno solo non viene salvato.',
+    invalidColor: 'Un colore sono sei cifre esadecimali, ad es. #E2DF60.',
+    invalidPreset: 'Inserisci un id di profilo, ad es. GFG99.',
+    queue: 'coda',
+    saved: 'Salvato',
+  },
   slotSpool: {
     sectionTitle: 'Bobina in questo slot',
     full: 'Bobina piena – {{grams}} g',

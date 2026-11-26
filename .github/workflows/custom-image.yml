@@ -78,6 +78,8 @@ jobs:
             backend/tests/integration/test_products_api_fork.py \
             backend/tests/integration/test_base_sync_api_fork.py \
             backend/tests/unit/test_product_jobs_counted_migration_fork.py \
+            backend/tests/unit/test_filament_aliases_fork.py \
+            backend/tests/integration/test_filament_aliases_api_fork.py \
             backend/tests/unit/test_not_null_update_schemas.py \
             backend/tests/unit/test_sqlite_fk.py \
             backend/tests/unit/test_sqlite_autoincrement.py \
@@ -137,6 +139,8 @@ jobs:
             src/__tests__/components/OrderLabelChip.test.tsx \
             src/__tests__/pages/ProductsPage.test.tsx \
             src/__tests__/components/Layout.test.tsx \
+            src/__tests__/utils/filamentAliases.test.ts \
+            src/__tests__/components/FilamentAliasesCard.test.tsx \
             src/__tests__/pages/SettingsPage.test.tsx
 
   image:
