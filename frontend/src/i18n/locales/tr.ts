@@ -2536,6 +2536,8 @@ export default {
     preferLowestFilament: 'En az kalan filamenti tercih et',
     preferLowestFilamentDesc: 'Birden fazla makara eşleştiğinde, kalan filamenti en az olanı kullan',
     preferLowestFilamentBackupNote: 'Yalnızca yazıcıda AMS Filament Backup etkinleştirildiğinde uygulanır — aksi takdirde seçilen makara bittiğinde yazıcı ikinci bir makaraya geçemez.',
+    requireFileColors: 'Her zaman dosyadaki renkleri iste',
+    requireFileColorsDesc: 'Kuyruktaki her iş, her yuva için "Renk eşleşmesini zorla" işaretliymiş gibi dosyasındaki renkleri ister: yalnızca bu renklere sahip bir yazıcıya gider, hiçbirinde yoksa bekler. Elle değiştirilen bir yuva seçilen rengi ister. Aşağıda aynı olarak işaretlenen renkler sayılır.',
     trackingModeBuiltIn: 'Yerleşik Envanter',
     trackingModeBuiltInDesc: 'RFID otomatik eşleştirme ve kullanım takibi dahil',
     trackingModeSpoolmanDesc: 'Harici filament yönetim sunucusu',

@@ -2533,6 +2533,8 @@ export default {
     preferLowestFilament: 'Niedrigsten Filamentrest bevorzugen',
     preferLowestFilamentDesc: 'Bei mehreren passenden Spulen die mit dem geringsten Restfilament verwenden',
     preferLowestFilamentBackupNote: 'Wirkt nur, wenn AMS Filament Backup am Drucker aktiviert ist — sonst kann der Drucker beim Aufbrauchen der ersten Spule nicht auf eine zweite Spule wechseln.',
+    requireFileColors: 'Immer die Farben aus der Datei verlangen',
+    requireFileColorsDesc: 'Jeder Auftrag in der Warteschlange verlangt die Farben seiner Datei, als wäre „Farbabgleich erzwingen“ für jeden Slot aktiviert: Er geht nur an einen Drucker, der sie hat, und wartet, wo keiner sie hat. Ein von Hand geänderter Slot verlangt die gewählte Farbe. Unten als gleich markierte Farben zählen.',
     trackingModeBuiltIn: 'Integriertes Inventar',
     trackingModeBuiltInDesc: 'RFID-Erkennung und Verbrauchserfassung inklusive',
     trackingModeSpoolmanDesc: 'Externer Filament-Management-Server',

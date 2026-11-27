@@ -2532,6 +2532,8 @@ export default {
     preferLowestFilament: '残量が少ないフィラメントを優先',
     preferLowestFilamentDesc: '複数のスプールが一致する場合、残量が最も少ないものを使用します',
     preferLowestFilamentBackupNote: 'プリンタ側でAMSフィラメントバックアップが有効な場合のみ動作します。無効の場合、選択したスプールが切れても予備スプールに切り替えできません。',
+    requireFileColors: '常にファイルの色を要求する',
+    requireFileColorsDesc: 'キュー内のすべてのジョブは、全スロットで「色の一致を強制」がオンになっているかのようにファイルの色を要求します。その色があるプリンターにだけ送られ、どのプリンターにもなければ待機します。手動で変更したスロットは選んだ色を要求します。下で同じとした色も一致とみなします。',
     trackingModeBuiltIn: '内蔵インベントリ',
     trackingModeBuiltInDesc: 'RFID自動検出と使用量追跡を含む',
     trackingModeSpoolmanDesc: '外部フィラメント管理サーバー',

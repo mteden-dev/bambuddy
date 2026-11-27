@@ -2533,6 +2533,8 @@ export default {
     preferLowestFilament: '優先使用剩餘最少的耗材',
     preferLowestFilamentDesc: '當多個料盤匹配時，使用剩餘耗材最少的那個',
     preferLowestFilamentBackupNote: '僅當印表機端啟用了 AMS 備用料盤時才生效——否則當選中的料盤耗盡時，印表機無法切換到備用料盤。',
+    requireFileColors: '始終要求檔案中的顏色',
+    requireFileColorsDesc: '佇列中的每個任務都要求其檔案中的顏色，就像每個槽位都勾選了「強制顏色匹配」：只會傳送到裝有這些顏色的印表機，沒有則等待。手動變更的槽位要求所選顏色。下方標記為相同的顏色也算匹配。',
     trackingModeBuiltIn: '內建庫存',
     trackingModeBuiltInDesc: '包含 RFID 自動匹配和用量追蹤',
     trackingModeSpoolmanDesc: '外部耗材管理伺服器',

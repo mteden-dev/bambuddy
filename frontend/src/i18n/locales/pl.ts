@@ -2555,6 +2555,8 @@ export default {
     preferLowestFilament: 'Preferuj najmniejszą pozostałą ilość filamentu',
     preferLowestFilamentDesc: 'Gdy pasuje kilka szpul, użyj tej, na której zostało najmniej filamentu',
     preferLowestFilamentBackupNote: 'Działa tylko wtedy, gdy na drukarce włączono AMS Filament Backup — w przeciwnym razie drukarka nie może przełączyć się na drugą szpulę, gdy wybrana się skończy.',
+    requireFileColors: 'Zawsze wymagaj kolorów z pliku',
+    requireFileColorsDesc: 'Każde zadanie w kolejce wymaga kolorów ze swojego pliku, jakby każdy slot miał zaznaczone „Wymuś dopasowanie koloru”: idzie tylko na drukarkę, która je ma, a gdzie żadna ich nie ma, czeka. Slot zmieniony ręcznie wymaga wybranego koloru. Kolory oznaczone niżej jako te same się liczą.',
     trackingModeBuiltIn: 'Wbudowany magazyn',
     trackingModeBuiltInDesc: 'Zawiera automatyczne dopasowanie RFID i śledzenie zużycia',
     trackingModeSpoolmanDesc: 'Zewnętrzny serwer zarządzania filamentem',

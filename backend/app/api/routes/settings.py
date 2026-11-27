@@ -189,6 +189,7 @@ _BOOL_SETTING_KEYS = frozenset(
         "disable_filament_warnings",
         "prefer_lowest_filament",
         "filament_check_per_slot",  # fork: slot spools
+        "require_file_colors",  # fork: services/file_colors
         "check_updates",
         "check_printer_firmware",
         "include_beta_updates",

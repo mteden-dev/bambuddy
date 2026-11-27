@@ -2488,6 +2488,8 @@ export default {
     preferLowestFilament: 'Préférer le filament le plus bas',
     preferLowestFilamentDesc: 'Lorsque plusieurs bobines correspondent, utiliser celle avec le moins de filament restant',
     preferLowestFilamentBackupNote: "Ne prend effet que si AMS Filament Backup est activé sur l'imprimante — sinon, l'imprimante ne peut pas basculer vers une seconde bobine quand celle choisie est vide.",
+    requireFileColors: 'Toujours exiger les couleurs du fichier',
+    requireFileColorsDesc: 'Chaque tâche de la file exige les couleurs de son fichier, comme si « Forcer la correspondance des couleurs » était coché pour chaque emplacement : elle ne part que vers une imprimante qui les a, et attend si aucune ne les a. Un emplacement modifié à la main exige la couleur choisie. Les couleurs marquées comme identiques ci-dessous comptent.',
     trackingModeBuiltIn: 'Inventaire Intégré',
     trackingModeBuiltInDesc: 'Correspondance RFID et suivi de consommation inclus',
     trackingModeSpoolmanDesc: 'Serveur de gestion externe',

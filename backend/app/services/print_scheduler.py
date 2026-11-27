@@ -36,6 +36,7 @@ from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 from backend.app.services import (
     drying_preflight,
     filament_aliases,  # fork: colours and profiles that are the same
+    file_colors,  # fork: every job asks for its file's colours
     kprofile_drift,
     print_dispatch_context,
     stock_forecast,
@@ -744,6 +745,15 @@ _SHORT_HOLD_RECHECK_SECONDS = 120
 def _is_unmatched_hold_reason(reason: str | None) -> bool:
     """True for the reason the unmatched-filament hold wrote when it staged the item."""
     return bool(reason) and reason.startswith(_UNMATCHED_HOLD_PREFIX)
+
+
+@dataclass(frozen=True)
+class _FileSource:
+    """Fork: what `_get_filament_requirements` reads a file by, for a job or a variant."""
+
+    archive_id: int | None
+    library_file_id: int | None
+    plate_id: int | None
 
 
 def _forced_override_requirements(item: PrintQueueItem) -> list[dict]:
@@ -1617,6 +1627,10 @@ class PrintScheduler:
         # When each "any model" job held for low filament last looked for
         # another printer (#3137), by queue item id.
         self._short_hold_checked_at: dict[int, float] = {}
+        # Fork (services/file_colors): the overrides each pending job and variant
+        # had when its file's colours were last written into it, so a file is
+        # read again only when someone has changed them.
+        self._file_colors_seen: dict[tuple[str, int], str | None] = {}
 
     async def run(self):
         """Main loop - check queue every interval."""
@@ -1830,6 +1844,8 @@ class PrintScheduler:
         # Scoped to one pass: a file re-sliced between ticks must be re-read.
         self._filament_req_memo.clear()
         self._unmatched_memo.clear()
+        # Fork: before any printer is chosen, so the choice already asks for them.
+        await self._force_file_colors()
         async with async_session() as db:
             # Fork: the colours and profiles someone marked as the same (services/filament_aliases).
             await filament_aliases.refresh(db)
@@ -4531,6 +4547,84 @@ class PrintScheduler:
                 return None
         missing = _unresolved_required(required, mapping)
         return [_describe_filament(req, "nozzle_id") for req in missing] or None
+
+    async def _force_file_colors(self) -> None:
+        """Fork: with ``require_file_colors`` on, every pending job asks for its file's colours.
+
+        Written into the job (or each of its variants) as "force colour match"
+        overrides, so everything that chooses a printer, holds a job or lets
+        "Print Anyway" through sees a job that asked for them. See
+        services/file_colors. A job is written to with a guard on the overrides
+        it was read with, so an edit made meanwhile is never overwritten.
+        """
+        try:
+            async with async_session() as db:
+                if not await self._get_bool_setting(db, file_colors.SETTING_KEY):
+                    self._file_colors_seen.clear()
+                    return
+                items = (
+                    (
+                        await db.execute(
+                            select(PrintQueueItem)
+                            .where(PrintQueueItem.status == "pending")
+                            .options(selectinload(PrintQueueItem.variants))
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                seen: dict[tuple[str, int], str | None] = {}
+                written = 0
+                for item in items:
+                    if item.use_ams is False:
+                        continue
+                    for target in list(item.variants) or [item]:
+                        key = (type(target).__name__, target.id)
+                        current = target.filament_overrides
+                        if key in self._file_colors_seen and self._file_colors_seen[key] == current:
+                            seen[key] = current
+                            continue
+                        source = _FileSource(
+                            archive_id=getattr(target, "archive_id", None),
+                            library_file_id=target.library_file_id,
+                            plate_id=target.plate_id,
+                        )
+                        forced = file_colors.forced_overrides(
+                            current, await self._get_filament_requirements(db, source)
+                        )
+                        seen[key] = current
+                        if forced is None:
+                            continue
+                        model = type(target)
+                        unchanged = (
+                            model.filament_overrides.is_(None)
+                            if current is None
+                            else model.filament_overrides == current
+                        )
+                        result = cast(
+                            CursorResult,
+                            await db.execute(
+                                update(model)
+                                .where(model.id == target.id, unchanged)
+                                .values(filament_overrides=forced)
+                                .execution_options(synchronize_session=False)
+                            ),
+                        )
+                        if result.rowcount:
+                            seen[key] = forced
+                            written += 1
+                            logger.info(
+                                "Queue item %s: asks for its file's colours (%s %s): %s",
+                                item.id,
+                                model.__name__,
+                                target.id,
+                                forced,
+                            )
+                if written:
+                    await db.commit()
+                self._file_colors_seen = seen
+        except Exception:  # never let this stop the queue: the job goes out as it was asked for
+            logger.exception("Could not write the files' colours into the pending jobs")
 
     async def print_anyway_blockers(
         self, db: AsyncSession, item: PrintQueueItem, mapping: list | None = None, *, from_request: bool = False

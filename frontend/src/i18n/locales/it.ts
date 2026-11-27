@@ -2488,6 +2488,8 @@ export default {
     preferLowestFilament: 'Preferisci il filamento con meno residuo',
     preferLowestFilamentDesc: 'Quando più bobine corrispondono, usa quella con meno filamento rimanente',
     preferLowestFilamentBackupNote: 'Ha effetto solo se AMS Filament Backup è abilitato sulla stampante — altrimenti la stampante non può passare a una seconda bobina quando quella scelta finisce.',
+    requireFileColors: 'Richiedi sempre i colori del file',
+    requireFileColorsDesc: 'Ogni lavoro in coda richiede i colori del suo file, come se «Forza corrispondenza colore» fosse spuntato per ogni slot: va solo a una stampante che li ha e attende se nessuna li ha. Uno slot cambiato a mano richiede il colore scelto. Contano i colori segnati qui sotto come uguali.',
     trackingModeBuiltIn: 'Inventario integrato',
     trackingModeBuiltInDesc: 'Riconoscimento RFID automatico e tracciamento dell\'uso inclusi',
     trackingModeSpoolmanDesc: 'Server esterno per la gestione del filamento',

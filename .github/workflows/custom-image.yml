@@ -82,6 +82,8 @@ jobs:
             backend/tests/integration/test_filament_aliases_api_fork.py \
             backend/tests/unit/test_print_anyway_forced_fork.py \
             backend/tests/integration/test_print_anyway_forced_api_fork.py \
+            backend/tests/unit/test_file_colors_fork.py \
+            backend/tests/integration/test_file_colors_settings_fork.py \
             backend/tests/unit/test_not_null_update_schemas.py \
             backend/tests/unit/test_sqlite_fk.py \
             backend/tests/unit/test_sqlite_autoincrement.py \
@@ -143,6 +145,7 @@ jobs:
             src/__tests__/components/Layout.test.tsx \
             src/__tests__/utils/filamentAliases.test.ts \
             src/__tests__/components/FilamentAliasesCard.test.tsx \
+            src/__tests__/pages/SettingsPageFileColors.test.tsx \
             src/__tests__/pages/SettingsPage.test.tsx
 
   image:

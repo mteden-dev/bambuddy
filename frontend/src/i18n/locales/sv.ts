@@ -2585,6 +2585,8 @@ export default {
     preferLowestFilament: 'Föredra rulle med minst filament kvar',
     preferLowestFilamentDesc: 'När flera rullar matchar, använd den med minst filament kvar',
     preferLowestFilamentBackupNote: 'Gäller endast när AMS filamentbackup är aktiverat på skrivaren — annars kan skrivaren inte byta till en andra rulle när den valda tar slut.',
+    requireFileColors: 'Kräv alltid färgerna i filen',
+    requireFileColorsDesc: 'Varje jobb i kön kräver färgerna i sin fil, som om ”Tvinga färgmatchning” vore ikryssat för varje fack: det går bara till en skrivare som har dem och väntar där ingen har dem. Ett fack som ändrats för hand kräver den valda färgen. Färger som markerats som samma nedan räknas.',
     trackingModeBuiltIn: 'Inbyggd inventering',
     trackingModeBuiltInDesc: 'RFID-auto-matchning och användningsspårning inkluderad',
     trackingModeSpoolmanDesc: 'Extern filamenthanteringsserver',

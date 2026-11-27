@@ -1551,6 +1551,8 @@ export interface AppSettings {
   // AMS Filament Backup could switch to, and ask for this many percent more.
   filament_check_per_slot?: boolean;
   filament_check_margin_pct?: number;
+  // Fork (services/file_colors): every queued job asks for its file's colours.
+  require_file_colors?: boolean;
   spoolman_enabled: boolean;  // True when the user has switched filament tracking to Spoolman; backend includes this in the /settings/ response even though earlier consumers read it from the dedicated /settings/spoolman endpoint as a string
   auto_add_unknown_rfid: boolean;  // When false, the backend skips auto-creating inventory spools for unknown RFID tags and instead broadcasts an unknown_tag event for the confirmation modal
   spoolman_url: string;

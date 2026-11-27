@@ -2555,6 +2555,8 @@ export default {
     preferLowestFilament: 'Prefer lowest remaining filament',
     preferLowestFilamentDesc: 'When multiple spools match, use the one with the least filament remaining',
     preferLowestFilamentBackupNote: 'Only takes effect when AMS Filament Backup is enabled on the printer — otherwise the printer cannot switch to a second spool when the picked one runs out.',
+    requireFileColors: 'Always ask for the colors in the file',
+    requireFileColorsDesc: 'Every queued job asks for its file\'s colors, as if "Force color match" were ticked for every slot: it goes only to a printer that has them, and waits where none has. A slot changed by hand asks for the color picked. Colors marked as the same below count.',
     trackingModeBuiltIn: 'Built-in Inventory',
     trackingModeBuiltInDesc: 'RFID auto-matching and usage tracking included',
     trackingModeSpoolmanDesc: 'External filament management server',

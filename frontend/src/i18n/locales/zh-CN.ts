@@ -2533,6 +2533,8 @@ export default {
     preferLowestFilament: '优先使用剩余最少的耗材',
     preferLowestFilamentDesc: '当多个料盘匹配时，使用剩余耗材最少的那个',
     preferLowestFilamentBackupNote: '仅当打印机端启用了 AMS 备用料盘时才生效——否则当选中的料盘耗尽时，打印机无法切换到备用料盘。',
+    requireFileColors: '始终要求文件中的颜色',
+    requireFileColorsDesc: '队列中的每个任务都要求其文件中的颜色，就像每个槽位都勾选了“强制颜色匹配”：只会发送到装有这些颜色的打印机，没有则等待。手动更改的槽位要求所选颜色。下方标记为相同的颜色也算匹配。',
     trackingModeBuiltIn: '内置库存',
     trackingModeBuiltInDesc: '包含 RFID 自动匹配和用量追踪',
     trackingModeSpoolmanDesc: '外部耗材管理服务器',

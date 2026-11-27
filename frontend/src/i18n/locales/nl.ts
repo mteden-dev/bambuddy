@@ -2553,6 +2553,8 @@ export default {
     preferLowestFilament: 'Voorkeur voor laagste resterende hoeveelheid filament',
     preferLowestFilamentDesc: 'Als meerdere spoelen overeenkomen, gebruik dan de spoel met de minste resterende hoeveelheid filament',
     preferLowestFilamentBackupNote: 'Dit werkt alleen wanneer AMS Filament Backup op de printer is ingeschakeld — anders kan de printer niet overschakelen naar een tweede spoel wanneer de gekozen spoel leeg raakt.',
+    requireFileColors: 'Altijd de kleuren uit het bestand vereisen',
+    requireFileColorsDesc: 'Elke taak in de wachtrij vereist de kleuren uit zijn bestand, alsof ‘Kleurovereenkomst afdwingen’ voor elk slot is aangevinkt: hij gaat alleen naar een printer die ze heeft en wacht als geen enkele ze heeft. Een met de hand gewijzigd slot vereist de gekozen kleur. Kleuren die hieronder als gelijk zijn gemarkeerd tellen mee.',
     trackingModeBuiltIn: 'Ingebouwde voorraad',
     trackingModeBuiltInDesc: 'Automatische RFID-koppeling en verbruikstracking inbegrepen',
     trackingModeSpoolmanDesc: 'Externe filamentbeheerserver',

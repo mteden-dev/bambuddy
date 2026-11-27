@@ -2437,6 +2437,8 @@ export default {
     preferLowestFilament: '남은 필라멘트가 가장 적은 것 우선',
     preferLowestFilamentDesc: '여러 스풀이 일치할 때 남은 필라멘트가 가장 적은 것 사용',
     preferLowestFilamentBackupNote: '프린터에서 AMS 필라멘트 백업이 활성화된 경우에만 적용됩니다. 그렇지 않으면 선택한 스풀이 다 떨어졌을 때 두 번째 스풀로 전환할 수 없습니다.',
+    requireFileColors: '항상 파일의 색상 요구',
+    requireFileColorsDesc: '대기열의 모든 작업은 모든 슬롯에 "색상 일치 강제"가 켜진 것처럼 파일의 색상을 요구합니다. 해당 색상이 있는 프린터로만 보내고, 없으면 대기합니다. 직접 변경한 슬롯은 선택한 색상을 요구합니다. 아래에서 같다고 표시한 색상도 일치로 봅니다.',
     trackingModeBuiltIn: '내장 인벤토리',
     trackingModeBuiltInDesc: 'RFID 자동 매칭 및 사용량 추적 포함',
     trackingModeSpoolmanDesc: '외부 필라멘트 관리 서버',

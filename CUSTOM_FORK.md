@@ -142,6 +142,18 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     wydruk, w którym żaden slot nie ma szpuli (drukarka wzięłaby inny kolor albo stanęła z
     0700-8012): Start odpowiada 409 `forced_filament_missing`, a kolejka wstrzymuje takie zadanie
     ponownie (`print_scheduler.print_anyway_blockers`),
+  - **zawsze wymagaj kolorów z pliku** (Ustawienia → Filament → Kontrola filamentu, domyślnie
+    wyłączone): każde oczekujące zadanie, także dodane ręcznie bez „Wymuś dopasowanie koloru”,
+    dostaje kolory ze swojego pliku jako wymuszone, zanim kolejka wybierze drukarkę. Bez tego
+    zadanie na „dowolną P1S” dopasowywało sam typ i zielony tray poszedł na drukarkę z samym FDE.
+    Zadanie idzie więc tylko na drukarkę z tymi kolorami (grupy „te same kolory” się liczą),
+    a gdzie żadna ich nie ma, czeka; „Drukuj mimo to” też go nie przepchnie. Slot zmieniony
+    ręcznie wymaga wybranego koloru. Profil filamentu (`tray_info_idx`) nie jest wymagany, bo
+    pliki jednego modelu mają często inny profil niż szpula w AMS. Każdy wariant zadania dostaje
+    kolory ze swojego pliku. Plik czyta się ponownie tylko po zmianie zadania, a zapis ma warunek
+    na stare nadpisania, więc edycja z tej samej chwili nie ginie. Logika: `services/file_colors.py`
+    i `print_scheduler._force_file_colors` (na początku każdego przebiegu kolejki), ustawienie
+    `require_file_colors`,
   - **produkty z części** (osobna pozycja **Produkty** w menu bocznym, pod kolejką; tu będzie
     rosła synchronizacja zamówień): produkt to części z liczbą sztuk na
     produkt (np. pudełko: góra, dół, tray) i płyty, czyli pocięte pliki z biblioteki, każdy dla

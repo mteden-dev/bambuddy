@@ -132,6 +132,14 @@ class AppSettings(BaseModel):
         le=100,
         description="Ask for this much more filament than the sliced file needs (percent)",
     )
+    # Fork (services/file_colors): every queued job asks for its file's colours.
+    require_file_colors: bool = Field(
+        default=False,
+        description=(
+            "Every queued job asks for the colours in its file, as if Force colour match were ticked "
+            "for every slot: it goes only to a printer that has them, and waits where none has"
+        ),
+    )
 
     # Updates
     check_updates: bool = Field(default=True, description="Automatically check for updates on startup")
@@ -834,6 +842,7 @@ class AppSettingsUpdate(BaseModel):
     prefer_lowest_filament: bool | None = None
     filament_check_per_slot: bool | None = None
     filament_check_margin_pct: int | None = Field(default=None, ge=0, le=100)
+    require_file_colors: bool | None = None
     check_updates: bool | None = None
     check_printer_firmware: bool | None = None
     include_beta_updates: bool | None = None

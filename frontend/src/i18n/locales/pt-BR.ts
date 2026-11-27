@@ -2488,6 +2488,8 @@ export default {
     preferLowestFilament: 'Preferir filamento com menor resto',
     preferLowestFilamentDesc: 'Quando vários carretéis correspondem, usar o com menos filamento restante',
     preferLowestFilamentBackupNote: 'Só tem efeito quando o AMS Filament Backup está habilitado na impressora — caso contrário, a impressora não pode trocar para um segundo carretel quando o escolhido acabar.',
+    requireFileColors: 'Sempre exigir as cores do arquivo',
+    requireFileColorsDesc: 'Cada trabalho na fila exige as cores do seu arquivo, como se "Forçar correspondência de cor" estivesse marcado em cada slot: vai só para uma impressora que as tenha e espera se nenhuma as tiver. Um slot alterado à mão exige a cor escolhida. Cores marcadas abaixo como iguais contam.',
     trackingModeBuiltIn: 'Inventário Interno',
     trackingModeBuiltInDesc: 'Correspondência automática de RFID e rastreamento de uso incluídos',
     trackingModeSpoolmanDesc: 'Servidor de gerenciamento de filamento externo',

@@ -2536,6 +2536,8 @@ export default {
     preferLowestFilament: 'Preferir el filamento con menos restante',
     preferLowestFilamentDesc: 'Cuando varias bobinas coincidan, usar la que tenga menos filamento restante',
     preferLowestFilamentBackupNote: 'Solo surte efecto cuando AMS Filament Backup está activado en la impresora — de lo contrario, la impresora no puede cambiar a una segunda bobina cuando la elegida se acabe.',
+    requireFileColors: 'Exigir siempre los colores del archivo',
+    requireFileColorsDesc: 'Cada trabajo de la cola exige los colores de su archivo, como si «Forzar coincidencia de color» estuviera marcado en cada ranura: solo va a una impresora que los tenga y espera si ninguna los tiene. Una ranura cambiada a mano exige el color elegido. Cuentan los colores marcados abajo como iguales.',
     trackingModeBuiltIn: 'Inventario integrado',
     trackingModeBuiltInDesc: 'Incluye coincidencia automática por RFID y seguimiento del uso',
     trackingModeSpoolmanDesc: 'Servidor externo de gestión de filamento',

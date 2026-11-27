@@ -106,7 +106,7 @@ registerSettingsSearch({ labelKey: 'settings.concurrentUploadsTitle', labelFallb
 registerSettingsSearch({ labelKey: 'settings.gcodeInjection', labelFallback: 'G-code Injection', tab: 'queue', keywords: 'gcode injection start end autoprint farmloop swapmod autoclear printflow', anchor: 'card-gcode' });
 registerSettingsSearch({ labelKey: 'settings.slicerCard', labelFallback: 'Slicer', tab: 'queue', keywords: 'slicer orcaslicer bambustudio orca bambu api sidecar url docker preferred', anchor: 'card-slicer' });
 registerSettingsSearch({ labelKey: 'settings.queueDrying', tab: 'queue', keywords: 'drying presets temperature time humidity ams', anchor: 'card-drying' });
-registerSettingsSearch({ labelKey: 'settings.filamentChecks', tab: 'filament', keywords: 'filament check warning runout remaining', anchor: 'card-filamentchecks' });
+registerSettingsSearch({ labelKey: 'settings.filamentChecks', tab: 'filament', keywords: 'filament check warning runout remaining force color colour file', anchor: 'card-filamentchecks' });
 registerSettingsSearch({ labelKey: 'settings.printModal', tab: 'filament', keywords: 'print modal custom mapping', anchor: 'card-printmodal' });
 registerSettingsSearch({ labelKey: 'settings.amsDisplayThresholds', tab: 'filament', keywords: 'ams humidity temperature threshold history retention', anchor: 'card-amsthresholds' });
 registerSettingsSearch({ labelKey: 'inventory.profileDefaults.title', tab: 'filament', keywords: 'profile default k-profile k factor pressure advance slicer preset new spool', anchor: 'card-profiledefaults' });
@@ -1310,6 +1310,7 @@ export function SettingsPage() {
       baseline.prefer_lowest_filament !== localSettings.prefer_lowest_filament ||
       (baseline.filament_check_per_slot ?? false) !== (localSettings.filament_check_per_slot ?? false) ||
       (baseline.filament_check_margin_pct ?? 0) !== (localSettings.filament_check_margin_pct ?? 0) ||
+      (baseline.require_file_colors ?? false) !== (localSettings.require_file_colors ?? false) ||
       (baseline.queue_drying_enabled ?? false) !== (localSettings.queue_drying_enabled ?? false) ||
       (baseline.queue_drying_block ?? false) !== (localSettings.queue_drying_block ?? false) ||
       (baseline.ambient_drying_enabled ?? false) !== (localSettings.ambient_drying_enabled ?? false) ||
@@ -1442,6 +1443,7 @@ export function SettingsPage() {
         prefer_lowest_filament: localSettings.prefer_lowest_filament,
         filament_check_per_slot: localSettings.filament_check_per_slot ?? false,
         filament_check_margin_pct: localSettings.filament_check_margin_pct ?? 0,
+        require_file_colors: localSettings.require_file_colors ?? false,
         queue_drying_enabled: localSettings.queue_drying_enabled,
         queue_drying_block: localSettings.queue_drying_block,
         ambient_drying_enabled: localSettings.ambient_drying_enabled,
@@ -6432,6 +6434,23 @@ export function SettingsPage() {
                       checked={localSettings.prefer_lowest_filament}
                       onChange={(e) => updateSetting('prefer_lowest_filament', e.target.checked)}
                       className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                  </label>
+                </div>
+                {/* Fork (services/file_colors): every queued job asks for its file's colours */}
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-white">{t('settings.requireFileColors')}</p>
+                    <p className="text-sm text-bambu-gray">{t('settings.requireFileColorsDesc')}</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={localSettings.require_file_colors ?? false}
+                      onChange={(e) => updateSetting('require_file_colors', e.target.checked)}
+                      className="sr-only peer"
+                      aria-label={t('settings.requireFileColors')}
                     />
                     <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
                   </label>
