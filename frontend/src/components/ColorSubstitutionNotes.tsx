@@ -1,6 +1,7 @@
 import { AlertCircle } from 'lucide-react';
 import type { ColorSubstitution } from '../api/client';
 import { getColorName } from '../utils/colors';
+import { withColorSquares } from '../utils/colorSquares';
 
 /**
  * One line per slot sent with a spool of another colour than the file asks
@@ -28,11 +29,13 @@ export function ColorSubstitutionNotes({
         >
           <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
           <span>
-            {t('queue.colorSubstitution.rowBadge', {
-              slot: sub.slot_id,
-              got: label(sub.got, sub.type),
-              wanted: label(sub.wanted, sub.type),
-            })}
+            {withColorSquares(
+              t('queue.colorSubstitution.rowBadge', {
+                slot: sub.slot_id,
+                got: label(sub.got, sub.type),
+                wanted: label(sub.wanted, sub.type),
+              }),
+            )}
           </span>
         </p>
       ))}

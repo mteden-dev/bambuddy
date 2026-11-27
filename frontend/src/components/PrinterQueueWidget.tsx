@@ -8,6 +8,7 @@ import { filterCompatibleQueueItems } from '../utils/printer';
 import { queueItemDisplayName } from '../utils/queueItemName';
 import { queueHold } from '../utils/queueHold';
 import { QueueStartButton } from './QueueStartButton';
+import { withColorSquares } from '../utils/colorSquares';
 
 interface PrinterQueueWidgetProps {
   printerId: number;
@@ -78,7 +79,7 @@ export function PrinterQueueWidget({ printerId, printerModel, loadedFilamentType
             </p>
             {hold && (
               <p className={`text-xs mt-0.5 ${hold.problem ? 'text-red-600 dark:text-red-300' : 'text-purple-700 dark:text-purple-300'}`}>
-                {hold.text}
+                {withColorSquares(hold.text)}
               </p>
             )}
           </div>

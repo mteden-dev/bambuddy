@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, X } from 'lucide-react';
+import { ChevronDown, Plus, Trash2, X } from 'lucide-react';
 import { api } from '../../api/client';
 import type { FilamentAliases } from '../../api/client';
 import { Card, CardContent, CardHeader } from '../Card';
@@ -11,6 +11,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { FILAMENT_ALIASES_QUERY_KEY } from '../../hooks/useFilamentAliasesSync';
 import { setFilamentAliases } from '../../utils/filamentAliases';
 import type { FilamentAliasGroups } from '../../utils/filamentAliases';
+import { ColorSquare } from '../HexColorText';
 
 type Kind = 'colors' | 'presets';
 
@@ -52,6 +53,8 @@ function GroupEditor({
 }) {
   const { t } = useTranslation();
   const [typing, setTyping] = useState(false);
+  // Colours are picked from a list that shows each one, not from a <select> of hex codes.
+  const [picking, setPicking] = useState(false);
   const [typed, setTyped] = useState('');
   const [invalid, setInvalid] = useState(false);
   const left = suggestions.filter((s) => !group.includes(s.value));
@@ -76,9 +79,7 @@ function GroupEditor({
             key={member}
             className="inline-flex items-center gap-1.5 max-w-full pl-2 pr-1 py-1 rounded-full bg-bambu-dark-tertiary text-sm text-white"
           >
-            {kind === 'colors' && (
-              <span className="w-4 h-4 rounded-full border border-white/20 shrink-0" style={{ background: `#${member}` }} />
-            )}
+            {kind === 'colors' && <ColorSquare hex={member} className="w-4 h-4" />}
             <span className="truncate">
               {kind === 'colors' ? `#${member.toUpperCase()}` : member}
               {kind === 'presets' && names.get(member) && (
@@ -109,7 +110,58 @@ function GroupEditor({
       {group.length < 2 && <p className="text-xs text-amber-500">{t('filamentAliases.needsTwo')}</p>}
       {!disabled && (
         <div className="flex flex-wrap gap-2">
-          {!typing ? (
+          {!typing && kind === 'colors' ? (
+            <div className="w-full">
+              <button
+                type="button"
+                className={`${inputClass} w-full flex items-center justify-between gap-2 text-left`}
+                aria-expanded={picking}
+                onClick={() => setPicking((open) => !open)}
+              >
+                <span>{t('filamentAliases.addColor')}</span>
+                <ChevronDown className={`w-4 h-4 shrink-0 text-bambu-gray transition-transform ${picking ? 'rotate-180' : ''}`} />
+              </button>
+              {picking && (
+                <ul
+                  role="listbox"
+                  aria-label={t('filamentAliases.addColor')}
+                  className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-bambu-dark-tertiary bg-bambu-dark divide-y divide-bambu-dark-tertiary"
+                >
+                  {left.map((s) => (
+                    <li key={s.value}>
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={false}
+                        className="w-full min-h-11 px-3 py-2 flex items-center gap-2.5 text-left text-sm text-white hover:bg-bambu-dark-tertiary"
+                        onClick={() => {
+                          setPicking(false);
+                          add(s.value);
+                        }}
+                      >
+                        <ColorSquare hex={s.value} className="w-5 h-5" />
+                        <span className="min-w-0 break-words">{s.label}</span>
+                      </button>
+                    </li>
+                  ))}
+                  <li>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      className="w-full min-h-11 px-3 py-2 text-left text-sm text-bambu-gray hover:bg-bambu-dark-tertiary hover:text-white"
+                      onClick={() => {
+                        setPicking(false);
+                        setTyping(true);
+                      }}
+                    >
+                      {t('filamentAliases.typeOther')}
+                    </button>
+                  </li>
+                </ul>
+              )}
+            </div>
+          ) : !typing ? (
             <select
               className={`${inputClass} w-full`}
               value=""
@@ -129,6 +181,9 @@ function GroupEditor({
             </select>
           ) : (
             <>
+              {kind === 'colors' && cleanMember(kind, typed) && (
+                <ColorSquare hex={cleanMember(kind, typed) as string} className="w-6 h-6 self-center" />
+              )}
               <input
                 className={`${inputClass} flex-1 min-w-0`}
                 value={typed}

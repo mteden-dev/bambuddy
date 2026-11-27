@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { Card, CardContent } from './Card';
 import { Button } from './Button';
+import { withColorSquares } from '../utils/colorSquares';
 
 interface ConfirmModalProps {
   title: string;
@@ -99,7 +100,7 @@ export function ConfirmModal({
             </div>
             <div className="flex-1">
               <h3 className="text-lg font-semibold text-white mb-2">{title}</h3>
-              <p className="text-bambu-gray text-sm whitespace-pre-line">{message}</p>
+              <p className="text-bambu-gray text-sm whitespace-pre-line">{withColorSquares(message)}</p>
               {children && <div className="mt-4">{children}</div>}
             </div>
           </div>

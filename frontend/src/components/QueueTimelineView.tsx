@@ -60,6 +60,7 @@ import { useJobOrders } from '../hooks/useJobOrders';
 import { jobOrdersText, urgentFirst } from '../utils/baseOrders';
 import { fitBarHeight, LANE_BAR_HEIGHT_PX, LANE_PADDING_PX } from '../utils/timelineLayout';
 import { queueHold } from '../utils/queueHold';
+import { withColorSquares } from '../utils/colorSquares';
 
 /** Gantt-style rolling timeline. One horizontal swimlane per printer. A
  *  print that is running is drawn from the printer's live status; every
@@ -442,7 +443,7 @@ function BarContent({
           <>
             {hold?.problem && (
               <div className={`${medium} text-red-200 font-medium truncate leading-tight mt-0.5`} data-bar-line="hold">
-                {hold.text}
+                {withColorSquares(hold.text)}
               </div>
             )}
             {orderText && (
@@ -574,7 +575,7 @@ function OffTimelineChip({
       {problem && <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-400" aria-hidden />}
       <div className="min-w-0">
         <div className="text-xs text-white truncate">{queueJobName(item)}</div>
-        <div className={`text-[10px] truncate ${problem ? 'text-red-300' : 'text-bambu-gray'}`}>{reason}</div>
+        <div className={`text-[10px] truncate ${problem ? 'text-red-300' : 'text-bambu-gray'}`}>{withColorSquares(reason)}</div>
       </div>
     </button>
   );

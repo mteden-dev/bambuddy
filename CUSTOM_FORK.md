@@ -154,6 +154,12 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     na stare nadpisania, więc edycja z tej samej chwili nie ginie. Logika: `services/file_colors.py`
     i `print_scheduler._force_file_colors` (na początku każdego przebiegu kolejki), ustawienie
     `require_file_colors`,
+  - **kwadracik z kolorem przy każdym hexie**: powody oczekiwania w kolejce („Needs PETG
+    #408002”), szczegóły zadania, „Następny w kolejce” na karcie drukarki, oś czasu, notki
+    o innym kolorze szpuli, toasty i okna potwierdzeń pokazują przed kodem koloru kwadrat w tym
+    kolorze (`utils/colorSquares.tsx`, `components/HexColorText.tsx`). W grupach „te same
+    kolory” kolor wybiera się z listy z kwadratami zamiast z `<select>` z samymi hexami, a wpisany
+    ręcznie kolor pokazuje kwadrat przed dodaniem,
   - **produkty z części** (osobna pozycja **Produkty** w menu bocznym, pod kolejką; tu będzie
     rosła synchronizacja zamówień): produkt to części z liczbą sztuk na
     produkt (np. pudełko: góra, dół, tray) i płyty, czyli pocięte pliki z biblioteki, każdy dla

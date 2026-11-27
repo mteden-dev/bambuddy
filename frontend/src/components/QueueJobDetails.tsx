@@ -26,6 +26,7 @@ import { Button } from './Button';
 import { QueueItemTagChips } from './QueueItemTagChips';
 import { OrderLabelChip } from './OrderLabelChip';
 import { queueHold } from '../utils/queueHold';
+import { withColorSquares } from '../utils/colorSquares';
 
 /** Where a job is sent: one printer, or back to any printer of a model. */
 export type QueuePinTarget = { printer_id: number } | { target_model: string };
@@ -223,12 +224,12 @@ export function QueueJobDetails({
                   <Hand className="w-4 h-4 shrink-0 mt-px" aria-hidden />
                 )}
                 <span className="break-words">
-                  <span className="font-medium">{hold.text}</span>
+                  <span className="font-medium">{withColorSquares(hold.text)}</span>
                   <span className="block text-bambu-gray">{t('queue.hold.wontStart')}</span>
                 </span>
               </div>
             ) : (
-              <div className="mt-2 text-xs text-bambu-gray break-words">{status}</div>
+              <div className="mt-2 text-xs text-bambu-gray break-words">{withColorSquares(status)}</div>
             )}
             {isPrinting && progress != null && (
               <div className="mt-2 h-1.5 rounded-full bg-bambu-dark overflow-hidden">

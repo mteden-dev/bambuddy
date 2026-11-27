@@ -92,6 +92,7 @@ import { BatchOrdersView } from '../components/BatchOrdersView';
 import { ThumbnailHoverPreview } from '../components/ThumbnailHoverPreview';
 import { QueueItemTagChips } from '../components/QueueItemTagChips';
 import { OrderLabelChip } from '../components/OrderLabelChip';
+import { withColorSquares } from '../utils/colorSquares';
 import { OrderJobCancelModal } from '../components/products/OrderJobCancelModal';
 import { useJobOrders } from '../hooks/useJobOrders';
 import { buildLoadedFilaments, type LoadedFilament } from '../hooks/useFilamentMapping';
@@ -1077,7 +1078,7 @@ function SortableQueueItem({
           {item.waiting_reason && item.status === 'pending' && (
             <p className="text-[10px] sm:text-xs text-purple-700 dark:text-purple-400 mt-1.5 sm:mt-2 flex items-start gap-1">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-              <span>{item.waiting_reason}</span>
+              <span>{withColorSquares(item.waiting_reason)}</span>
             </p>
           )}
 
@@ -1116,7 +1117,7 @@ function SortableQueueItem({
           {item.error_message && (
             <p className="text-[10px] sm:text-xs text-red-700 dark:text-red-400 mt-1.5 sm:mt-2 flex items-center gap-1">
               <AlertCircle className="w-3 h-3" />
-              {item.error_message}
+              <span>{withColorSquares(item.error_message)}</span>
             </p>
           )}
         </div>

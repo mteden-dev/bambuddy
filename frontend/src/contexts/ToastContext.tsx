@@ -2,6 +2,7 @@ import { AlertCircle, CheckCircle, ChevronDown, ChevronUp, Info, Loader2, X, XCi
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatFileSize } from '../utils/file';
+import { withColorSquares } from '../utils/colorSquares';
 
 type ToastType = 'success' | 'error' | 'warning' | 'info' | 'loading';
 
@@ -475,7 +476,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             ) : (
               <>
                 {icons[toast.type]}
-                <span className="text-white text-sm">{toast.message}</span>
+                <span className="text-white text-sm">{withColorSquares(toast.message)}</span>
                 {toast.action && toast.action.href && (
                   <a
                     href={toast.action.href}

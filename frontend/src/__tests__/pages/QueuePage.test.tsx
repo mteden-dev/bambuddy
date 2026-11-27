@@ -13,6 +13,11 @@ import { setAuthToken } from '../../api/client';
 import { setColorCatalog, __resetColorCatalogForTests } from '../../utils/colors';
 
 // Mock queue data
+// Text that a hex colour's square splits across elements (fork): the one
+// element of ``tag`` whose whole text matches.
+const byText = (pattern: RegExp, tag = 'SPAN') => (_: string, el: Element | null) =>
+  el?.tagName === tag && pattern.test(el.textContent ?? '');
+
 const mockQueueItems = [
   {
     id: 1,
@@ -241,7 +246,9 @@ describe('QueuePage', () => {
 
       render(<QueuePage />);
 
-      const badge = await screen.findByText(/^Slot 1 printed in .*\(#000000\), the file asks for .*\(#A4AAAC\)$/);
+      const badge = await screen.findByText(byText(/^Slot 1 printed in .*\(#000000\), the file asks for .*\(#A4AAAC\)$/));
+      // Each colour comes with a square of it (fork).
+      expect(badge.querySelectorAll('[data-testid="color-square"]')).toHaveLength(2);
       expect(badge.closest('p')).toHaveAttribute(
         'title',
         expect.stringContaining('different colour than the one in the file'),
@@ -249,7 +256,7 @@ describe('QueuePage', () => {
 
       // The History tab draws finished jobs with the compact row.
       await userEvent.setup().click(await screen.findByRole('button', { name: /^History/ }));
-      expect(await screen.findByText(/^Slot 2 printed in .*\(#FF0000\), the file asks for .*\(#FFFFFF\)$/)).toBeInTheDocument();
+      expect(await screen.findByText(byText(/^Slot 2 printed in .*\(#FF0000\), the file asks for .*\(#FFFFFF\)$/))).toBeInTheDocument();
     });
 
     it('shows no colour note for a job that printed in its colours', async () => {
@@ -2019,7 +2026,7 @@ describe('QueuePage', () => {
       await waitFor(() => expect(attempts).toBe(1));
       await screen.findByText('Filament not loaded');
       // The dialog's message names what to load; the row says it too.
-      expect(screen.getByText(/no tray with this filament[\s\S]*PETG #2850E0/)).toBeInTheDocument();
+      expect(screen.getByText(byText(/no tray with this filament[\s\S]*PETG #2850E0/, 'P'))).toBeInTheDocument();
 
       await userEvent.click(screen.getByRole('button', { name: /Print Anyway/i }));
 
@@ -2047,7 +2054,8 @@ describe('QueuePage', () => {
       await screen.findByText('Filament not loaded');
       await userEvent.click(screen.getByRole('button', { name: /Print Anyway/i }));
 
-      expect(await screen.findByText(/Cannot print anyway: no slot holds PETG #DCDB4E/)).toBeInTheDocument();
+      const toast = await screen.findByText(byText(/Cannot print anyway: no slot holds PETG #DCDB4E/));
+      expect(toast.querySelector('[data-testid="color-square"]')).toHaveStyle({ backgroundColor: '#DCDB4E' });
       expect(screen.queryByText('Filament not loaded')).not.toBeInTheDocument();
       expect(attempts).toBe(2);
     });

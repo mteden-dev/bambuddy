@@ -146,6 +146,8 @@ jobs:
             src/__tests__/utils/filamentAliases.test.ts \
             src/__tests__/components/FilamentAliasesCard.test.tsx \
             src/__tests__/pages/SettingsPageFileColors.test.tsx \
+            src/__tests__/components/HexColorText.test.tsx \
+            src/__tests__/pages/QueuePage.test.tsx \
             src/__tests__/pages/SettingsPage.test.tsx
 
   image:

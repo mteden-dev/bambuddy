@@ -63,13 +63,46 @@ describe('FilamentAliasesCard', () => {
 
     expect(await screen.findByText('#DCDB4E')).toBeInTheDocument();
     expect(screen.getByText('#E2DF60')).toBeInTheDocument();
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Add a colour…' }), '__other__');
+    await user.click(screen.getByRole('button', { name: 'Add a colour…' }));
+    await user.click(screen.getByRole('option', { name: 'Type another…' }));
     const input = screen.getByRole('textbox', { name: 'Add a colour…' });
     await user.type(input, 'nope{Enter}');
     expect(screen.getByText(/six hex digits/)).toBeInTheDocument();
     await user.clear(input);
-    await user.type(input, '#f0e68c{Enter}');
+    // A colour typed whole shows its square before it is added.
+    await user.type(input, '#f0e68c');
+    expect(screen.getAllByTestId('color-square').at(-1)).toHaveStyle({ backgroundColor: '#f0e68c' });
+    await user.type(input, '{Enter}');
     expect(screen.getByText('#F0E68C')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('shows each colour it offers as a square of that colour, not a hex code alone', async () => {
+    const saved: unknown[] = [];
+    server.use(
+      http.get('/api/v1/filament-aliases', () => HttpResponse.json({ colors: [], presets: [], ...SEEN })),
+      http.put('/api/v1/filament-aliases', async ({ request }) => {
+        const body = (await request.json()) as { colors: string[][]; presets: string[][] };
+        saved.push(body);
+        return HttpResponse.json({ ...body, ...SEEN });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<FilamentAliasesCard />);
+
+    await user.click(await screen.findByRole('button', { name: /New colour group/ }));
+    expect(screen.queryByRole('combobox', { name: 'Add a colour…' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Add a colour…' }));
+    const offered = screen.getByRole('option', { name: /#E2DF60 · PETG · 002, H2S/ });
+    expect(offered.querySelector('[data-testid="color-square"]')).toHaveStyle({ backgroundColor: '#e2df60' });
+    await user.click(offered);
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Add a colour…' }));
+    // What the group has is not offered again.
+    expect(screen.queryByRole('option', { name: /#E2DF60/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('option', { name: /#DCDB4E · PETG · Queue/i }));
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toEqual([{ colors: [['e2df60', 'dcdb4e']], presets: [] }]));
   });
 });
