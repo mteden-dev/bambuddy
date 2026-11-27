@@ -1752,6 +1752,7 @@ export default {
       stopFailed: '印刷の停止に失敗しました',
       released: '印刷をキューにリリースしました',
       startFailed: '印刷の開始に失敗しました',
+      forcedFilamentMissing: 'このまま印刷できません：その色の {{missing}} を持つスロットがないため、プリンターは別の色を使うか停止します。スプールを装填するか、色やプロファイルを同じものとして登録してください（設定 → フィラメント）。',
       reorderFailed: 'キューの並べ替えに失敗しました',
       historyCleared: '{{count}}件の履歴をクリアしました',
       clearHistoryFailed: '履歴のクリアに失敗しました',

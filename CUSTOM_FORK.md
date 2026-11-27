@@ -137,7 +137,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     planera produktów, filtra kolejki na karcie drukarki i oceny koloru w oknie druku. To, co
     raportują pliki i drukarki, się nie zmienia. Logika: `services/filament_aliases.py`
     (wpięta w `_normalize_color_for_compare` i porównania presetu w `print_scheduler.py`),
-    API `/filament-aliases`, jeden wiersz ustawień `filament_aliases`,
+    API `/filament-aliases`, jeden wiersz ustawień `filament_aliases`.
+    **Drukuj mimo to** nie przechodzi już przez slot z wymuszonym kolorem bez szpuli ani przez
+    wydruk, w którym żaden slot nie ma szpuli (drukarka wzięłaby inny kolor albo stanęła z
+    0700-8012): Start odpowiada 409 `forced_filament_missing`, a kolejka wstrzymuje takie zadanie
+    ponownie (`print_scheduler.print_anyway_blockers`),
   - **produkty z części** (osobna pozycja **Produkty** w menu bocznym, pod kolejką; tu będzie
     rosła synchronizacja zamówień): produkt to części z liczbą sztuk na
     produkt (np. pudełko: góra, dół, tray) i płyty, czyli pocięte pliki z biblioteki, każdy dla

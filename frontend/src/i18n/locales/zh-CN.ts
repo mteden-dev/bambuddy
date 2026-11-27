@@ -1753,6 +1753,7 @@ export default {
       stopFailed: '停止打印失败',
       released: '打印已释放到队列',
       startFailed: '开始打印失败',
+      forcedFilamentMissing: '无法仍然打印：没有槽位装有该颜色的 {{missing}}，打印机会使用其他颜色或停止。请装入料盘，或将颜色或预设标记为相同（设置 → 耗材）。',
       reorderFailed: '重新排序队列失败',
       historyCleared: '已清除 {{count}} 条历史记录',
       clearHistoryFailed: '清除历史失败',

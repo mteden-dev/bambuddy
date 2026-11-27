@@ -4532,6 +4532,43 @@ class PrintScheduler:
         missing = _unresolved_required(required, mapping)
         return [_describe_filament(req, "nozzle_id") for req in missing] or None
 
+    async def print_anyway_blockers(
+        self, db: AsyncSession, item: PrintQueueItem, mapping: list | None = None, *, from_request: bool = False
+    ) -> list[str]:
+        """Fork: the filaments "Print Anyway" cannot get past on the item's printer.
+
+        Print Anyway sends a job the queue held for a filament with no tray and
+        lets the printer choose. It cannot for a slot forced to a colour: a
+        printer that picks a spool by itself may pick another colour, and an
+        H2S stops at once with 0700-8012. Nor when no slot got a tray at all:
+        the print goes out with no mapping table, which every printer rejects
+        with 0700-8012. Those stay held: the forced slots with no tray, or every
+        slot when none has one. ``mapping`` is the one dispatch would send;
+        ``from_request`` (the Start button) matches afresh instead.
+
+        Empty when nothing is in the way or there is not enough evidence to
+        say: no printer yet, no status, no trays reported, a print without AMS.
+        """
+        if not item.printer_id or item.use_ams is False:
+            return []
+        status = printer_manager.get_status(item.printer_id)
+        if status is None or not self._build_loaded_filaments(status):
+            return []
+        if from_request:
+            self._filament_req_memo.clear()
+            mapping = await self._compute_ams_mapping_for_printer(db, item.printer_id, item)
+        required = await self._get_filament_requirements(db, item)
+        if required:
+            self._apply_filament_overrides(item, required)
+        else:
+            required = _forced_override_requirements(item)
+        printed = [r for r in required if (r.get("slot_id") or 0) > 0]
+        missing = _unresolved_required(printed, mapping or [])
+        if not missing:
+            return []
+        blocking = missing if len(missing) == len(printed) else [r for r in missing if r.get("force_color_match")]
+        return [_describe_filament(r, "nozzle_id") for r in blocking]
+
     async def _stored_mapping_conflict(
         self,
         db: AsyncSession,
@@ -9142,7 +9179,7 @@ class PrintScheduler:
 
         Returns True when this dispatch attempt was blocked.
         """
-        if item.skip_filament_check or not item.printer_id:
+        if not item.printer_id:
             return False
 
         mapping: list | None = None
@@ -9154,15 +9191,25 @@ class PrintScheduler:
             if not isinstance(mapping, list):
                 return False
 
-        unmatched = await self._unmatched_requirements(db, item, item.printer_id, mapping)
-        if not unmatched:
-            # No cleanup needed here: once start is pressed the item is no
-            # longer staged, and whichever exit runs next overwrites the reason
-            # (`hold_item` on the fixed-printer branch, the assignment on the
-            # model-based one), as does dispatch.
-            return False
-
-        wanted = ", ".join(_describe_filament(r, "nozzle_id") for r in unmatched)
+        if item.skip_filament_check:
+            # Fork: Print Anyway cannot get past a forced colour with no tray,
+            # nor a print with no tray at all (see print_anyway_blockers). The
+            # acknowledgement goes: once the spool is there, nothing is in the way.
+            blockers = await self.print_anyway_blockers(db, item, mapping)
+            if not blockers:
+                return False
+            item.skip_filament_check = False
+            wanted = ", ".join(blockers)
+            logger.info("Queue item %s: Print Anyway cannot get past %s, held again", item.id, wanted)
+        else:
+            unmatched = await self._unmatched_requirements(db, item, item.printer_id, mapping)
+            if not unmatched:
+                # No cleanup needed here: once start is pressed the item is no
+                # longer staged, and whichever exit runs next overwrites the reason
+                # (`hold_item` on the fixed-printer branch, the assignment on the
+                # model-based one), as does dispatch.
+                return False
+            wanted = ", ".join(_describe_filament(r, "nozzle_id") for r in unmatched)
         held_by = item.printer_id
         item.manual_start = True
         # Human-readable: this renders on the queue row.

@@ -2026,6 +2026,31 @@ describe('QueuePage', () => {
       await waitFor(() => expect(secondCallSkippedCheck).toBe(true));
       expect(attempts).toBe(2);
     });
+
+    it('says so when Print Anyway cannot get past a forced colour (fork)', async () => {
+      let attempts = 0;
+      server.use(
+        http.get('/api/v1/queue/', () => HttpResponse.json([heldItem])),
+        http.post('/api/v1/queue/:id/start', () => {
+          attempts += 1;
+          const detail =
+            attempts === 1
+              ? { code: 'unmatched_filament', missing: ['PETG #DCDB4E'] }
+              : { code: 'forced_filament_missing', message: 'No tray', missing: ['PETG #DCDB4E'] };
+          return HttpResponse.json({ detail }, { status: 409 });
+        }),
+      );
+
+      render(<QueuePage />);
+
+      await userEvent.click(await screen.findByTitle(/Start Print|do not have permission to start prints/i));
+      await screen.findByText('Filament not loaded');
+      await userEvent.click(screen.getByRole('button', { name: /Print Anyway/i }));
+
+      expect(await screen.findByText(/Cannot print anyway: no slot holds PETG #DCDB4E/)).toBeInTheDocument();
+      expect(screen.queryByText('Filament not loaded')).not.toBeInTheDocument();
+      expect(attempts).toBe(2);
+    });
   });
 
   // #2667: mobile can't drag-reorder the queue, so pending rows get up/down

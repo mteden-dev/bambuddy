@@ -1771,6 +1771,7 @@ export default {
       stopFailed: 'Failed to stop print',
       released: 'Print released to queue',
       startFailed: 'Failed to start print',
+      forcedFilamentMissing: 'Cannot print anyway: no slot holds {{missing}} in that colour, so the printer would take another colour or stop. Load it, or mark colours or profiles as the same (Settings → Filament).',
       reorderFailed: 'Failed to reorder queue',
       historyCleared: 'Cleared {{count}} history item(s)',
       clearHistoryFailed: 'Failed to clear history',

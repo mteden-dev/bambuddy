@@ -1771,6 +1771,7 @@ export default {
       stopFailed: 'Nie udało się zatrzymać wydruku',
       released: 'Wydruk zwolniony do kolejki',
       startFailed: 'Nie udało się rozpocząć wydruku',
+      forcedFilamentMissing: 'Nie da się drukować mimo to: żaden slot nie ma {{missing}} w tym kolorze, więc drukarka wzięłaby inny kolor albo stanęła. Załóż szpulę albo oznacz kolory lub profile jako te same (Ustawienia → Filament).',
       reorderFailed: 'Nie udało się zmienić kolejności kolejki',
       historyCleared: 'Wyczyszczone elementy historii: {{count}}',
       clearHistoryFailed: 'Nie udało się wyczyścić historii',

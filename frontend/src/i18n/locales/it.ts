@@ -1753,6 +1753,7 @@ export default {
       stopFailed: 'Impossibile fermare stampa',
       released: 'Stampa rilasciata in coda',
       startFailed: 'Avvio stampa non riuscito',
+      forcedFilamentMissing: 'Impossibile stampare comunque: nessuno slot ha {{missing}} in quel colore, quindi la stampante prenderebbe un altro colore o si fermerebbe. Carica la bobina o segna colori o profili come uguali (Impostazioni → Filamento).',
       reorderFailed: 'Riordino coda non riuscito',
       historyCleared: 'Cancellati {{count}} elementi cronologia',
       clearHistoryFailed: 'Svuotamento cronologia non riuscito',

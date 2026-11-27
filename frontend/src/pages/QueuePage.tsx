@@ -2041,6 +2041,14 @@ export function QueuePage() {
         setFilamentMissingConfirm({ itemId: variables.id, missing });
         return;
       }
+      // Fork: Print Anyway cannot get past a forced colour with no tray.
+      if (error instanceof ApiError && error.status === 409 && error.code === 'forced_filament_missing') {
+        const missing = (error.detail?.missing ?? []) as string[];
+        setFilamentShortConfirm(null);
+        setFilamentMissingConfirm(null);
+        showToast(t('queue.toast.forcedFilamentMissing', { missing: missing.join(', ') }), 'error');
+        return;
+      }
       showToast(t('queue.toast.startFailed'), 'error');
     },
   });

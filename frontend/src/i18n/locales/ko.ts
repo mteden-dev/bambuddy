@@ -1662,6 +1662,7 @@ export default {
       stopFailed: '인쇄 정지 실패',
       released: '인쇄가 대기열에 릴리스되었습니다',
       startFailed: '인쇄 시작 실패',
+      forcedFilamentMissing: '그대로 인쇄할 수 없습니다: 그 색상의 {{missing}}이(가) 있는 슬롯이 없어 프린터가 다른 색을 쓰거나 멈춥니다. 스풀을 넣거나 색상·프로필을 같은 것으로 지정하세요(설정 → 필라멘트).',
       reorderFailed: '대기열 순서 변경 실패',
       historyCleared: '{{count}}개 기록 항목이 지워졌습니다',
       clearHistoryFailed: '기록 지우기 실패',

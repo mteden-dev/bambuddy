@@ -1753,6 +1753,7 @@ export default {
       stopFailed: 'Error al detener la impresión',
       released: 'Impresión liberada a la cola',
       startFailed: 'Error al iniciar la impresión',
+      forcedFilamentMissing: 'No se puede imprimir de todos modos: ninguna ranura tiene {{missing}} en ese color, así que la impresora tomaría otro color o se detendría. Carga la bobina o marca colores o perfiles como iguales (Ajustes → Filamento).',
       reorderFailed: 'Error al reordenar la cola',
       historyCleared: 'Se borraron {{count}} elemento(s) del historial',
       clearHistoryFailed: 'Error al borrar el historial',

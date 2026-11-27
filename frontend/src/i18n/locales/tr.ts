@@ -1753,6 +1753,7 @@ export default {
       stopFailed: 'Baskı durdurulamadı',
       released: 'Baskı kuyruğa bırakıldı',
       startFailed: 'Baskı başlatılamadı',
+      forcedFilamentMissing: 'Yine de basılamaz: hiçbir yuvada o renkte {{missing}} yok, yazıcı başka bir renk alır ya da durur. Makarayı takın veya renkleri ya da profilleri aynı olarak işaretleyin (Ayarlar → Filament).',
       reorderFailed: 'Kuyruk yeniden sıralanamadı',
       historyCleared: '{{count}} geçmiş öğesi temizlendi',
       clearHistoryFailed: 'Geçmiş temizlenemedi',

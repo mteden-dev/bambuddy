@@ -1753,6 +1753,7 @@ export default {
       stopFailed: '停止列印失敗',
       released: '列印已加入佇列',
       startFailed: '開始列印失敗',
+      forcedFilamentMissing: '無法仍然列印：沒有槽位裝有該顏色的 {{missing}}，印表機會使用其他顏色或停止。請裝入料盤，或將顏色或預設標記為相同（設定 → 線材）。',
       reorderFailed: '重新排序佇列失敗',
       historyCleared: '已清除 {{count}} 條歷史紀錄',
       clearHistoryFailed: '清除歷史失敗',

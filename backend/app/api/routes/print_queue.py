@@ -3428,6 +3428,30 @@ async def start_queue_item(
                 },
             )
 
+    if skip_filament_check:
+        # Fork: Print Anyway cannot get past a forced colour with no tray, nor a
+        # print with no tray at all: the printer would print another colour or
+        # stop with 0700-8012 (print_scheduler.print_anyway_blockers). Said here
+        # rather than by holding the item again a pass later.
+        from backend.app.services.print_scheduler import scheduler as _scheduler
+
+        try:
+            blockers = await _scheduler.print_anyway_blockers(db, item, from_request=True)
+        except Exception:
+            logger.exception("Queue item %s: Print Anyway check failed", item_id)
+            blockers = []
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "forced_filament_missing",
+                    "message": "No tray holds a filament this job needs in its colour: "
+                    + ", ".join(blockers)
+                    + ". Load it, or mark colours or profiles as the same.",
+                    "missing": blockers,
+                },
+            )
+
     # Print Anyway / no deficit: clear the flags and let the scheduler dispatch.
     item.manual_start = False
     item.filament_short = False

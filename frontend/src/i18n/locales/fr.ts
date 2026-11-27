@@ -1753,6 +1753,7 @@ export default {
       stopFailed: 'Échec arrêt',
       released: 'Libéré dans la file',
       startFailed: 'Échec démarrage',
+      forcedFilamentMissing: 'Impossible d’imprimer quand même : aucun emplacement n’a {{missing}} dans cette couleur, l’imprimante prendrait une autre couleur ou s’arrêterait. Chargez la bobine ou marquez des couleurs ou profils comme identiques (Paramètres → Filament).',
       reorderFailed: 'Échec réorganisation',
       historyCleared: '{{count}} éléments effacés',
       clearHistoryFailed: 'Échec effacement',

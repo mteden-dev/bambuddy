@@ -1769,6 +1769,7 @@ export default {
       stopFailed: 'Kunde inte stoppa utskrift',
       released: 'Utskrift släppt till kö',
       startFailed: 'Kunde inte starta utskrift',
+      forcedFilamentMissing: 'Det går inte att skriva ut ändå: ingen plats har {{missing}} i den färgen, så skrivaren skulle ta en annan färg eller stanna. Ladda spolen eller markera färger eller profiler som samma (Inställningar → Filament).',
       reorderFailed: 'Kunde inte ordna om kö',
       historyCleared: 'Rensade {{count}} historikpost(er)',
       clearHistoryFailed: 'Kunde inte rensa historik',

@@ -80,6 +80,8 @@ jobs:
             backend/tests/unit/test_product_jobs_counted_migration_fork.py \
             backend/tests/unit/test_filament_aliases_fork.py \
             backend/tests/integration/test_filament_aliases_api_fork.py \
+            backend/tests/unit/test_print_anyway_forced_fork.py \
+            backend/tests/integration/test_print_anyway_forced_api_fork.py \
             backend/tests/unit/test_not_null_update_schemas.py \
             backend/tests/unit/test_sqlite_fk.py \
             backend/tests/unit/test_sqlite_autoincrement.py \

@@ -49,6 +49,14 @@ export function QueueStartButton({ item, className = '' }: QueueStartButtonProps
         setMissing((error.detail?.missing ?? []) as string[]);
         return;
       }
+      // Fork: Print Anyway cannot get past a forced colour with no tray.
+      if (error instanceof ApiError && error.status === 409 && error.code === 'forced_filament_missing') {
+        setShort(null);
+        setMissing(null);
+        const missingNow = (error.detail?.missing ?? []) as string[];
+        showToast(t('queue.toast.forcedFilamentMissing', { missing: missingNow.join(', ') }), 'error');
+        return;
+      }
       showToast(t('queue.toast.startFailed'), 'error');
     },
   });

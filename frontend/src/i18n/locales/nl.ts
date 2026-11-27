@@ -1769,6 +1769,7 @@ export default {
       stopFailed: 'Afdruk stoppen mislukt',
       released: 'Afdruk vrijgegeven aan wachtrij',
       startFailed: 'Afdruk starten mislukt',
+      forcedFilamentMissing: 'Toch printen kan niet: geen slot heeft {{missing}} in die kleur, dus de printer zou een andere kleur nemen of stoppen. Laad de spoel of markeer kleuren of profielen als hetzelfde (Instellingen → Filament).',
       reorderFailed: 'Wachtrij herschikken mislukt',
       historyCleared: '{{count}} geschiedenisitem(s) gewist',
       clearHistoryFailed: 'Geschiedenis wissen mislukt',

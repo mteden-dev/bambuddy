@@ -1753,6 +1753,7 @@ export default {
       stopFailed: 'Falha ao parar impressão',
       released: 'Impressão liberada para a fila',
       startFailed: 'Falha ao iniciar impressão',
+      forcedFilamentMissing: 'Não dá para imprimir mesmo assim: nenhum slot tem {{missing}} nessa cor, então a impressora pegaria outra cor ou pararia. Carregue o carretel ou marque cores ou perfis como iguais (Configurações → Filamento).',
       reorderFailed: 'Falha ao reordenar fila',
       historyCleared: 'Limpar {{count}} item(s) do histórico',
       clearHistoryFailed: 'Falha ao limpar histórico',

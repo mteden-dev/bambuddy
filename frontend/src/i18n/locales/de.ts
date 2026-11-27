@@ -1753,6 +1753,7 @@ export default {
       stopFailed: 'Druck konnte nicht gestoppt werden',
       released: 'Druck in Warteschlange freigegeben',
       startFailed: 'Druck konnte nicht gestartet werden',
+      forcedFilamentMissing: 'Trotzdem drucken geht nicht: Kein Slot hat {{missing}} in dieser Farbe, der Drucker nähme eine andere Farbe oder bliebe stehen. Lege die Spule ein oder markiere Farben oder Profile als gleich (Einstellungen → Filament).',
       reorderFailed: 'Warteschlange konnte nicht neu geordnet werden',
       historyCleared: '{{count}} Verlaufselement(e) gelöscht',
       clearHistoryFailed: 'Verlauf konnte nicht gelöscht werden',
