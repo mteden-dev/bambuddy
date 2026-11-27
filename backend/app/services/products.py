@@ -758,7 +758,7 @@ async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, 
         # A job that does not count prints for nothing the plan knows of: no label.
         own = sorted(
             (j for j in jobs if j.product_id == product_id and j.counted is not False),
-            key=lambda j: (j.status != "printing", positions.get(j.queue_item_id, 10**9), j.id),
+            key=lambda j: (j.status != "printing", positions.get(j.queue_item_id or -1, 10**9), j.id),
         )
         serving = serve_in_order(
             specs, await stock_pool(db, product), orders, [job_pieces(job, part_ids) for job in own]
@@ -901,7 +901,11 @@ async def _job_run(db: AsyncSession, job: ProductJob):
             )
         )
     ).scalars()
-    near = [r for r in candidates if abs((r.completed_at - job.finished_at).total_seconds()) <= 600]
+    near = [
+        r
+        for r in candidates
+        if r.completed_at is not None and abs((r.completed_at - job.finished_at).total_seconds()) <= 600
+    ]
     return near[0] if len(near) == 1 else None
 
 
@@ -1016,7 +1020,7 @@ async def reprints_of(db: AsyncSession, job_ids: list[int]) -> dict[int, Product
     rows = (
         await db.execute(select(ProductJob).where(ProductJob.reprint_of_id.in_(job_ids)).order_by(ProductJob.id))
     ).scalars()
-    return {job.reprint_of_id: job for job in rows}
+    return {job.reprint_of_id: job for job in rows if job.reprint_of_id is not None}
 
 
 async def live_reprint(db: AsyncSession, job: ProductJob) -> ProductJob | None:
@@ -1267,6 +1271,8 @@ async def _filament_inputs(
             )
         ).scalars()
         for item in running:
+            if item.printer_id is None:  # never: the query picks them by printer
+                continue
             product_filament.take(
                 left[item.printer_id], product_filament.item_uses(item, item.printer_id, spools[item.printer_id])
             )
@@ -1418,6 +1424,8 @@ async def link_hand_jobs(
         ):
             continue
         file_id = item.library_file_id or archive_file
+        if file_id is None:
+            continue
         plate_no = item.plate_id or archive_plate
         matches = [p for p in by_file.get(file_id, []) if p.plate_id is None or p.plate_id == plate_no]
         if len(matches) != 1:
@@ -1588,7 +1596,7 @@ async def _replan_once(
     jobs = await active_jobs(db, product.id)
     waiting = await waiting_jobs(db, jobs)
     # What the plan counts as still waiting, checked again once it is made.
-    planned_around = {j.queue_item_id for j in waiting}
+    planned_around = {j.queue_item_id for j in waiting if j.queue_item_id is not None}
     items = {
         item.id: item
         for item in (
@@ -1600,7 +1608,7 @@ async def _replan_once(
     placed_on = await _placed_on(db, waiting, items)
     held = sorted(
         (j for j in waiting if j.by_hand or _moved_by_hand(j, placed_on.get(j.id))),
-        key=lambda j: (items[j.queue_item_id].position or 0, j.id),
+        key=lambda j: (items[j.queue_item_id or -1].position or 0, j.id),
     )
     for job in held:
         if job.planned_printer_id is None:
@@ -1655,7 +1663,7 @@ async def _replan_once(
     ]
     placed = {placement.item_id: placement for placement in placements}
     for job in held:
-        placement = placed.get(job.queue_item_id)
+        placement = placed.get(job.queue_item_id or -1)
         if placement is not None:
             at = ready_after(placement.end) if ready_after is not None else placement.end
         else:
@@ -1789,7 +1797,7 @@ async def _replan_once(
     for job in waiting:
         reusable.setdefault((job.product_plate_id, job.printer_id, bool(job.pinned)), []).append(job)
     for queue in reusable.values():
-        queue.sort(key=lambda j: (items[j.queue_item_id].position or 0, j.id))
+        queue.sort(key=lambda j: (items[j.queue_item_id or -1].position or 0, j.id))
 
     # Where new jobs go: by the soonest due order each plate prints for,
     # against the other products' waiting jobs (the stock, the prints running
@@ -1840,7 +1848,7 @@ async def _replan_once(
         if kept_jobs:
             # Kept where it is in the queue.
             job = kept_jobs.pop(0)
-            item = items[job.queue_item_id]
+            item = items[job.queue_item_id or -1]
             after = max(after, item.position or 0)
             job.pieces = {str(part_id): n for part_id, n in planned_plate.option.pieces}
             job.preferred_printer_id = planned_plate.preferred
@@ -1965,7 +1973,7 @@ async def replaceable_items(db: AsyncSession, product_ids: Iterable[int]) -> dic
     placed_on = await _placed_on(db, waiting, items)
     result: dict[int, set[int]] = {}
     for job in waiting:
-        item = items.get(job.queue_item_id)
+        item = items.get(job.queue_item_id or -1)
         if item is None or not _same_item(job, item) or job.by_hand or _moved_by_hand(job, placed_on.get(job.id)):
             continue
         result.setdefault(job.product_id, set()).add(item.id)
@@ -2199,7 +2207,7 @@ async def order_plates(db: AsyncSession, product_order_ids: set[int]) -> list[Or
                 end=end,
                 moved=job.id in moved,
                 choices=choices,
-                orders=by_item[job.queue_item_id].orders,
+                orders=by_item[job.queue_item_id or -1].orders,
             )
         )
     far = datetime.max.replace(tzinfo=timezone.utc)
@@ -2315,7 +2323,7 @@ async def after_queue_items_changed(db: AsyncSession, queue_item_ids: list[int])
         if not _may_auto_replan(product_id, time.monotonic()):
             logger.warning("[PRODUCTS] Product %s: prints keep failing, not replanning it again for now", product_id)
             continue
-        source = next(items[j.queue_item_id] for j in started if j.product_id == product_id)
+        source = next(items[j.queue_item_id or -1] for j in started if j.product_id == product_id)
         task = asyncio.get_running_loop().create_task(
             _replan_later(product_id, source.created_by_id, bool(source.manual_start))
         )

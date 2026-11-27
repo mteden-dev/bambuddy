@@ -1094,7 +1094,7 @@ async def list_skus(db: AsyncSession = Depends(get_db, scope="function"), _=Read
     """The SKU map, and the SKUs of waiting or accepted orders that map to nothing yet."""
     names = dict((await db.execute(select(Product.id, Product.name))).all())
     mapped = [
-        SkuOut(sku=row.sku, product_id=row.product_id, product_name=names.get(row.product_id), units=row.units)
+        SkuOut(sku=row.sku, product_id=row.product_id, product_name=names.get(row.product_id or -1), units=row.units)
         for row in (await db.execute(select(ProductSku).order_by(ProductSku.sku))).scalars()
     ]
     skus = await svc.sku_map(db)

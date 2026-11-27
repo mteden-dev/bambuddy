@@ -461,7 +461,11 @@ async def reconcile(
     existing_products = set((await db.execute(select(Product.id).where(Product.id.in_(wanted)))).scalars())
     wanted = {pid: n for pid, n in wanted.items() if pid in existing_products and n > 0}
     changed: set[int] = set()
-    current = {int(po.external_ref.split("/", 1)[1]): po for po in await product_orders_of(db, order.order_id)}
+    current = {
+        int(po.external_ref.split("/", 1)[1]): po
+        for po in await product_orders_of(db, order.order_id)
+        if po.external_ref is not None  # always: picked by it
+    }
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     due = order_due(order, config)
     for product_id, quantity in wanted.items():

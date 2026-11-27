@@ -32,9 +32,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, cast
 
 from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.printer_scope import ALL_PRINTERS, PrinterScope
@@ -277,7 +278,10 @@ async def reserve(db: AsyncSession, item: PrintQueueItem, printer_id: int, *, so
 
 async def release(db: AsyncSession, item_id: int) -> bool:
     """End ``item_id``'s reservation, if it has one. The caller commits."""
-    result = await db.execute(delete(QueueReservation).where(QueueReservation.queue_item_id == item_id))
+    # A DELETE returns a CursorResult (rowcount), which execute() is not typed to say.
+    result = cast(
+        CursorResult, await db.execute(delete(QueueReservation).where(QueueReservation.queue_item_id == item_id))
+    )
     return bool(result.rowcount)
 
 

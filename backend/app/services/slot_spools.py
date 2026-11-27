@@ -45,8 +45,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import cast
 
-from sqlalchemy import delete, event, exists, select, update
+from sqlalchemy import Table, delete, event, exists, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.slot_spool_prompt import SlotSpoolPrompt
@@ -145,7 +147,8 @@ def _archive_unassigned_slot_spool(_mapper, connection, target: SpoolAssignment)
     spool_id = target.spool_id
     if spool_id is None:
         return
-    spool_t = Spool.__table__
+    # Declarative models type __table__ as a FromClause; it is a Table.
+    spool_t = cast(Table, Spool.__table__)
     assignment_t = SpoolAssignment.__table__
     connection.execute(
         update(spool_t)
@@ -157,7 +160,7 @@ def _archive_unassigned_slot_spool(_mapper, connection, target: SpoolAssignment)
         )
         .values(archived_at=datetime.now(timezone.utc))
     )
-    prompt_t = SlotSpoolPrompt.__table__
+    prompt_t = cast(Table, SlotSpoolPrompt.__table__)
     connection.execute(
         delete(prompt_t).where(
             prompt_t.c.printer_id == target.printer_id,
@@ -205,16 +208,22 @@ def presence_changes(printer_id: int, ams_data: list | None) -> PresenceChanges:
     for unit in ams_data or []:
         if not isinstance(unit, dict):
             continue
+        raw_ams_id = unit.get("id")
+        if raw_ams_id is None:
+            continue
         try:
-            ams_id = int(unit.get("id"))
+            ams_id = int(raw_ams_id)
         except (TypeError, ValueError):
             continue
         readings: dict[int, bool] = {}
         for tray in unit.get("tray") or []:
             if not isinstance(tray, dict):
                 continue
+            raw_tray_id = tray.get("id")
+            if raw_tray_id is None:
+                continue
             try:
-                tray_id = int(tray.get("id"))
+                tray_id = int(raw_tray_id)
             except (TypeError, ValueError):
                 continue
             present = spool_present(tray)
@@ -342,12 +351,16 @@ async def list_prompts(db: AsyncSession) -> list[SlotSpoolPrompt]:
 
 async def clear_prompt(db: AsyncSession, printer_id: int, ams_id: int, tray_id: int) -> bool:
     """Drop the slot's prompt ("same roll"); False when there was none."""
-    result = await db.execute(
-        delete(SlotSpoolPrompt).where(
-            SlotSpoolPrompt.printer_id == printer_id,
-            SlotSpoolPrompt.ams_id == ams_id,
-            SlotSpoolPrompt.tray_id == tray_id,
-        )
+    # A DELETE returns a CursorResult; execute() is typed as the plain Result.
+    result = cast(
+        CursorResult,
+        await db.execute(
+            delete(SlotSpoolPrompt).where(
+                SlotSpoolPrompt.printer_id == printer_id,
+                SlotSpoolPrompt.ams_id == ams_id,
+                SlotSpoolPrompt.tray_id == tray_id,
+            )
+        ),
     )
     return bool(result.rowcount)
 

@@ -158,9 +158,49 @@ jobs:
             src/__tests__/pages/QueuePage.test.tsx \
             src/__tests__/pages/SettingsPage.test.tsx
 
+  typecheck:
+    name: Type check the backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-typecheck.lock
+
+      - name: Install the pinned type-check environment
+        # requirements-typecheck.lock, as upstream's CI does: the baseline only
+        # holds for these exact library versions (see requirements-typecheck.txt).
+        run: pip install -r requirements-typecheck.lock
+
+      - name: Check the lock covers requirements.txt
+        # A dependency a patch adds to requirements.txt but not to the lock would
+        # show up below as an unresolved import instead of saying what is wrong.
+        run: |
+          if ! out=$(pip install --dry-run -r requirements.txt 2>&1); then
+            echo "$out"
+            echo "::error::pip could not resolve requirements.txt against the type-check environment."
+            exit 1
+          fi
+          if echo "$out" | grep '^Would install'; then
+            echo "::error::requirements-typecheck.lock is missing packages from requirements.txt."
+            exit 1
+          fi
+
+      - name: Run basedpyright
+        # Errors in upstream's .basedpyright/baseline.json pass; any other fails,
+        # so the patches' own code has to be clean. "discard" rather than
+        # upstream's "lock": lock also fails when a patch happens to fix a
+        # baselined error, and the fix would be an edit to upstream's baseline
+        # that every rebase onto a release would then conflict on.
+        run: basedpyright --pythonpath "$(which python)" --baselinemode=discard
+
   image:
     name: Build and push arm64 image
-    needs: test
+    needs: [test, typecheck]
     # Native arm64 runner (free for public repositories): no QEMU, so the
     # frontend build takes minutes rather than most of an hour.
     runs-on: ubuntu-24.04-arm

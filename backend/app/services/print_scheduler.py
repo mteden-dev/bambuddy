@@ -5103,7 +5103,10 @@ class PrintScheduler:
         ]
         return self._match_filaments_to_slots(reqs, loaded)
 
-    async def _get_filament_requirements(self, db: AsyncSession, item: PrintQueueItem) -> list[dict] | None:
+    # Fork: or just the file of a variant (_FileSource).
+    async def _get_filament_requirements(
+        self, db: AsyncSession, item: PrintQueueItem | _FileSource
+    ) -> list[dict] | None:
         """Resolve the queue item's source 3MF and parse the per-slot
         filament requirements out of it. Thin DB-resolver wrapper around
         ``filament_requirements.extract_filament_requirements`` so the VP

@@ -65,7 +65,7 @@ def normalize_color(raw: str | None) -> str:
     return text if _HEX.match(text) else ""
 
 
-def _groups(raw: Iterable, clean_member) -> tuple[tuple[str, ...], ...]:
+def _groups(raw: Iterable | None, clean_member) -> tuple[tuple[str, ...], ...]:
     """Clean members, drop groups of fewer than two, and join groups sharing a member."""
     merged: list[list[str]] = []
     for group in list(raw or [])[:MAX_GROUPS]:

@@ -533,7 +533,7 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
                 queue_item_id=job.queue_item_id,
                 status=job.status,
                 printer_id=printer_id,
-                printer_name=printer_names.get(printer_id),
+                printer_name=printer_names.get(printer_id or -1),
                 by_hand=bool(job.by_hand),
                 moved=job.id in moved,
                 counted=job.counted is not False,
@@ -930,7 +930,7 @@ async def cancel_queue_job(
     item = await db.get(PrintQueueItem, item_id)
     if item is None or not printer_scope.allows(item.printer_id):
         raise HTTPException(404, "Queue item not found")
-    if not can_modify_all and item.created_by_id != user.id:
+    if not can_modify_all and item.created_by_id != (user.id if user else None):
         raise HTTPException(403, "You can only cancel your own queue items")
     if item.status != "pending" or item.dispatching_at is not None:
         raise HTTPException(409, "Only a waiting job can be cancelled here; stop a printing one")
@@ -1052,7 +1052,11 @@ async def _qc_out(db: AsyncSession, jobs: list[ProductJob]) -> list[QcJobOut]:
             products[product_id] = product
     printer_names = dict((await db.execute(select(Printer.id, Printer.name))).all())
     reprints = await svc.reprints_of(db, [job.id for job in jobs])
-    reprint_state = {"planned": "waiting", "printing": "printing", "done": "done"}
+    reprint_state: dict[str, Literal["waiting", "printing", "done"]] = {
+        "planned": "waiting",
+        "printing": "printing",
+        "done": "done",
+    }
     result = []
     for job in jobs:
         product = products.get(job.product_id)
@@ -1068,7 +1072,7 @@ async def _qc_out(db: AsyncSession, jobs: list[ProductJob]) -> list[QcJobOut]:
                 product_id=product.id,
                 product_name=product.name,
                 printer_id=job.printer_id,
-                printer_name=printer_names.get(job.printer_id),
+                printer_name=printer_names.get(job.printer_id or -1),
                 library_file_id=plate.library_file_id if plate is not None else None,
                 filename=plate.library_file.filename if plate is not None and plate.library_file else None,
                 archive_id=job.archive_id,
@@ -1155,7 +1159,11 @@ async def check_job(
     await db.commit()
     if item_ids:
         await svc.announce_planned(item_ids)
-    [out] = await _qc_out(db, [await db.get(ProductJob, job_id)])
+    # Read again after the commit; gone only if deleted meanwhile.
+    fresh = await db.get(ProductJob, job_id)
+    if fresh is None:
+        raise HTTPException(404, "Job not found")
+    [out] = await _qc_out(db, [fresh])
     return QcCheckOut(
         job=out, replanned=replan, reopened_orders=[o.id for o in reopened], reprint_item_id=reprint_item_id
     )
@@ -1191,7 +1199,11 @@ async def uncheck_job(
     await db.commit()
     if item_ids:
         await svc.announce_planned(item_ids)
-    [out] = await _qc_out(db, [await db.get(ProductJob, job_id)])
+    # Read again after the commit; gone only if deleted meanwhile.
+    fresh = await db.get(ProductJob, job_id)
+    if fresh is None:
+        raise HTTPException(404, "Job not found")
+    [out] = await _qc_out(db, [fresh])
     return QcCheckOut(job=out, replanned=had_bad)
 
 
@@ -1226,7 +1238,7 @@ async def set_job_preference(
         raise HTTPException(409, "Only a waiting plate of the plan takes a preferred printer")
     if not await svc.waiting_jobs(db, [job]):
         raise HTTPException(409, "The plate is being sent to a printer already")
-    _, moved = await svc.placed_by_hand(db, [job])
+    moved = (await svc.placed_by_hand(db, [job]))[1]
     if job.id in moved:
         raise HTTPException(409, "The plate was moved by hand: it stays where it was put")
     if data.printer_id is not None:
@@ -1587,7 +1599,7 @@ async def suggest_plates(
         for f in files
         if svc.is_sliced_file(f)
         and svc.plate_model(f)
-        and (can_read_all or (f.created_by_id is not None and f.created_by_id == actor.id))
+        and (can_read_all or (actor is not None and f.created_by_id is not None and f.created_by_id == actor.id))
     ]
     have = {(p.library_file_id, p.plate_id) for p in product.plates}
     suggestions = []

@@ -152,7 +152,8 @@ async def load_samples(db: AsyncSession, now: datetime) -> list[Sample]:
                 )
             )
         ).all()
-        if timedelta(0) <= cleared - finished <= MAX_WAIT
+        # The query leaves out uncleared rows; the check tells the type checker.
+        if cleared is not None and timedelta(0) <= cleared - finished <= MAX_WAIT
     ]
     samples.extend(await _history_samples(db, since, _naive(tracking_from) if tracking_from else None))
     return samples
@@ -184,6 +185,8 @@ async def _history_samples(db: AsyncSession, since: datetime, until: datetime | 
     ends: dict[int, list[datetime]] = {}
     starts: dict[int, list[datetime]] = {}
     for printer_id, started, completed in (await db.execute(archive_query)).all():
+        if printer_id is None:  # left out by the query
+            continue
         if completed is not None:
             ends.setdefault(printer_id, []).append(_naive(completed))
         if started is not None:
@@ -193,6 +196,8 @@ async def _history_samples(db: AsyncSession, since: datetime, until: datetime | 
 
     samples: list[Sample] = []
     for printer_id, created, started, scheduled in (await db.execute(item_query)).all():
+        if printer_id is None or started is None:  # left out by the query
+            continue
         started = _naive(started)
         printer_ends = ends.get(printer_id, [])
         i = bisect.bisect_left(printer_ends, started) - 1
@@ -334,7 +339,7 @@ async def load_waiting_since(db: AsyncSession, printer_ids: list[int], now: date
                 .group_by(PrintArchive.printer_id)
             )
         ).all():
-            if finished is not None:
+            if printer_id is not None and finished is not None:
                 since[printer_id] = _aware(finished)
     return {pid: min(since.get(pid, now), now) for pid in printer_ids}
 

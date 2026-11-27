@@ -113,6 +113,7 @@ def learned_duration(runs: Iterable[Run], estimate: int | None) -> int | None:
         for r in runs
         if not r.failed
         and r.real_s is not None
+        and r.estimate_s is not None
         and same_slicing(r.estimate_s, estimate)
         and MIN_RATIO * r.estimate_s <= r.real_s <= MAX_RATIO * r.estimate_s
     ]
@@ -120,7 +121,7 @@ def learned_duration(runs: Iterable[Run], estimate: int | None) -> int | None:
     latest = usable[:DURATION_RUNS]
     if len(latest) < MIN_DURATION_RUNS:
         return None
-    learned = median(r.real_s for r in latest)
+    learned = median(r.real_s for r in latest if r.real_s is not None)
     return round(min(max(learned, MIN_LEARNED * estimate), MAX_LEARNED * estimate))
 
 

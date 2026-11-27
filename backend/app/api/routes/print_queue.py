@@ -60,7 +60,18 @@ from backend.app.schemas.print_queue import (
     QueueVariantSummary,
 )
 from backend.app.schemas.queue_forecast import (
+    QueueForecastMark,
+    QueueForecastOffTimeline,
+    QueueForecastPlacement,
+    QueueForecastPlateWait,
+    QueueForecastPrinter,
+    QueueForecastRefusal,
+    QueueForecastReservation,
     QueueForecastResponse,
+    QueueForecastStaffed,
+    QueueForecastTypical,
+    QueueForecastVariant,
+    QueueForecastWindow,
     QueuePlanRequest,
     QueuePlanResponse,
     QueueStaffedHours,
@@ -858,38 +869,38 @@ async def queue_forecast(
     return QueueForecastResponse(
         generated_at=forecast.generated_at,
         placements=[
-            {
-                "item_id": p.item_id,
-                "printer_id": p.printer_id,
-                "start": p.start,
-                "end": p.end,
-                "projected": p.projected,
-                "variant": _forecast_variant(p.variant) if p.variant is not None else None,
-                "reserved": p.reserved,
-            }
+            QueueForecastPlacement(
+                item_id=p.item_id,
+                printer_id=p.printer_id,
+                start=p.start,
+                end=p.end,
+                projected=p.projected,
+                variant=_forecast_variant(p.variant) if p.variant is not None else None,
+                reserved=p.reserved,
+            )
             for p in forecast.placements
             if visible(p.item_id) and printer_scope.allows(p.printer_id)
         ],
         off_timeline=[
-            {"item_id": o.item_id, "reason": o.reason, "detail": o.detail}
+            QueueForecastOffTimeline(item_id=o.item_id, reason=o.reason, detail=o.detail)
             for o in forecast.off_timeline
             if visible(o.item_id)
         ],
         printers=[
-            {
-                "printer_id": p.printer_id,
-                "free_at": p.free_at,
-                "available": p.available,
-                "connected": p.connected,
-                "external_print": p.external_print,
-                "awaiting_plate_clear": p.awaiting_plate_clear,
-            }
+            QueueForecastPrinter(
+                printer_id=p.printer_id,
+                free_at=p.free_at,
+                available=p.available,
+                connected=p.connected,
+                external_print=p.external_print,
+                awaiting_plate_clear=p.awaiting_plate_clear,
+            )
             for p in forecast.printers
             if printer_scope.allows(p.printer_id)
         ],
         refusals={
             str(item_id): {
-                str(printer_id): {"code": r.code, "detail": r.detail}
+                str(printer_id): QueueForecastRefusal(code=r.code, detail=r.detail)
                 for printer_id, r in per_printer.items()
                 if printer_scope.allows(printer_id)
             }
@@ -898,7 +909,7 @@ async def queue_forecast(
         },
         reserve_refusals={
             str(item_id): {
-                str(printer_id): {"code": r.code, "detail": r.detail}
+                str(printer_id): QueueForecastRefusal(code=r.code, detail=r.detail)
                 for printer_id, r in per_printer.items()
                 if printer_scope.allows(printer_id)
             }
@@ -906,7 +917,7 @@ async def queue_forecast(
             if visible(item_id)
         },
         reservations={
-            str(item_id): {"printer_id": printer_id, "active": active}
+            str(item_id): QueueForecastReservation(printer_id=printer_id, active=active)
             for item_id, (printer_id, active) in forecast.reservations.items()
             if visible(item_id) and printer_scope.allows(printer_id)
         },
@@ -916,7 +927,7 @@ async def queue_forecast(
             if visible(item_id)
         },
         plate_waits=[
-            {"printer_id": w.printer_id, "start": w.start, "end": w.end, "reason": w.reason}
+            QueueForecastPlateWait(printer_id=w.printer_id, start=w.start, end=w.end, reason=w.reason)
             for w in forecast.plate_waits
             if printer_scope.allows(w.printer_id)
         ],
@@ -924,24 +935,24 @@ async def queue_forecast(
     )
 
 
-def _forecast_staffed(turnaround) -> dict:
+def _forecast_staffed(turnaround) -> QueueForecastStaffed:
     """The forecast's rule for when a finished plate gets cleared, for the timeline's plan."""
     typical = turnaround.typical_week()
     someone_at, someone_reason = turnaround.someone_there()
-    return {
-        "enabled": turnaround.hours.enabled,
-        "windows": [{"start": a, "end": b} for a, b in turnaround.windows],
-        "marks": [{"start": a, "end": b, "kind": "here" if here else "away"} for a, b, here in turnaround.marks],
-        "clear_minutes": turnaround.hours.clear_minutes,
-        "waits_for_plate": turnaround.waits_for_plate,
-        "learn": turnaround.waits_for_plate and turnaround.hours.learn,
-        "learned_samples": turnaround.learned_samples,
-        "typical": {"start": typical[0], "minutes": typical[1]} if typical else None,
-        "away_until": turnaround.away_until,
-        "present_until": turnaround.present_until,
-        "someone_there_at": someone_at,
-        "someone_there_reason": someone_reason,
-    }
+    return QueueForecastStaffed(
+        enabled=turnaround.hours.enabled,
+        windows=[QueueForecastWindow(start=a, end=b) for a, b in turnaround.windows],
+        marks=[QueueForecastMark(start=a, end=b, kind="here" if here else "away") for a, b, here in turnaround.marks],
+        clear_minutes=turnaround.hours.clear_minutes,
+        waits_for_plate=turnaround.waits_for_plate,
+        learn=turnaround.waits_for_plate and turnaround.hours.learn,
+        learned_samples=turnaround.learned_samples,
+        typical=QueueForecastTypical(start=typical[0], minutes=typical[1]) if typical else None,
+        away_until=turnaround.away_until,
+        present_until=turnaround.present_until,
+        someone_there_at=someone_at,
+        someone_there_reason=someone_reason,
+    )
 
 
 async def _staffed_hours_view(db: AsyncSession, hours) -> dict:
@@ -989,15 +1000,15 @@ async def put_staffed_hours(
     return await _staffed_hours_view(db, hours)
 
 
-def _forecast_variant(variant: ForecastVariant) -> dict:
-    return {
-        "library_file_id": variant.library_file_id,
-        "target_model": variant.model,
-        "name": variant.name,
-        "plate_id": variant.plate_id,
-        "has_thumbnail": variant.has_thumbnail,
-        "print_time_seconds": variant.duration_s,
-    }
+def _forecast_variant(variant: ForecastVariant) -> QueueForecastVariant:
+    return QueueForecastVariant(
+        library_file_id=variant.library_file_id,
+        target_model=variant.model,
+        name=variant.name,
+        plate_id=variant.plate_id,
+        has_thumbnail=variant.has_thumbnail,
+        print_time_seconds=variant.duration_s,
+    )
 
 
 @router.post("/plan", response_model=QueuePlanResponse)
@@ -2941,7 +2952,7 @@ async def release_queue_reservation(
     item = await db.get(PrintQueueItem, item_id)
     if not item or not printer_scope.allows(item.printer_id):
         raise HTTPException(404, "Queue item not found")
-    if not can_modify_all and item.created_by_id != user.id:
+    if not can_modify_all and item.created_by_id != (user.id if user else None):
         raise HTTPException(403, "You can only update your own queue items")
     released = await release_reservation(db, item_id)
     await db.commit()

@@ -591,7 +591,9 @@ def _cheapest_cover(
     step = found
     while step[2] is not None:
         chosen.append(step[2])
-        step = memo[step[3]]  # type: ignore[assignment]
+        after = memo[step[3]]
+        assert after is not None  # every step on the chain was a cover found
+        step = after
     order = {o.id: i for i, o in enumerate(options)}
     return tuple(sorted(chosen, key=lambda o: order[o.id]))
 

@@ -347,8 +347,11 @@ więc po powrocie na oficjalny obraz zostają w folderze „OrcaSlicer”.
    o 04:23 UTC sprawdza ostatnie wydanie upstream. Jeśli `custom` nie jest
    jeszcze na nim zbudowany, robi `git rebase <tag>` i force-pushuje `custom`.
 2. Push na `custom` uruchamia **Custom image** (`.github/workflows/custom-image.yml`):
-   testy poprawek (lint, typecheck, testy backendu i frontendu dla zmienionych
-   miejsc), a potem build arm64 na natywnym runnerze ARM i push do GHCR.
+   testy poprawek (lint, typecheck frontendu, testy backendu i frontendu dla zmienionych
+   miejsc) i sprawdzenie typów backendu (basedpyright w środowisku z
+   `requirements-typecheck.lock`: błędy z baseline'u upstream przechodzą, każdy inny,
+   czyli każdy w kodzie poprawek, zatrzymuje build; baseline'u fork nie zmienia), a
+   potem build arm64 na natywnym runnerze ARM i push do GHCR.
 3. W Coolify: **Redeploy** zasobu bambuddy (pobiera nowy `:custom`).
 
 Gdy rebase trafi na konflikt, workflow zostawia `custom` bez zmian, zakłada
