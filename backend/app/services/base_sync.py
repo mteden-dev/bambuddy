@@ -681,14 +681,19 @@ async def read_ship_dates(client: BaseClient, rows: list[BaseOrder]) -> set[int]
 
 
 async def replan_products(db: AsyncSession, product_ids: set[int], config: BaseConfig) -> list[int]:
-    """Plan each product again, as the system (all printers). The caller commits."""
+    """Plan each product again, as the system (all printers); returns them, sorted. The caller commits.
+
+    One pass, the most urgent first, with the products behind them in the
+    queue planned again too (see ``products.replan_pass``).
+    """
     from backend.app.services import products as product_service
 
-    done = []
-    for product_id in sorted(product_ids):
-        await product_service.replan(db, product_id, actor_id=None, manual_start=config.manual_start, printer_ids=None)
-        done.append(product_id)
-    return done
+    if not product_ids:
+        return []
+    await product_service.replan_pass(
+        db, product_ids, actor_id=None, manual_start=config.manual_start, printer_ids=None
+    )
+    return sorted(product_ids)
 
 
 async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult:

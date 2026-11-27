@@ -174,3 +174,19 @@ async def test_the_printer_cards_list_shows_a_reserved_job_only_on_its_printer(a
 
     assert farm.j3 not in {item["id"] for item in on_a}
     assert farm.j3 in {item["id"] for item in on_b}
+
+
+async def test_holding_a_job_the_product_planner_reserved_makes_the_hold_someones(
+    async_client: AsyncClient, db_session, farm
+):
+    from backend.app.services.queue_reservations import SOURCE_PLAN, SOURCE_USER, reserve
+
+    await reserve(db_session, await db_session.get(PrintQueueItem, farm.j3), farm.b, source=SOURCE_PLAN)
+    await db_session.commit()
+
+    response = await _apply(async_client, {farm.a, farm.b}, {farm.a: [farm.j1], farm.b: [farm.j3, farm.j2]}, [farm.j3])
+
+    assert response.status_code == 200, response.text
+    db_session.expire_all()
+    row = await db_session.get(QueueReservation, farm.j3)
+    assert (row.printer_id, row.source) == (farm.b, SOURCE_USER)

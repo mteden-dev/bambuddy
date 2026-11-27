@@ -969,7 +969,7 @@ async def test_new_jobs_go_before_another_products_jobs_due_later(
         {"quantity": 1, "due_date": (now + timedelta(days=3)).isoformat()},
         connected,
     )
-    [magnet_job] = (await _positions(db_session)).keys()
+    assert len(await _positions(db_session)) == 1
 
     await _post(
         async_client,
@@ -978,6 +978,9 @@ async def test_new_jobs_go_before_another_products_jobs_due_later(
         connected,
     )
     positions = await _positions(db_session)
+    # The magnet is planned again behind the box (on the printer the box
+    # leaves free first), so its job may be a new one.
+    [magnet_job] = [i.id for i in await _queue(db_session) if i.library_file_id == later_file]
     box_jobs = [item_id for item_id in positions if item_id != magnet_job]
     assert len(box_jobs) == 3
     # The box ships first: its prints go before the magnet's.

@@ -15,12 +15,17 @@ A product is parts; its plates are sliced files that print pieces of them
   job that started is left alone and its pieces count as coming. Parts marked
   matched (a lid and its base) are pinned to one printer; the others are
   "Any <model>" jobs reserved on the printer the plan put them on
-  (services/queue_reservations.py).
+  (services/queue_reservations.py), a hold that yields when that printer
+  cannot take the job soon. A plate is planned with how long it really
+  prints and how often it fails (services/plate_history.py).
 - **Replanning** happens when an order is added, changed or cancelled, when
   stock is corrected, on request, when one of its prints fails or is stopped,
   and when one of its waiting jobs is cancelled in the queue through
   ``POST /products/queue-items/{id}/cancel`` (print again, the pieces are on
   hand, or withdraw its orders). Nothing else rewrites the planner's jobs.
+  Each of these is one pass (``replan_pass``): the products asked for and
+  every less urgent product behind them, the most urgent planned first, so
+  each plan is made for the hours its place in the queue gives it.
 
 ``after_queue_items_changed`` is called where print batches are refreshed
 (services/print_batch.py), so a job's row follows its queue job there.
@@ -33,6 +38,8 @@ import json
 import logging
 import re
 import time
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -66,6 +73,9 @@ DEFAULT_DURATION_S = 3600
 
 JOB_TERMINAL = ("done", "failed", "cancelled")
 REPLAN_DELAY_S = 2.0
+# Plans of a product made again when a waiting job it was planned around
+# started meanwhile (the planner runs off the event loop, the scheduler on it).
+PLAN_TRIES = 3
 JOB_ACTIVE = ("planned", "printing")
 
 
@@ -102,6 +112,10 @@ FORCE_COLOR_KEY = "product_force_color"
 # their pieces are stock and serve the orders. Off unless set: prints made
 # beside the plan usually went into boxes the plan knows nothing about.
 HAND_PRINTS_KEY = "product_hand_prints_count"
+# Plates are planned with how long they really print and how often they fail
+# (services/plate_history.py). On unless set to "false": then the slicer's
+# times, and no plate counts as risky. No page sets it.
+LEARN_HISTORY_KEY = "product_learn_history"
 
 
 @dataclass(frozen=True)
@@ -111,6 +125,7 @@ class PlanSettings:
     swap_minutes: int = DEFAULT_SWAP_MINUTES
     force_color: bool = True
     hand_prints_count: bool = False
+    learn_history: bool = True
 
 
 def _bounded(raw: str | None, default: int, top: int) -> int:
@@ -126,7 +141,14 @@ async def read_plan_settings(db: AsyncSession) -> PlanSettings:
             await db.execute(
                 select(Settings.key, Settings.value).where(
                     Settings.key.in_(
-                        (PREFER_MINUTES_KEY, PREFER_PCT_KEY, SWAP_MINUTES_KEY, FORCE_COLOR_KEY, HAND_PRINTS_KEY)
+                        (
+                            PREFER_MINUTES_KEY,
+                            PREFER_PCT_KEY,
+                            SWAP_MINUTES_KEY,
+                            FORCE_COLOR_KEY,
+                            HAND_PRINTS_KEY,
+                            LEARN_HISTORY_KEY,
+                        )
                     )
                 )
             )
@@ -134,12 +156,14 @@ async def read_plan_settings(db: AsyncSession) -> PlanSettings:
     )
     force = rows.get(FORCE_COLOR_KEY)
     hand = rows.get(HAND_PRINTS_KEY)
+    learn = rows.get(LEARN_HISTORY_KEY)
     return PlanSettings(
         prefer_minutes=_bounded(rows.get(PREFER_MINUTES_KEY), DEFAULT_PREFER_MINUTES, MAX_PREFER_MINUTES),
         prefer_pct=_bounded(rows.get(PREFER_PCT_KEY), DEFAULT_PREFER_PCT, 100),
         swap_minutes=_bounded(rows.get(SWAP_MINUTES_KEY), DEFAULT_SWAP_MINUTES, MAX_SWAP_MINUTES),
         force_color=True if force is None else force.strip().lower() == "true",
         hand_prints_count=hand is not None and hand.strip().lower() == "true",
+        learn_history=learn is None or learn.strip().lower() != "false",
     )
 
 
@@ -1472,6 +1496,13 @@ def _moved_by_hand(job: ProductJob, placed_on: int | None) -> bool:
     return placed_on is not None and planned is not None and placed_on != planned
 
 
+async def _run_planner(inputs: planner.PlanInputs) -> planner.Plan:
+    """The planner, in a worker thread: it takes seconds on a small computer,
+    and MQTT and the print scheduler must not stand still meanwhile. The inputs
+    are plain values (and the turnaround's functions); no database in there."""
+    return await asyncio.to_thread(planner.plan, inputs)
+
+
 async def replan(
     db: AsyncSession,
     product_id: int,
@@ -1479,6 +1510,7 @@ async def replan(
     actor_id: int | None,
     manual_start: bool = False,
     printer_ids: frozenset[int] | None = None,
+    ignore_items: frozenset[int] = frozenset(),
 ) -> PlanOutcome:
     """Plan the product's open orders again and put the plates in the queue.
 
@@ -1492,13 +1524,56 @@ async def replan(
     before the first waiting job of another product due later than the orders
     they print for (after the plan's earlier plates), else at the end.
     ``printer_ids`` limits the printers (the user's printer scope);
-    ``manual_start`` makes new jobs wait for someone to press Start. The
-    caller commits.
+    ``manual_start`` makes new jobs wait for someone to press Start, so the
+    plan has no printer start before someone is expected there.
+    The lanes include the jobs held for filament someone has to load
+    (``ForecastInputs.planning_jobs``). Each plate takes the time its
+    history says it really prints, and counts its chance of failing
+    (services/plate_history.py; the slicer's time and no risk with
+    ``PlanSettings.learn_history`` off); its queue job carries that time,
+    and ``plan_info["estimate_s"]`` the slicer's. The plan's holds on
+    printers are the planner's (``SOURCE_PLAN``): they yield when the
+    printer cannot take the job soon (services/queue_reservations.py).
+    ``ignore_items`` are queue jobs left out of the lanes the plan is made on:
+    the waiting jobs of products that go behind this one (see
+    ``replan_pass``), so the plan is made for the hours its place in the
+    queue gives it. The planner runs in a worker thread; when one of the
+    waiting jobs it was planned around started meanwhile, the plan is made
+    again from the state then (up to PLAN_TRIES times; after that the started
+    jobs are left alone). The caller commits.
     """
+    for attempt in range(PLAN_TRIES):
+        outcome = await _replan_once(
+            db,
+            product_id,
+            actor_id=actor_id,
+            manual_start=manual_start,
+            printer_ids=printer_ids,
+            ignore_items=ignore_items,
+            last_try=attempt == PLAN_TRIES - 1,
+        )
+        if outcome is not None:
+            return outcome
+        logger.info("[PRODUCTS] Product %s: a waiting job started while it was planned, planning again", product_id)
+    raise AssertionError("the last try always returns")
+
+
+async def _replan_once(
+    db: AsyncSession,
+    product_id: int,
+    *,
+    actor_id: int | None,
+    manual_start: bool,
+    printer_ids: frozenset[int] | None,
+    ignore_items: frozenset[int],
+    last_try: bool,
+) -> PlanOutcome | None:
+    """One try of ``replan``; None when a waiting job started during the plan and it is not the last try."""
+    from backend.app.services.plate_history import load_plate_history
     from backend.app.services.print_defaults import default_print_options
     from backend.app.services.queue_forecast import load_forecast_inputs, place_jobs
     from backend.app.services.queue_position import lock_queue_positions
-    from backend.app.services.queue_reservations import reserve
+    from backend.app.services.queue_reservations import SOURCE_PLAN, reserve
 
     product = await load_product(db, product_id)
     if product is None:
@@ -1512,6 +1587,8 @@ async def replan(
     orders = await open_orders(db, product.id)
     jobs = await active_jobs(db, product.id)
     waiting = await waiting_jobs(db, jobs)
+    # What the plan counts as still waiting, checked again once it is made.
+    planned_around = {j.queue_item_id for j in waiting}
     items = {
         item.id: item
         for item in (
@@ -1552,12 +1629,19 @@ async def replan(
         if job.preferred_printer_id is not None and job.product_plate_id is not None
     ]
 
+    settings = await read_plan_settings(db)
     inputs = await load_forecast_inputs(db)
     now = inputs.now
     ready_after = inputs.ready_after
-    # The lanes as they are without this product's waiting jobs: the plan
-    # places them again.
-    others = [job for job in inputs.schedulable if job.id not in waiting_items]
+    # The lanes as they are without this product's waiting jobs (the plan
+    # places them again) and without the jobs that go behind it. Jobs held
+    # for filament someone has to load are on them too: once it is loaded
+    # they print, and take their lane's time from then.
+    others = [
+        job
+        for job in inputs.planning_jobs(settings.swap_minutes * 60)
+        if job.id not in waiting_items and job.id not in ignore_items
+    ]
     placements, _ = place_jobs(others, inputs.printers, now, ready_after)
     lane_end = {p.id: max(_aware(p.free_at) or now, now) for p in inputs.printers}
     for placement in placements:
@@ -1582,9 +1666,21 @@ async def replan(
     # night, no Auto On plug), every enabled one, so an order still gets planned.
     usable = [p for p in inputs.printers if p.is_active and (printer_ids is None or p.id in printer_ids)]
     online = [p for p in usable if p.available]
-    printers = [planner.PlannerPrinter(p.id, model_key(p.model), lane_end[p.id]) for p in (online or usable)]
+    # New jobs that wait for someone to press Start start no sooner than
+    # someone is expected there, as the forecast places them.
+    starts_from = _aware(inputs.turnaround.someone_there()[0]) if manual_start else None
+    printers = [
+        planner.PlannerPrinter(
+            p.id, model_key(p.model), max(lane_end[p.id], starts_from) if starts_from is not None else lane_end[p.id]
+        )
+        for p in (online or usable)
+    ]
 
     allowed_by_plate = await plate_printers(db, product.plates, [p.id for p in printers])
+    usable_plates = [plate for plate in product.plates if plate_usable(plate)]
+    # The slicer's time per plate, and what the plate's history makes of it.
+    estimates = {plate.id: est for plate in usable_plates if (est := plate_duration(plate)) is not None}
+    history = await load_plate_history(db, usable_plates, estimates, now) if settings.learn_history else {}
     options: list[planner.PlateOption] = []
     plates_by_id: dict[int, ProductPlate] = {}
     skipped: list[tuple[int, str]] = []
@@ -1600,21 +1696,33 @@ async def replan(
         if not model:
             skipped.append((plate.id, "no_model"))
             continue
+        learned = history.get(plate.id)
         options.append(
             planner.PlateOption(
                 id=plate.id,
                 model=model_key(model),
-                duration_s=plate_duration(plate) or DEFAULT_DURATION_S,
+                duration_s=(learned.duration_s if learned else None) or estimates.get(plate.id) or DEFAULT_DURATION_S,
                 pieces=pieces,
                 printers=allowed_by_plate.get(plate.id),
+                risk=learned.risk if learned else 0.0,
             )
         )
         plates_by_id[plate.id] = plate
 
-    settings = await read_plan_settings(db)
-    filament = await _filament_inputs(db, inputs, placements, printers, options, plates_by_id, settings)
+    # The jobs held for filament take none from the spools there now: they
+    # wait for a spool someone loads.
+    held_for_filament = {job.id for job in inputs.held}
+    filament = await _filament_inputs(
+        db,
+        inputs,
+        [p for p in placements if p.item_id not in held_for_filament],
+        printers,
+        options,
+        plates_by_id,
+        settings,
+    )
     plate_cost = await read_plate_cost_minutes(db)
-    result = planner.plan(
+    result = await _run_planner(
         planner.PlanInputs(
             now=now,
             parts=specs,
@@ -1635,6 +1743,30 @@ async def replan(
             prefer_pct=float(settings.prefer_pct),
         )
     )
+    # The scheduler may have started a waiting job while the plan was made:
+    # the plan counted it as waiting (to replace, or held as coming).
+    still = {j.queue_item_id for j in await waiting_jobs(db, jobs)}
+    if planned_around - still:
+        if not last_try:
+            return None
+        logger.warning(
+            "[PRODUCTS] Product %s: queue jobs %s started while it was planned; planned without them",
+            product_id,
+            sorted(planned_around - still),
+        )
+        # Never touched: neither kept (reserved, changed) nor taken out.
+        waiting = [job for job in waiting if job.queue_item_id in still]
+        unneeded = [job for job in unneeded if job.queue_item_id in still]
+
+    def job_info(planned_plate: planner.PlannedPlate) -> dict:
+        # With the slicer's estimate the plan started from: the queue job
+        # carries the learned time, and the plate's history needs to know
+        # which slicing a run was (plate_history.recorded_estimate).
+        info = product_filament.plan_info(planned_plate)
+        estimate = estimates.get(planned_plate.option.id)
+        if estimate is not None:
+            info["estimate_s"] = estimate
+        return info
 
     rank = {p.id: i for i, p in enumerate(inputs.printers)}
     planned = sorted(result.plates, key=lambda p: (p.start, rank.get(p.printer_id, 0)))
@@ -1684,15 +1816,20 @@ async def replan(
     )
 
     def place(due: datetime | None, after: int) -> int:
-        """A position for a new job, making room for it; never at or before ``after``."""
-        if due is not None:
-            for other in sorted(queue, key=lambda i: (i.position or 0, i.id)):
-                at = other.position or 0
-                if at > after and other.id in other_dues and other_dues[other.id] > due:
-                    for moved in queue:
-                        if (moved.position or 0) >= at:
-                            moved.position = (moved.position or 0) + 1
-                    return at
+        """A position for a new job, making room for it; never at or before ``after``.
+
+        Before the first job left out of the plan's lanes (``ignore_items``:
+        it goes behind this product) or of another product due later.
+        """
+        for other in sorted(queue, key=lambda i: (i.position or 0, i.id)):
+            at = other.position or 0
+            if at > after and (
+                other.id in ignore_items or (due is not None and other.id in other_dues and other_dues[other.id] > due)
+            ):
+                for moved in queue:
+                    if (moved.position or 0) >= at:
+                        moved.position = (moved.position or 0) + 1
+                return at
         return max([after, *(i.position or 0 for i in queue)]) + 1
 
     after = 0
@@ -1707,9 +1844,12 @@ async def replan(
             after = max(after, item.position or 0)
             job.pieces = {str(part_id): n for part_id, n in planned_plate.option.pieces}
             job.preferred_printer_id = planned_plate.preferred
-            job.plan_info = product_filament.plan_info(planned_plate)
+            job.plan_info = job_info(planned_plate)
+            # The time the plan used, so the queue's forecast agrees with it.
+            if item.print_time_seconds != planned_plate.option.duration_s:
+                item.print_time_seconds = planned_plate.option.duration_s
             if not pinned:
-                await reserve(db, item, planned_plate.printer_id)
+                await reserve(db, item, planned_plate.printer_id, source=SOURCE_PLAN)
             waiting.remove(job)
             outcome.kept += 1
             continue
@@ -1757,7 +1897,7 @@ async def replan(
         await db.refresh(item, ["created_at"])
         queue.append(item)
         if not pinned:
-            await reserve(db, item, planned_plate.printer_id)
+            await reserve(db, item, planned_plate.printer_id, source=SOURCE_PLAN)
         db.add(
             ProductJob(
                 product_id=product.id,
@@ -1770,13 +1910,178 @@ async def replan(
                 status="planned",
                 pieces={str(part_id): n for part_id, n in planned_plate.option.pieces},
                 preferred_printer_id=planned_plate.preferred,
-                plan_info=product_filament.plan_info(planned_plate),
+                plan_info=job_info(planned_plate),
             )
         )
         outcome.item_ids.append(item.id)
     await db.flush()
     outcome.replaced = await _remove_waiting_jobs(db, waiting + unneeded)
     return outcome
+
+
+@dataclass
+class PassOutcome:
+    """What ``replan_pass`` did."""
+
+    # Product id -> its plan, in the order they were planned.
+    outcomes: dict[int, PlanOutcome] = field(default_factory=dict)
+    # Planned again though nobody asked: a more urgent product went ahead of them.
+    displaced: list[int] = field(default_factory=list)
+    # Products whose plan failed; they are left as they were.
+    failed: list[int] = field(default_factory=list)
+
+    @property
+    def item_ids(self) -> list[int]:
+        """Every queue job the pass made, for ``announce_planned``."""
+        return [item_id for outcome in self.outcomes.values() for item_id in outcome.item_ids]
+
+    def of(self, product_id: int) -> PlanOutcome:
+        return self.outcomes.get(product_id) or PlanOutcome(plan=None)
+
+
+async def replaceable_items(db: AsyncSession, product_ids: Iterable[int]) -> dict[int, frozenset[int]]:
+    """Product id -> the queue jobs a replan of it is free to replace.
+
+    Its planner's waiting jobs (planned, pending, not being sent) that were not
+    queued or moved by hand: the same test ``replan`` applies to its own.
+    """
+    ids = list(product_ids)
+    if not ids:
+        return {}
+    jobs = list(
+        (
+            await db.execute(select(ProductJob).where(ProductJob.product_id.in_(ids), ProductJob.status == "planned"))
+        ).scalars()
+    )
+    waiting = await waiting_jobs(db, jobs)
+    if not waiting:
+        return {}
+    items = {
+        item.id: item
+        for item in (
+            await db.execute(select(PrintQueueItem).where(PrintQueueItem.id.in_([j.queue_item_id for j in waiting])))
+        ).scalars()
+    }
+    placed_on = await _placed_on(db, waiting, items)
+    result: dict[int, set[int]] = {}
+    for job in waiting:
+        item = items.get(job.queue_item_id)
+        if item is None or not _same_item(job, item) or job.by_hand or _moved_by_hand(job, placed_on.get(job.id)):
+            continue
+        result.setdefault(job.product_id, set()).add(item.id)
+    return {product_id: frozenset(item_ids) for product_id, item_ids in result.items()}
+
+
+async def _standing_owner(db: AsyncSession, product_id: int) -> tuple[int | None, bool, frozenset[int] | None]:
+    """Whom a product's waiting jobs were planned for: (actor id, manual start, printer scope).
+
+    For a product planned again that nobody asked about: its new jobs belong
+    to whoever its waiting jobs belong to. The actor is the most common
+    ``created_by_id`` of the planner's waiting jobs (None without any, or
+    when the system queued them), manual start when any of them waits for it.
+    """
+    from backend.app.core.printer_scope import resolve_user_id_printer_scope
+
+    waiting = [job for job in await waiting_jobs(db, await active_jobs(db, product_id)) if not job.by_hand]
+    items = []
+    if waiting:
+        items = list(
+            (
+                await db.execute(
+                    select(PrintQueueItem)
+                    .where(PrintQueueItem.id.in_([j.queue_item_id for j in waiting]))
+                    .order_by(PrintQueueItem.position, PrintQueueItem.id)
+                )
+            ).scalars()
+        )
+    owners = Counter(item.created_by_id for item in items)
+    actor_id = owners.most_common(1)[0][0] if owners else None
+    scope = await resolve_user_id_printer_scope(db, actor_id)
+    return actor_id, any(item.manual_start for item in items), scope.printer_ids
+
+
+async def replan_pass(
+    db: AsyncSession,
+    product_ids: Iterable[int] | None,
+    *,
+    actor_id: int | None,
+    manual_start: bool = False,
+    printer_ids: frozenset[int] | None = None,
+    commit_each: bool = False,
+) -> PassOutcome:
+    """Plan ``product_ids`` again (None: every product with work) and the products behind them.
+
+    Urgency is ``products_to_replan``'s order, the soonest due first. A new
+    plan goes into the queue before the waiting jobs of products due later,
+    so it must be made on lanes without them, and those products must be
+    planned again behind it. So the pass takes the asked-for products and
+    every product after the most urgent of them in that order, and plans
+    them in that order, each with ``ignore_items`` = the waiting jobs of the
+    pass's later products that their own replan is free to replace
+    (``replaceable_items``). The most urgent product is planned on lanes
+    free of the later ones' plates, the next on top of it, and so on. A
+    product planned again whose plan comes out the same keeps its jobs as
+    they are (``replan`` keeps a waiting job the new plan has too).
+
+    Asked-for products are planned for the caller (``actor_id``,
+    ``manual_start``, ``printer_ids``); one that fails raises. The others
+    (``PassOutcome.displaced``) are planned for whoever their waiting jobs
+    belong to (``_standing_owner``), each in a savepoint: one that fails is
+    logged, left as it was and listed in ``PassOutcome.failed``. With
+    ``commit_each`` every product is committed on its own, and any that
+    fails is rolled back and listed instead of raising. Otherwise the
+    caller commits.
+    """
+    order = await products_to_replan(db)
+    asked = set(order) if product_ids is None else set(product_ids)
+    if not asked:
+        return PassOutcome()
+    # Asked-for products with nothing to plan still get their replan (it
+    # closes ready orders, takes leftover jobs out); last, they wait for nothing.
+    order += sorted(asked - set(order))
+    first = next(index for index, product_id in enumerate(order) if product_id in asked)
+    in_pass = order[first:]
+    replaceable = await replaceable_items(db, in_pass)
+    result = PassOutcome()
+    for index, product_id in enumerate(in_pass):
+        behind = frozenset().union(*(replaceable.get(later, frozenset()) for later in in_pass[index + 1 :]))
+        mine = product_id in asked
+        if not mine:
+            result.displaced.append(product_id)
+
+        async def plan_it(product_id: int = product_id, mine: bool = mine, behind: frozenset[int] = behind):
+            owner = (actor_id, manual_start, printer_ids) if mine else await _standing_owner(db, product_id)
+            return await replan(
+                db, product_id, actor_id=owner[0], manual_start=owner[1], printer_ids=owner[2], ignore_items=behind
+            )
+
+        if commit_each:
+            try:
+                outcome = await plan_it()
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                logger.exception("[PRODUCTS] Could not replan product %s", product_id)
+                result.failed.append(product_id)
+                continue
+        elif mine:
+            outcome = await plan_it()
+        else:
+            try:
+                async with db.begin_nested():
+                    outcome = await plan_it()
+            except Exception:
+                logger.exception("[PRODUCTS] Could not replan product %s behind a more urgent one", product_id)
+                result.failed.append(product_id)
+                continue
+        result.outcomes[product_id] = outcome
+    if result.displaced:
+        logger.info(
+            "[PRODUCTS] Replanned products %s behind %s, the more urgent",
+            result.displaced,
+            sorted(p for p in in_pass if p in asked),
+        )
+    return result
 
 
 async def announce_planned(item_ids: list[int]) -> None:
@@ -1825,8 +2130,10 @@ class OrderPlate:
 async def order_plates(db: AsyncSession, product_order_ids: set[int]) -> list[OrderPlate]:
     """The planner's waiting and printing jobs that print for these product orders, the printing first.
 
-    Where a waiting job prints and when is the queue forecast's; a printing
-    one's end is its printer's.
+    Where a waiting job prints and when is the queue forecast's, as the
+    planner sees it (a job held for filament starts once someone has loaded
+    it), so it agrees with ``order_estimates``; a printing one's end is its
+    printer's.
     """
     from backend.app.models.printer import Printer
     from backend.app.services.queue_forecast import build_queue_forecast
@@ -1849,7 +2156,7 @@ async def order_plates(db: AsyncSession, product_order_ids: set[int]) -> list[Or
         ).scalars()
     )
     forecast = await build_queue_forecast(db)
-    placed = {p.item_id: p for p in forecast.placements}
+    placed = {p.item_id: p for p in forecast.planning_placements}
     free_at = {p.printer_id: p.free_at for p in forecast.printers}
     available = {p.printer_id: p.available for p in forecast.printers}
     printers = list((await db.execute(select(Printer).order_by(Printer.id))).scalars())
@@ -1903,7 +2210,11 @@ async def order_plates(db: AsyncSession, product_order_ids: set[int]) -> list[Or
 async def order_estimates(
     db: AsyncSession, product: Product, pool: planner.Pool, orders: list[ProductOrder], forecast=None
 ) -> dict[int, datetime | None]:
-    """When each open order is expected to be ready, from the queue forecast (built when not given)."""
+    """When each open order is expected to be ready, from the queue forecast (built when not given).
+
+    The forecast as the planner sees it: a job held for filament prints once
+    someone has loaded it (``QueueForecast.planning_placements``).
+    """
     if not orders:
         return {}
     from backend.app.services.queue_forecast import build_queue_forecast
@@ -1912,7 +2223,7 @@ async def order_estimates(
         forecast = await build_queue_forecast(db)
     now = forecast.generated_at
     ready_after = forecast.turnaround.as_function() if forecast.turnaround is not None else None
-    placed = {p.item_id: p for p in forecast.placements}
+    placed = {p.item_id: p for p in forecast.planning_placements}
     free_at = {p.printer_id: _aware(p.free_at) or now for p in forecast.printers}
     part_ids = {p.id for p in product.parts}
     arrivals = planner.stock_arrivals(pool, now)
@@ -2022,11 +2333,11 @@ async def _replan_later(product_id: int, actor_id: int | None, manual_start: boo
     try:
         async with database.async_session() as db:
             scope = await resolve_user_id_printer_scope(db, actor_id)
-            outcome = await replan(
-                db, product_id, actor_id=actor_id, manual_start=manual_start, printer_ids=scope.printer_ids
+            done = await replan_pass(
+                db, [product_id], actor_id=actor_id, manual_start=manual_start, printer_ids=scope.printer_ids
             )
             await db.commit()
-        await announce_planned(outcome.item_ids)
+        await announce_planned(done.item_ids)
         logger.info("[PRODUCTS] Replanned product %s after a print failed or was stopped", product_id)
     except Exception as e:
         logger.warning("[PRODUCTS] Could not replan product %s after a print failed or was stopped: %s", product_id, e)

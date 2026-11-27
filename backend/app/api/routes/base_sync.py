@@ -1031,12 +1031,13 @@ async def _withdraw_preview(db: AsyncSession, row: BaseOrder, return_done: bool)
 
     # Withdraw and plan, then compare.
     config = await svc.read_config(db)
+    skipped = await svc.skip(db, row, return_done=return_done)
     added_ids: list[int] = []
-    for product_id in sorted(await svc.skip(db, row, return_done=return_done)):
-        outcome = await product_service.replan(
-            db, product_id, actor_id=None, manual_start=config.manual_start, printer_ids=None
+    if skipped:
+        planned = await product_service.replan_pass(
+            db, skipped, actor_id=None, manual_start=config.manual_start, printer_ids=None
         )
-        added_ids += outcome.item_ids
+        added_ids = planned.item_ids
     after_jobs = list(
         (
             await db.execute(

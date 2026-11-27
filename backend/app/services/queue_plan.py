@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.services import queue_reservations
 from backend.app.services.queue_forecast import (
+    ForecastJob,
     ForecastPrinter,
     _aware,
     build_queue_forecast,
@@ -85,6 +86,11 @@ def planned_order(
             if ready_after is not None:
                 t = ready_after(t)
     return [job_id for *_, job_id in sorted(starts)]
+
+
+def _hold(job: ForecastJob, printer_id: int) -> None:
+    job.reserved_printer_id = printer_id
+    job.reservation_soft = False
 
 
 async def apply_plan(
@@ -144,9 +150,10 @@ async def apply_plan(
             )
         to_reserve.append(item_id)
 
-    # The moved jobs wait for their printers in the replay too.
+    # The moved jobs wait for their printers in the replay too, firmly: the
+    # user's hold replaces any the product planner left.
     for item_id in to_reserve:
-        inputs.jobs[item_id].reserved_printer_id = on_lane[item_id]
+        _hold(inputs.jobs[item_id], on_lane[item_id])
 
     planned = iter(planned_order(laid_out, rank, inputs.now, inputs.ready_after))
     planned_ids = set(on_lane)
@@ -176,7 +183,7 @@ async def apply_plan(
         if not jumped:
             break
         first = min(jumped, key=position.__getitem__)
-        inputs.jobs[first].reserved_printer_id = on_lane[first]
+        _hold(inputs.jobs[first], on_lane[first])
         to_reserve.append(first)
 
     by_id = {item.id: item for item in items}

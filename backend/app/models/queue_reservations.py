@@ -8,7 +8,7 @@ services/queue_reservations for the rule.
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, func
+from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.database import Base
@@ -31,4 +31,8 @@ class QueueReservation(Base):
     # this table) would leave the row behind: a row whose job was created at
     # another moment belongs to a deleted job and is ignored.
     item_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Who put it there: "plan" (the product planner, a hold that yields when its
+    # printer cannot take the job soon) or "user". NULL is a row from before
+    # this column and counts as "user".
+    source: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

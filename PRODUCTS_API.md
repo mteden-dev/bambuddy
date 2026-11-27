@@ -126,11 +126,16 @@ curl -s "$BB/products/7" -H "X-API-Key: $KEY"   # stan, zamówienia z postępem 
 
 Para `external_source` + `external_ref` jest unikalna: ponowione utworzenie tego samego zamówienia ze
 sklepu dostaje 409 zamiast drugiego zamówienia. Odpowiedź planu: `planned_jobs` (płyty w kolejce dla
-planu), `created` (nowe zadania), `kept` (czekające zadania zostawione bez zmian, z ręcznymi
-zmianami w kolejce i na swoim miejscu), `held` (zadania dodane albo przesunięte ręcznie, zostawione
+planu), `created` (nowe zadania), `kept` (czekające zadania zostawione, z ręcznymi zmianami w
+kolejce i na swoim miejscu; czas druku dostają z planu), `held` (zadania dodane albo przesunięte ręcznie, zostawione
 tak, jak są), `replaced` (usunięte), `ready_at`, `finish_at`, `short` (części, dla których żadna
 drukarka nie ma płyty). Nowe zadania wchodzą przed pierwsze czekające zadanie innego produktu z
-późniejszym terminem, inaczej na koniec. Zadanie w kolejce z plikiem i płytą, które są płytą
+późniejszym terminem, inaczej na koniec. Każde przeliczenie (zamówienie, `replan`, korekta,
+anulowanie w kolejce) planuje też od nowa produkty mniej pilne za tym produktem, najpilniejszy
+pierwszy; odpowiedź mówi o tym produkcie. Płyta planuje się na czas z historii wydruków (mediana
+ostatnich udanych tego samego cięcia, gdy są co najmniej 3) i z ryzykiem nieudanego wydruku;
+zadanie w kolejce ma ten czas w `print_time_seconds`. Zadania w kolejce czekające na filament
+zajmują w planie pas od chwili, gdy ktoś będzie na miejscu, plus `filament_swap_minutes`. Zadanie w kolejce z plikiem i płytą, które są płytą
 dokładnie jednego produktu, jest do niego dołączane (`by_hand` w `jobs` produktu). Jego części idą
 na stan i do zamówień tylko przy włączonym `hand_prints_count` w ustawieniach (domyślnie wyłączone);
 inaczej `counted: false`: zadanie widać i można je sprawdzić, ale zamówienia drukują się w całości,
@@ -337,3 +342,9 @@ włączenie liczy tylko zadania dołączone od tej chwili) i `sjf_enabled` (wł�
 najpierw”, kolejka może nie trzymać kolejności z planu). `PUT`
 wymaga `plate_cost_minutes`, pozostałe pola są opcjonalne (pominięte zostają bez zmian); wymaga
 uprawnienia do ustawień, więc tylko z konta, nie z klucza API.
+
+Margines preferowanej drukarki decyduje też, kiedy rezerwacja planera ustępuje: zadanie „Dowolna”
+idzie na inną drukarkę, gdy jego drukarka nie może go wziąć i nie skończy wydruku w ciągu tego
+marginesu. Dwa wiersze ustawień nie mają API ani pola na stronie: `product_reservation_yield`
+(`false`: rezerwacje planera nie ustępują) i `product_learn_history` (`false`: czasy slicera,
+bez ryzyka).

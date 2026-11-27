@@ -2266,9 +2266,9 @@ class PrintScheduler:
             # Fork: a job reserved on the queue timeline waits for that printer.
             reservations = await _load_reservations(db, items, wakeable_printer_ids)
 
-            async def _item_scope(item: PrintQueueItem) -> PrinterScope:
+            async def _item_scope(item: PrintQueueItem, narrow: bool = True) -> PrinterScope:
                 scope = (await _creator_scope(item.created_by_id)).intersect(tag_routing.scope(item))
-                return reservations.narrow(item, scope)
+                return reservations.narrow(item, scope) if narrow else scope
 
             for item in items:
                 # Check scheduled time first (scheduled_time is stored in UTC from ISO string)
@@ -2606,7 +2606,11 @@ class PrintScheduler:
                             )
                         )
 
-                    for candidate in candidates:
+                    # Fork: the printer a job is reserved for first; a job the product
+                    # planner reserved then yields to the rest of its scope when that
+                    # printer cannot take it soon (services/queue_reservations.py).
+                    attempts = reservations.attempts(item, await _item_scope(item, narrow=False), candidates)
+                    for item_scope, candidate in attempts:
                         effective_types, filament_overrides = _filament_constraints(candidate)
 
                         # Cross-model safety gate (#2578): never hand a 3MF sliced
@@ -2709,6 +2713,9 @@ class PrintScheduler:
                             skip_reasons["powered_on_printer"] = skip_reasons.get("powered_on_printer", 0) + 1
                             continue
 
+                    if printer_id is None and attempts.yielded:
+                        # Fork: no printer took it after its own failed; say why its own did.
+                        per_model_reasons = per_model_reasons[: len(candidates)]
                     if printer_id is None and gate_blocked:
                         # The matcher reports the printers passed over as busy;
                         # what holds the job is their failed last print.

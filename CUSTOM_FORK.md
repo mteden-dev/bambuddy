@@ -75,7 +75,14 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     (czeka na nią jak przypięte, np. aż ktoś zdejmie płytę), zadanie dalej jest „Dowolna”;
     rezerwacja kończy się startem zadania, przypięciem, zmianą modelu/lokalizacji albo
     „Zwolnij” w szczegółach, i nie obowiązuje, gdy drukarka nie może drukować (wyłączona,
-    offline bez gniazdka Auto On, inny model, poza lokalizacją, drukarki twórcy, tagi). Kafelki
+    offline bez gniazdka Auto On, inny model, poza lokalizacją, drukarki twórcy, tagi).
+    Rezerwacje zakłada też planer produktów (kolumna `source`: „plan” albo „user”), a jego
+    rezerwacja **ustępuje**: gdy w przebiegu kolejki jego drukarka nie może wziąć zadania i nie
+    kończy wydruku w ciągu marginesu preferowanej drukarki (większe z 30 min i 25% czasu druku
+    zadania, z Planowania), scheduler w tym samym przebiegu daje je innej pasującej drukarce,
+    a prognoza na osi pokazuje to samo. Rezerwacja z osi czasu nie ustępuje nigdy; „Zastosuj”
+    robi z rezerwacji planera na tej samej drukarce rezerwację użytkownika, a plan potem jej nie
+    odbiera. Wiersz ustawień `product_reservation_yield` = `false` wyłącza ustępowanie. Kafelki
     zarezerwowane są bursztynowe z kłódką, a karta drukarki pokazuje zarezerwowane zadanie tylko
     na swojej drukarce. Przypięte zostaje na swoim pasie, a drukarki, na które nie wolno, są
     wyszarzone z powodem. Klik w kafelek otwiera szczegóły zadania (duża miniatura, gdzie i kiedy,
@@ -187,13 +194,33 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     się za wszystkie części, a nie jako dół+góra z odpadem) i paczka tylko na płytach z jej
     częściami (tray na drugiej drukarce, góra w trakcie schnięcia). Wygrywa najtańszy; log
     `[PRODUCTS] Planned product …` podaje wybrany sposób, koszt każdego sposobu i płyty z
-    drukarkami. **Przelicz kolejkę** na osi czasu (z potwierdzeniem) liczy od nowa plan wszystkich
+    drukarkami. Kilka najtańszych wariantów planer potem **poprawia** tym samym kosztem, bo wybór
+    płyt nie widzi zegara: zamienia płyty drukarki na inne z co najmniej tymi samymi sztukami
+    (jedna większa płyta na noc zamiast trzech małych czekających do rana, mniej płyt, gdy reszta
+    byłaby nadwyżką), przestawia płytę w kolejce drukarki (długa płyta paczki pod koniec dnia)
+    i przenosi płytę bez części parowanych na inną drukarkę; bierze tylko zmiany, które obniżają
+    koszt, z limitem prób. **Czasy z historii i ryzyko** (`services/plate_history.py`): płyta z co
+    najmniej 3 udanymi wydrukami tego samego cięcia (szacunek slicera w 1% obecnego) z 90 dni
+    planuje się na medianę rzeczywistego czasu z ostatnich 10 (bez wydruków krótszych niż pół
+    albo dłuższych niż dwa szacunki, w granicach 0,7–1,5× szacunku). Zadanie w kolejce dostaje
+    ten czas, więc prognoza zgadza się z planem, a szacunek slicera zostaje w `plan_info` zadania
+    planera, żeby kolejne wydruki dalej się liczyły. Ryzyko nieudanego wydruku, (nieudane + 0,5) /
+    (wydruki + 25), najwyżej 50% (zatrzymany w trakcie też jest nieudany), liczy czas i koszt
+    płyty 1 + ryzyko razy, więc płyta, która często się nie udaje, przegrywa z pewniejszymi.
+    Wiersz ustawień `product_learn_history` = `false` wraca do czasów slicera bez ryzyka. **Przelicz kolejkę** na osi czasu (z potwierdzeniem) liczy od nowa plan wszystkich
     produktów z otwartymi zamówieniami, najpilniejsze pierwsze (`POST /products/replan`). Zadania planera to zwykłe zadania kolejki:
     części parowane są przypięte do drukarki, pozostałe to „Dowolna <model>” z rezerwacją na
     drukarce z planu; obowiązują tagi drukarek, drukarki użytkownika i ręczny start. Plan liczy
     się od nowa przy nowym, zmienionym lub anulowanym zamówieniu, korekcie stanu, „Przelicz plan”
     i nieudanym albo zatrzymanym w trakcie wydruku (tylko takim, który ruszył, najwyżej 3 razy na
-    godzinę). Anulowanie czekającego wydruku zamówienia w kolejce lub na osi czasu pyta, co z jego
+    godzinę). Każdy z tych powodów to jeden przebieg (`replan_pass`): wskazane produkty i każdy
+    mniej pilny za nimi (po terminach), od najpilniejszego, każdy na pasach bez czekających zadań
+    produktów za nim, więc plan dostaje godziny, które daje mu miejsce w kolejce, a te za nim
+    liczą się od nowa na tej samej podstawie czasu (produkt z takim samym planem zachowuje swoje
+    zadania). Planer liczy w osobnym wątku, żeby MQTT i scheduler nie stały; gdy w tym czasie
+    ruszy czekające zadanie produktu, plan liczy się jeszcze raz (do 3 razy). Przy ręcznym starcie
+    nowe płyty nie zaczynają się w planie, zanim ktoś będzie na miejscu, tak jak w prognozie.
+    Anulowanie czekającego wydruku zamówienia w kolejce lub na osi czasu pyta, co z jego
     częściami: „Wydrukuj ponownie” (plan od razu), „Mam te części” (na stan) albo „Wycofaj
     zamówienie” (wybrane zamówienia, dla których drukuje); potwierdzenie Stop mówi, że plan
     wydrukuje go jeszcze raz. Czekające zadanie,
@@ -215,7 +242,10 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     do slotów jak scheduler. Płyta, której filamentu/koloru nie ma na drukarce albo której szpula
     by nie starczyła (sprawdzenie per slot z marginesem), rusza dopiero, gdy ktoś jest przy
     drukarkach (godziny obsady), plus czas wymiany (domyślnie 10 min); potem plan liczy pełną
-    szpulę 1 kg. Zadania planera dostają „wymuś kolor” z pliku (do wyłączenia w Planowaniu), żeby
+    szpulę 1 kg. Zadania w kolejce czekające na filament, który ktoś musi założyć, też zajmują pas
+    w planie od chwili, gdy ktoś będzie na miejscu, plus czas wymiany, więc nowe płyty idą za nimi
+    (oś czasu dalej wypisuje je osobno; prognoza gotowości zamówień i okno „Zaplanowane płyty”
+    liczą je jak planer). Zadania planera dostają „wymuś kolor” z pliku (do wyłączenia w Planowaniu), żeby
     scheduler nie drukował w innym kolorze, niż plan zakładał. **Preferowana drukarka**: po
     „Drukuj” zamówienie z Base otwiera okno „Zaplanowane płyty” (też przycisk **Płyty** przy
     zamówieniu w produkcji) z drukarką, godzinami i filamentem (ile zostanie, ostrzeżenie o
@@ -293,15 +323,16 @@ bazy wiersze w tabeli ustawień (`hidden_filament_presets`,
 `hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
 `slicer_inbox_manual_start`, `printer_tags`, `filament_check_per_slot`,
 `filament_check_margin_pct`, `queue_staffed_hours`, `product_plate_cost_minutes`, `base_sync`,
-`base_api_token`), które
+`base_api_token`, `product_reservation_yield`, `product_learn_history`), które
 oficjalna wersja po prostu pomija, i własne tabele zakładane przez `create_all` bez migracji:
 `custom_queue_item_tags` (tagi ustawione zadaniu w oknie druku), `custom_queue_reservations`
-(rezerwacje z planu osi czasu), `custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”),
+(rezerwacje z planu osi czasu i planera produktów), `custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”),
 `custom_plate_clears` (momenty zdjęcia płyty, do nauki prognozy) oraz tabele produktów
 `custom_products`, `custom_product_parts`, `custom_product_plates`, `custom_product_plate_parts`,
 `custom_product_orders`, `custom_product_jobs`, `custom_product_stock`, `custom_product_skus` i
-`custom_base_orders` (kolumna dodana później, `custom_base_orders.ship_by`, ma swoje
-`ALTER TABLE` na końcu migracji w `core/database.py`). Oficjalny obraz ich nie
+`custom_base_orders` (kolumny dodane później, np. `custom_base_orders.ship_by` i
+`custom_queue_reservations.source`, mają swoje `ALTER TABLE` na końcu migracji w
+`core/database.py`). Oficjalny obraz ich nie
 zna i nie czyta, więc powrót działa jak dotąd (zarezerwowane zadania wracają do „Dowolna”, zadania
 planera zostają zwykłymi zadaniami kolejki); wiersz zadania usuniętego w tym czasie jest pomijany. Dwa ustawienia kontroli filamentu fork zapisuje
 przy starcie, jeśli ich nie ma (każdy slot osobno, 5 %); bez nich kontrola działa jak w

@@ -708,15 +708,18 @@ async def _follow_base_orders(db: AsyncSession, data: ProductIn) -> None:
 async def _plan_response(
     db: AsyncSession, product_id: int, actor: User | ApiKeyActor | None, review_required: bool, scope: PrinterScope
 ) -> PlanOut:
-    outcome = await svc.replan(
+    # The products behind it in the queue are planned again too (see
+    # replan_pass); the answer is about this one.
+    done = await svc.replan_pass(
         db,
-        product_id,
+        [product_id],
         actor_id=actor.id if actor is not None else None,
         manual_start=review_required,
         printer_ids=scope.printer_ids,
     )
+    outcome = done.of(product_id)
     await db.commit()
-    await svc.announce_planned(outcome.item_ids)
+    await svc.announce_planned(done.item_ids)
     product = await _get_product(db, product_id)
     plan = outcome.plan
     plates = plan.plates if plan is not None else []
@@ -961,14 +964,17 @@ async def cancel_queue_job(
 
     created: list[int] = []
     short: dict[int, int] = {}
+    done = await svc.replan_pass(
+        db,
+        changed,
+        actor_id=actor_id,
+        manual_start=review_required or bool(item.manual_start),
+        printer_ids=printer_scope.printer_ids,
+    )
+    # What it says is about the products changed here; the ones planned
+    # again behind them get their new jobs announced all the same.
     for product_id in sorted(changed):
-        outcome = await svc.replan(
-            db,
-            product_id,
-            actor_id=actor_id,
-            manual_start=review_required or bool(item.manual_start),
-            printer_ids=printer_scope.printer_ids,
-        )
+        outcome = done.of(product_id)
         created += outcome.item_ids
         out.kept += outcome.kept
         if outcome.plan is not None:
@@ -976,7 +982,7 @@ async def cancel_queue_job(
                 short[part_id] = short.get(part_id, 0) + n
         out.replanned.append(product_id)
     await db.commit()
-    await svc.announce_planned(created)
+    await svc.announce_planned(done.item_ids)
     scheduler.notify_dispatch_cancelled(item_id)
     out.created = len(created)
     out.short = [PartPieces(part_id=k, pieces=n) for k, n in sorted(short.items()) if n > 0]
@@ -1138,14 +1144,14 @@ async def check_job(
     replan = bool(reopened) or bad or bool(removed)
     item_ids: list[int] = [reprint_item_id] if reprint_item_id is not None else []
     if replan:
-        outcome = await svc.replan(
+        done = await svc.replan_pass(
             db,
-            job.product_id,
+            [job.product_id],
             actor_id=actor_id,
             manual_start=review_required,
             printer_ids=printer_scope.printer_ids,
         )
-        item_ids += outcome.item_ids
+        item_ids += done.item_ids
     await db.commit()
     if item_ids:
         await svc.announce_planned(item_ids)
@@ -1174,14 +1180,14 @@ async def uncheck_job(
     had_bad = await svc.uncheck_job(db, job)
     item_ids: list[int] = []
     if had_bad:
-        outcome = await svc.replan(
+        done = await svc.replan_pass(
             db,
-            job.product_id,
+            [job.product_id],
             actor_id=actor.id if actor is not None else None,
             manual_start=review_required,
             printer_ids=printer_scope.printer_ids,
         )
-        item_ids = outcome.item_ids
+        item_ids = done.item_ids
     await db.commit()
     if item_ids:
         await svc.announce_planned(item_ids)
@@ -1413,31 +1419,28 @@ async def replan_all(
 ):
     """Plan every product's open orders again, the soonest due first (the timeline's "replan the queue").
 
-    Each product is planned as ``POST /{id}/replan`` plans it and committed on
-    its own, so one that fails leaves the others planned.
+    One pass (see ``replan_pass``): each product is planned as ``POST
+    /{id}/replan`` plans it, on lanes without the waiting jobs of the products
+    after it, and committed on its own, so one that fails leaves the others
+    planned.
     """
     out = ReplanAllOut(products=0)
-    for product_id in await svc.products_to_replan(db):
-        try:
-            outcome = await svc.replan(
-                db,
-                product_id,
-                actor_id=actor.id if actor is not None else None,
-                manual_start=review_required,
-                printer_ids=printer_scope.printer_ids,
-            )
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            logger.exception("[PRODUCTS] Could not replan product %s with the whole queue", product_id)
-            out.failed.append(product_id)
-            continue
-        await svc.announce_planned(outcome.item_ids)
+    done = await svc.replan_pass(
+        db,
+        None,
+        actor_id=actor.id if actor is not None else None,
+        manual_start=review_required,
+        printer_ids=printer_scope.printer_ids,
+        commit_each=True,
+    )
+    out.failed = done.failed
+    for outcome in done.outcomes.values():
         out.products += 1
         out.created += len(outcome.item_ids)
         out.kept += outcome.kept
         out.replaced += outcome.replaced
         out.held += outcome.held
+    await svc.announce_planned(done.item_ids)
     logger.info(
         "[PRODUCTS] Replanned the queue: %s products, %s new jobs, %s kept, %s replaced, failed %s",
         out.products,

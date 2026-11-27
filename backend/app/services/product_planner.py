@@ -33,7 +33,21 @@ The planner:
 3. scores each plan and keeps the cheapest: how long until each order can be
    picked up (its last print's end, moved to when someone clears the plate),
    lateness against due dates, a cost per plate, and pieces made beyond the
-   orders.
+   orders;
+4. improves the cheapest few plans by local search scored by that same cost
+   (``_improve``), because step 2 chooses plates by print time and never sees
+   the clock: a printer free at night is better off with one long plate that
+   runs until morning than three short ones that wait for someone, and a
+   package's long plate belongs last in the day, not first. Moves: some of a
+   printer's plates swapped for others printing at least the same pieces
+   (or what is still wanted), a plate moved along its printer's queue, a
+   plate printing no matched part moved to another printer. Every candidate
+   is re-timed and re-scored in full and taken only when cheaper; the
+   search is bounded (``IMPROVE_*``).
+
+A plate may fail (``PlateOption.risk``, the chance of it, from the caller):
+its print time and plate cost then count ``1 + risk`` times, in choosing a
+package's plates and in a plan's cost.
 
 Filament, when the caller knows it (``PlanInputs.filament_use`` and
 ``filament_left``): each printer's spools are followed plate by plate from what
@@ -72,6 +86,12 @@ CAP_STEPS = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64)
 # Every cap combination is tried up to this many, each built twice; above it
 # the caps are tuned one at a time.
 MAX_CAP_COMBINATIONS = 1000
+# The improvement pass (``_improve``) stops after this many accepted moves, or
+# once it has scored this many candidates: it is bounded and deterministic.
+IMPROVE_MAX_MOVES = 100
+IMPROVE_MAX_TRIES = 1500
+# How many of the enumeration's cheapest plans are improved.
+IMPROVE_PLANS = 3
 # How a package's plates are chosen (see ``_build``).
 PACK_CHEAPEST = "cheapest"
 PACK_WHOLE = "whole"
@@ -122,6 +142,9 @@ class PlateOption:
     pieces: Pieces
     # The printers of the model it may go on (printer tags); None for all.
     printers: frozenset[int] | None = None
+    # The chance (0..1) that a print of it fails: its time and plate cost
+    # count ``1 + risk`` times wherever plates are costed.
+    risk: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_counts", dict(self.pieces))
@@ -243,6 +266,8 @@ class Plan:
     packing: str = PACK_CHEAPEST
     # Packing -> the cheapest plan's cost built that way, for the log.
     alternatives: dict[str, float] = field(default_factory=dict)
+    # The part of ``cost`` that is overruled preferences.
+    preference_s: float = 0.0
 
 
 @dataclass
@@ -453,27 +478,41 @@ def ready_times(
     makes as many products as orders 1..k want together. A printed piece
     counts once its part's finishing time has passed too.
     """
-    ready: dict[int, datetime | None] = {o.id: None for o in orders}
-    wanted_by = []
-    total = 0
-    for order in orders:
-        total += order.units
-        wanted_by.append((order.id, total))
     finish = {p.id: timedelta(seconds=p.finish_s) for p in parts}
     events: list[tuple[datetime, int, int, int]] = []
     for arrival in arrivals:
         for part_id, n in arrival.pieces:
             delay = timedelta(0) if arrival.finished else finish.get(part_id, timedelta(0))
             events.append((arrival.at + delay, arrival.printer_id, part_id, n))
+    return _ready_from_events(parts, orders, events, now)
+
+
+def _ready_from_events(
+    parts: Sequence[PartSpec], orders: Sequence[OrderNeed], events: list[tuple[datetime, int, int, int]], now: datetime
+) -> dict[int, datetime | None]:
+    """``ready_times`` from (when there, printer id, part id, pieces), finishing time included."""
+    ready: dict[int, datetime | None] = {o.id: None for o in orders}
+    wanted_by = []
+    total = 0
+    for order in orders:
+        total += order.units
+        wanted_by.append((order.id, total))
     events.sort(key=lambda e: e[0])
     pool: Pool = {}
+    # Pieces per part over all printers: a cheap upper bound on the products,
+    # so the full count runs only when the next order could be complete.
+    totals = {p.id: 0 for p in parts}
     i = 0
     next_order = 0
     while i < len(events) and next_order < len(wanted_by):
         at = events[i][0]
         while i < len(events) and events[i][0] == at:
             pool_add(pool, events[i][1], ((events[i][2], events[i][3]),))
+            if events[i][2] in totals:
+                totals[events[i][2]] += max(0, events[i][3])
             i += 1
+        if parts and min(totals[p.id] // p.per_unit for p in parts) < wanted_by[next_order][1]:
+            continue
         units = complete_units(parts, pool)
         while next_order < len(wanted_by) and units >= wanted_by[next_order][1]:
             ready[wanted_by[next_order][0]] = max(at, now)
@@ -498,7 +537,8 @@ def _cheapest_cover(
 ) -> tuple[PlateOption, ...] | None:
     """The plates (repeats allowed) that print at least ``needs`` in the least time.
 
-    Each plate also costs ``plate_cost_s``; between equal costs the one making
+    Each plate also costs ``plate_cost_s``, and both count ``1 + risk`` times
+    (a failed print is printed again); between equal costs the one making
     fewer pieces beyond ``needs`` wins. None when some part has no plate.
     """
     part_ids = [pid for pid, _ in needs]
@@ -508,33 +548,52 @@ def _cheapest_cover(
     for pid, n in zip(part_ids, start, strict=True):
         if n and not any(o.count(pid) for o in options):
             return None
-    counts = [(o, tuple(o.count(pid) for pid in part_ids)) for o in options]
-    memo: dict[tuple[int, ...], tuple[float, int, tuple[PlateOption, ...]] | None] = {}
+    counts = [
+        (o, tuple(o.count(pid) for pid in part_ids), (o.duration_s + plate_cost_s) * (1 + o.risk)) for o in options
+    ]
+    # rem -> (cost, extra pieces, plate printed first, what is left after it); None: no cover.
+    memo: dict[tuple[int, ...], tuple[float, int, PlateOption | None, tuple[int, ...]] | None] = {}
+    done = tuple(0 for _ in part_ids)
+    memo[done] = (0.0, 0, None, done)
 
-    def best(rem: tuple[int, ...]) -> tuple[float, int, tuple[PlateOption, ...]] | None:
-        if not any(rem):
-            return (0.0, 0, ())
+    def best(rem: tuple[int, ...]) -> tuple[float, int, PlateOption | None, tuple[int, ...]] | None:
         if rem in memo:
             return memo[rem]
         result = None
-        for option, got in counts:
-            if not any(c and r for c, r in zip(got, rem, strict=True)):
+        for option, got, cost in counts:
+            hit = False
+            extra = 0
+            left = []
+            for c, r in zip(got, rem, strict=True):
+                if c and r:
+                    hit = True
+                if r > c:
+                    left.append(r - c)
+                else:
+                    left.append(0)
+                    extra += c - r
+            if not hit:
                 continue
-            sub = best(tuple(max(0, r - c) for r, c in zip(rem, got, strict=True)))
+            after = tuple(left)
+            sub = best(after)
             if sub is None:
                 continue
-            extra = sum(max(0, c - r) for c, r in zip(got, rem, strict=True))
-            candidate = (sub[0] + option.duration_s + plate_cost_s, sub[1] + extra, (option, *sub[2]))
-            if result is None or candidate[:2] < result[:2]:
-                result = candidate
+            candidate = (sub[0] + cost, sub[1] + extra)
+            if result is None or candidate < result[:2]:
+                result = (candidate[0], candidate[1], option, after)
         memo[rem] = result
         return result
 
     found = best(start)
     if found is None:
         return None
+    chosen = []
+    step = found
+    while step[2] is not None:
+        chosen.append(step[2])
+        step = memo[step[3]]  # type: ignore[assignment]
     order = {o.id: i for i, o in enumerate(options)}
-    return tuple(sorted(found[2], key=lambda o: order[o.id]))
+    return tuple(sorted(chosen, key=lambda o: order[o.id]))
 
 
 class _Covers:
@@ -545,6 +604,7 @@ class _Covers:
         self._matched_ids = matched_ids
         self._usable: dict[tuple[int, bool], tuple[tuple[PlateOption, ...], tuple[int, ...]]] = {}
         self._memo: dict[tuple, tuple[PlateOption, ...] | None] = {}
+        self._alternatives: dict[tuple, list[tuple[PlateOption, ...]]] = {}
 
     def _usable_on(self, printer: PlannerPrinter, matched: bool) -> tuple[tuple[PlateOption, ...], tuple[int, ...]]:
         key = (printer.id, matched)
@@ -570,6 +630,31 @@ class _Covers:
         if key not in self._memo:
             self._memo[key] = _cheapest_cover(usable, needs, self._inputs.plate_cost_s)
         return self._memo[key]
+
+    def alternatives(
+        self, printer: PlannerPrinter, needs: tuple[tuple[int, int], ...], *, matched: bool
+    ) -> list[tuple[PlateOption, ...]]:
+        """Sets of plates worth trying for ``needs`` (``_improve``): the cheapest, the fewest, one plate repeated."""
+        usable, ids = self._usable_on(printer, matched)
+        key = (ids, needs)
+        if key not in self._alternatives:
+            found = []
+            cheapest = self.cover(printer, needs, matched=matched)
+            if cheapest:
+                found.append(cheapest)
+            # A plate cost that drowns print time: the fewest plates.
+            fewest = _cheapest_cover(usable, needs, 10**9)
+            if fewest:
+                found.append(fewest)
+            for option in usable:
+                if all(option.count(pid) for pid, n in needs if n):
+                    repeats = max(math.ceil(n / option.count(pid)) for pid, n in needs if n)
+                    found.append((option,) * repeats)
+            unique: dict[tuple[int, ...], tuple[PlateOption, ...]] = {}
+            for plates in found:
+                unique.setdefault(tuple(sorted(o.id for o in plates)), plates)
+            self._alternatives[key] = list(unique.values())
+        return self._alternatives[key]
 
 
 def _piece_times(inputs: PlanInputs) -> dict[int, float]:
@@ -675,6 +760,117 @@ def _cap_values(inputs: PlanInputs, wanted: int) -> list[int]:
     return sorted({c for c in CAP_STEPS if c < top} | {top})
 
 
+def _have(inputs: PlanInputs) -> Pool:
+    """The pieces there now or printing now."""
+    have = _copy(inputs.stock)
+    for arrival in inputs.arriving:
+        pool_add(have, arrival.printer_id, arrival.pieces)
+    return have
+
+
+def _to_make(inputs: PlanInputs, have: Pool) -> dict[int, int]:
+    """Part id -> pieces the orders still need printed (matched parts as whole sets)."""
+    wanted = sum(o.units for o in inputs.orders)
+    matched = [p for p in inputs.parts if p.matched]
+    to_make: dict[int, int] = {}
+    if matched:
+        work = {m.id: {r: n for r, n in have.get(m.id, {}).items() if n > 0} for m in matched}
+        missing_units = max(0, wanted - _matched_units(work, matched))
+        to_make = {m.id: missing_units * m.per_unit for m in matched}
+    for p in inputs.parts:
+        if not p.matched:
+            to_make[p.id] = max(0, wanted * p.per_unit - _total(have, p.id))
+    return to_make
+
+
+def _fresh_spools(inputs: PlanInputs, printer_id: int) -> _Spools:
+    return _Spools(inputs.filament_left.get(printer_id, {}), inputs.filament_margin_pct, inputs.full_spool_g)
+
+
+def _run(
+    inputs: PlanInputs,
+    printer_id: int,
+    chosen: Sequence[PlateOption],
+    at: datetime,
+    state: _Spools,
+    record: list | None,
+) -> tuple[datetime, bool]:
+    """Print ``chosen`` in this order from ``at``: when the printer is free again, and whether a spool was swapped.
+
+    Each plate starts when the one before is cleared; a plate needing a spool
+    loaded or changed waits for someone to be there and for the swap.
+    ``record`` gets (option, start, end, ready, filament notes, swap) per plate.
+    """
+    swapped = False
+    swap = timedelta(seconds=inputs.swap_s)
+    for option in chosen:
+        uses = inputs.filament_use.get(option.id, {}).get(printer_id, ())
+        needs = state.swap_for(uses) if uses else None
+        start = at
+        if needs is not None:
+            swapped = True
+            start = (inputs.staffed_at(start) if inputs.staffed_at is not None else start) + swap
+        end = start + timedelta(seconds=option.duration_s)
+        ready = max(end, inputs.ready_after(end)) if inputs.ready_after is not None else end
+        notes = state.take(uses) if uses else ()
+        if record is not None:
+            record.append((option, start, end, ready, notes, needs))
+        at = ready
+    return at, swapped
+
+
+def _fixed_cost(
+    inputs: PlanInputs, plates: Sequence[PlannedPlate], to_make: Mapping[int, int], piece_time: Mapping[int, float]
+) -> tuple[float, dict[int, int]]:
+    """The cost of a plan that does not depend on time (preferences aside), and its extra pieces.
+
+    A cost per plate, pieces made beyond the orders, and the print time and
+    plate cost a failing plate is expected to waste (``risk`` of them).
+    """
+    made: dict[int, int] = {}
+    cost = 0.0
+    for planned in plates:
+        option = planned.option
+        cost += inputs.plate_cost_s + option.risk * (option.duration_s + inputs.plate_cost_s)
+        for part_id, n in option.pieces:
+            made[part_id] = made.get(part_id, 0) + n
+    extra = {part_id: n - to_make.get(part_id, 0) for part_id, n in made.items() if n - to_make.get(part_id, 0) > 0}
+    cost += sum(EXTRA_PIECE_WEIGHT * n * piece_time.get(part_id, 0.0) for part_id, n in extra.items())
+    return cost, extra
+
+
+def _wait_cost(inputs: PlanInputs, plates: Sequence[PlannedPlate]) -> tuple[float, dict[int, datetime | None]]:
+    """How long until each order can be picked up, lateness counted ``LATE_WEIGHT`` times."""
+    now = inputs.now
+    finish = {p.id: timedelta(seconds=p.finish_s) for p in inputs.parts}
+    zero = timedelta(0)
+    # What ``ready_times`` makes of the stock, the arrivals and the plates,
+    # without an Arrival per plate: this runs for every candidate plan.
+    events = [
+        (now, printer_id, part_id, n)
+        for part_id, by_printer in inputs.stock.items()
+        for printer_id, n in by_printer.items()
+        if n > 0
+    ]
+    for arrival in inputs.arriving:
+        for part_id, n in arrival.pieces:
+            events.append(
+                (arrival.at + (zero if arrival.finished else finish.get(part_id, zero)), arrival.printer_id, part_id, n)
+            )
+    for planned in plates:
+        for part_id, n in planned.option.pieces:
+            events.append((planned.ready + finish.get(part_id, zero), planned.printer_id, part_id, n))
+    ready_at = _ready_from_events(inputs.parts, inputs.orders, events, now)
+    cost = 0.0
+    for order in inputs.orders:
+        ready = ready_at[order.id]
+        finished = ready if ready is not None else now + NEVER
+        cost += (finished - now).total_seconds()
+        if order.due is not None and finished > order.due:
+            cost += LATE_WEIGHT * (finished - order.due).total_seconds()
+    return cost, ready_at
+
+
 def _build(
     inputs: PlanInputs, caps: Caps, use_leftovers_first: bool, covers: _Covers, packing: str = PACK_CHEAPEST
 ) -> Plan:
@@ -693,9 +889,7 @@ def _build(
     loose = [p for p in inputs.parts if not p.matched]
     wanted = sum(o.units for o in inputs.orders)
 
-    have = _copy(inputs.stock)
-    for arrival in inputs.arriving:
-        pool_add(have, arrival.printer_id, arrival.pieces)
+    have = _have(inputs)
 
     # Matched parts: complete sets already there per printer, and the pieces
     # left over on each (a lid without its base). Pieces of no known printer
@@ -723,12 +917,11 @@ def _build(
                 leftover[m.id][printer_id] = max(0, work[m.id].get(printer_id, 0))
         missing_units = max(0, wanted - sets_there)
     missing = {p.id: wanted * p.per_unit - _total(have, p.id) for p in loose}
-    to_make = {m.id: missing_units * m.per_unit for m in matched} | {p: max(0, n) for p, n in missing.items()}
+    to_make = _to_make(inputs, have)
 
     free = {p.id: max(p.free_at, now) for p in inputs.printers}
     rank = {p.id: i for i, p in enumerate(inputs.printers)}
     plates: list[PlannedPlate] = []
-    made: dict[int, int] = {}
     piece_time = _piece_times(inputs)
 
     finish_of = {p.id: p.finish_s for p in inputs.parts}
@@ -741,31 +934,12 @@ def _build(
         # into) go first; the rest prints while they dry.
         return sorted(chosen, key=lambda o: -finishing(o))
 
-    def fresh_spools(printer_id: int) -> _Spools:
-        return _Spools(inputs.filament_left.get(printer_id, {}), inputs.filament_margin_pct, inputs.full_spool_g)
-
-    spools = {p.id: fresh_spools(p.id) for p in inputs.printers}
-    swap = timedelta(seconds=inputs.swap_s)
+    spools = {p.id: _fresh_spools(inputs, p.id) for p in inputs.printers}
 
     def run(
         printer_id: int, chosen: Sequence[PlateOption], at: datetime, state: _Spools, record: list | None
     ) -> tuple[datetime, bool]:
-        """Print ``chosen`` in this order from ``at``: when the printer is free again, and whether a spool was swapped."""
-        swapped = False
-        for option in chosen:
-            uses = inputs.filament_use.get(option.id, {}).get(printer_id, ())
-            needs = state.swap_for(uses) if uses else None
-            start = at
-            if needs is not None:
-                swapped = True
-                start = (inputs.staffed_at(start) if inputs.staffed_at is not None else start) + swap
-            end = start + timedelta(seconds=option.duration_s)
-            ready = max(end, inputs.ready_after(end)) if inputs.ready_after is not None else end
-            notes = state.take(uses) if uses else ()
-            if record is not None:
-                record.append((option, start, end, ready, notes, needs))
-            at = ready
-        return at, swapped
+        return _run(inputs, printer_id, chosen, at, state, record)
 
     def schedule(printer: PlannerPrinter, chosen: tuple[PlateOption, ...], pinned: bool) -> list[PlannedPlate]:
         record: list = []
@@ -776,7 +950,6 @@ def _build(
             plates.append(planned)
             placed.append(planned)
             for part_id, n in option.pieces:
-                made[part_id] = made.get(part_id, 0) + n
                 if part_id in missing:
                     missing[part_id] -= n
         return placed
@@ -940,23 +1113,13 @@ def _build(
 
     short = {m.id: missing_units * m.per_unit for m in matched if missing_units > 0}
     short |= {part_id: n for part_id, n in missing.items() if n > 0}
-    extra = {part_id: n - to_make.get(part_id, 0) for part_id, n in made.items() if n - to_make.get(part_id, 0) > 0}
-    fixed_cost = inputs.plate_cost_s * len(plates) + pref_penalty
-    fixed_cost += sum(EXTRA_PIECE_WEIGHT * n * piece_time.get(part_id, 0.0) for part_id, n in extra.items())
+    fixed_cost, extra = _fixed_cost(inputs, plates, to_make, piece_time)
+    fixed_cost += pref_penalty
     start_of = {p.id: max(p.free_at, now) for p in inputs.printers}
 
     def score(candidate: list[PlannedPlate]) -> tuple[float, dict[int, datetime | None]]:
-        arrivals = stock_arrivals(inputs.stock, now) + list(inputs.arriving)
-        arrivals += [Arrival(p.ready, p.printer_id, p.option.pieces) for p in candidate]
-        ready_at = ready_times(inputs.parts, inputs.orders, arrivals, now)
-        cost = fixed_cost
-        for order in inputs.orders:
-            ready = ready_at[order.id]
-            finished = ready if ready is not None else now + NEVER
-            cost += (finished - now).total_seconds()
-            if order.due is not None and finished > order.due:
-                cost += LATE_WEIGHT * (finished - order.due).total_seconds()
-        return cost, ready_at
+        waits, ready_at = _wait_cost(inputs, candidate)
+        return fixed_cost + waits, ready_at
 
     def drying_first(candidate: list[PlannedPlate]) -> list[PlannedPlate] | None:
         """Every printer's plates that need work after printing moved first; None when nothing moves."""
@@ -972,7 +1135,7 @@ def _build(
                 continue
             moved = True
             record: list = []
-            run(printer_id, [p.option for p in order], start_of[printer_id], fresh_spools(printer_id), record)
+            run(printer_id, [p.option for p in order], start_of[printer_id], _fresh_spools(inputs, printer_id), record)
             for planned, (_, start, end, ready, notes, needs) in zip(order, record, strict=True):
                 result.append(replace(planned, start=start, end=end, ready=ready, filament=notes, swap=needs))
         return result if moved else None
@@ -989,7 +1152,225 @@ def _build(
         for key, cap in caps.items()
         if any(p.option.model == key[0] and p.pinned == (key[1] == "matched") for p in plates)
     }
-    return Plan(plates=plates, ready_at=ready_at, cost=cost, short=short, extra=extra, caps=used_caps, packing=packing)
+    return Plan(
+        plates=plates,
+        ready_at=ready_at,
+        cost=cost,
+        short=short,
+        extra=extra,
+        caps=used_caps,
+        packing=packing,
+        preference_s=pref_penalty,
+    )
+
+
+Lanes = dict[int, list[PlannedPlate]]
+
+
+def _improve(inputs: PlanInputs, start: Plan, covers: _Covers) -> Plan:
+    """``start`` improved by local search, scored by the plan's own cost.
+
+    The enumeration chooses plates by print time and never sees the clock: a
+    printer free at night prints three short plates where one long one would
+    run through the night, and a package's plates print in the order they are
+    listed. Moves, each re-timed (``_run``) and re-scored in full, taken only
+    when the plan gets cheaper, the first found first, until none does:
+
+    - swap the cover: some of a printer's plates (consecutive ones of a kind:
+      matched, or loose plates of the same parts) replaced by other plates
+      that run on it and print at least the same pieces: the cheapest set,
+      the fewest plates, or one plate repeated. Loose plates may also be
+      replaced by plates for only what the orders still want of them (or
+      dropped, when that is nothing): a swap that made a spare plate;
+    - reorder: a plate moved to another place on its printer;
+    - move: a plate not pinned (printing no matched part, and not one of a
+      matched package's plates) moved to another printer it runs on, at its
+      start, its end, or about the same time.
+
+    Plates someone preferred a printer for are only reordered, so the plan's
+    preference cost stays as it was. Matched pieces never drop on their
+    printer and loose pieces never below what the orders need, so nothing
+    becomes short. Bounded by ``IMPROVE_MAX_MOVES`` and ``IMPROVE_MAX_TRIES``.
+    """
+    if not start.plates:
+        return start
+    piece_time = _piece_times(inputs)
+    to_make = _to_make(inputs, _have(inputs))
+    matched_ids = frozenset(p.id for p in inputs.parts if p.matched)
+    printers = {p.id: p for p in inputs.printers}
+    start_of = {p.id: max(p.free_at, inputs.now) for p in inputs.printers}
+    finish_of = {p.id: p.finish_s for p in inputs.parts}
+
+    lanes: Lanes = {p.id: [] for p in inputs.printers}
+    for planned in sorted(start.plates, key=lambda p: p.start):
+        lanes[planned.printer_id].append(planned)
+
+    def signature(lane: Sequence[PlannedPlate]) -> tuple:
+        return tuple((p.option.id, p.pinned, p.preferred) for p in lane)
+
+    def timed(printer_id: int, lane: list[PlannedPlate]) -> list[PlannedPlate]:
+        record: list = []
+        options = [p.option for p in lane]
+        _run(inputs, printer_id, options, start_of[printer_id], _fresh_spools(inputs, printer_id), record)
+        return [
+            replace(p, printer_id=printer_id, start=st, end=en, ready=re, filament=notes, swap=needs)
+            for p, (_, st, en, re, notes, needs) in zip(lane, record, strict=True)
+        ]
+
+    def flat(candidate: Lanes) -> list[PlannedPlate]:
+        return [p for printer_id in printers for p in candidate[printer_id]]
+
+    def evaluate(candidate: Lanes, bound: float) -> tuple[float, dict, dict] | None:
+        """The candidate's cost, ready times and extra pieces; None when it costs ``bound`` or more."""
+        plates = flat(candidate)
+        fixed, extra = _fixed_cost(inputs, plates, to_make, piece_time)
+        fixed += start.preference_s
+        if fixed >= bound:
+            return None
+        waits, ready_at = _wait_cost(inputs, plates)
+        return fixed + waits, ready_at, extra
+
+    def alternatives(printer_id: int, matched: bool, needs: tuple[tuple[int, int], ...]) -> list:
+        return covers.alternatives(printers[printer_id], needs, matched=matched)
+
+    def finishing(option: PlateOption) -> int:
+        return max((finish_of.get(part_id, 0) for part_id, _ in option.pieces), default=0)
+
+    def swaps(current: Lanes, printer_id: int) -> Iterable[Lanes]:
+        made: dict[int, int] = {}
+        for planned in flat(current):
+            for part_id, n in planned.option.pieces:
+                made[part_id] = made.get(part_id, 0) + n
+        lane = current[printer_id]
+        groups: dict[object, list[int]] = {}
+        for index, planned in enumerate(lane):
+            if planned.preferred is None:
+                kind = "matched" if planned.pinned else frozenset(pid for pid, n in planned.option.pieces if n)
+                groups.setdefault(kind, []).append(index)
+        seen = {signature(lane)}
+        for kind, indexes in groups.items():
+            matched = kind == "matched"
+            for a in range(len(indexes)):
+                for b in range(a + 1, len(indexes) + 1):
+                    window = indexes[a:b]
+                    counts: dict[int, int] = {}
+                    for index in window:
+                        for pid, n in lane[index].option.pieces:
+                            if n:
+                                counts[pid] = counts.get(pid, 0) + n
+                    needs = tuple(sorted(counts.items()))
+                    tried = list(alternatives(printer_id, matched, needs))
+                    if not matched:
+                        # Loose pieces beyond the orders need not be printed again:
+                        # also cover only what is still wanted (nothing: drop them).
+                        wanted = tuple((pid, max(0, n - max(0, made[pid] - to_make.get(pid, 0)))) for pid, n in needs)
+                        if wanted != needs:
+                            tried += alternatives(printer_id, matched, wanted) if any(n for _, n in wanted) else [()]
+                    dropped = set(window)
+                    kept = [p for index, p in enumerate(lane) if index not in dropped]
+                    for cover in tried:
+                        # Times are placeholders: every candidate is re-timed. The
+                        # new plates go where the first old one was; reorder moves
+                        # them on. They are pinned as the plates they replace, as
+                        # the enumeration pins a matched package's every plate (a
+                        # tray-only plate among them too): a plate on the same
+                        # printer pinned one plan and not the next would never
+                        # keep its waiting job (products.replan matches by both).
+                        at = inputs.now
+                        added = [
+                            PlannedPlate(o, printer_id, at, at, at, matched)
+                            for o in sorted(cover, key=lambda o: -finishing(o))
+                        ]
+                        new = kept[: window[0]] + added + kept[window[0] :]
+                        if signature(new) not in seen:
+                            seen.add(signature(new))
+                            yield {printer_id: new}
+
+    def reorders(current: Lanes, printer_id: int) -> Iterable[Lanes]:
+        lane = current[printer_id]
+        seen = {signature(lane)}
+        for i, planned in enumerate(lane):
+            rest = lane[:i] + lane[i + 1 :]
+            for j in range(len(lane)):
+                new = rest[:j] + [planned] + rest[j:]
+                if signature(new) not in seen:
+                    seen.add(signature(new))
+                    yield {printer_id: new}
+
+    def moves(current: Lanes, printer_id: int) -> Iterable[Lanes]:
+        lane = current[printer_id]
+        seen: set[tuple] = set()
+        for i, planned in enumerate(lane):
+            if planned.pinned or planned.preferred is not None:
+                continue
+            rest = lane[:i] + lane[i + 1 :]
+            for other in inputs.printers:
+                if other.id == printer_id or not planned.option.runs_on(other):
+                    continue
+                target = current[other.id]
+                alongside = sum(1 for p in target if p.start < planned.start)
+                for place in sorted({0, alongside, len(target)}):
+                    new = target[:place] + [planned] + target[place:]
+                    key = (signature(rest), other.id, signature(new))
+                    if key not in seen:
+                        seen.add(key)
+                        yield {printer_id: rest, other.id: new}
+
+    first = evaluate(lanes, math.inf)
+    assert first is not None
+    cost, ready_at, extra = first
+    accepted = 0
+    tries = 0
+    # Passes over every kind of move and every printer's lane, each lane's
+    # first cheaper candidate taken, until a pass finds none (or the bounds).
+    progress = True
+    while progress and accepted < IMPROVE_MAX_MOVES and tries < IMPROVE_MAX_TRIES:
+        progress = False
+        for kind in (swaps, reorders, moves):
+            for printer_id in printers:
+                for changed in kind(lanes, printer_id):
+                    tries += 1
+                    if tries > IMPROVE_MAX_TRIES:
+                        break
+                    candidate = {**lanes, **{pid: timed(pid, lane) for pid, lane in changed.items()}}
+                    # Cheaper by more than rounding: no endless moves between equals.
+                    scored = evaluate(candidate, cost - 1e-6)
+                    if scored is not None and scored[0] < cost - 1e-6:
+                        lanes, (cost, ready_at, extra) = candidate, scored
+                        accepted += 1
+                        progress = True
+                        break
+                if tries > IMPROVE_MAX_TRIES or accepted >= IMPROVE_MAX_MOVES:
+                    break
+            if tries > IMPROVE_MAX_TRIES or accepted >= IMPROVE_MAX_MOVES:
+                break
+    if not accepted:
+        return start
+
+    plates = flat(lanes)
+    made: dict[int, int] = {}
+    for planned in plates:
+        for part_id, n in planned.option.pieces:
+            made[part_id] = made.get(part_id, 0) + n
+    # Matched pieces only stay on or join their printer: what was short stays
+    # short. A loose part is short by what the plates leave missing.
+    short = {pid: n for pid, n in start.short.items() if pid in matched_ids}
+    short |= {
+        p.id: to_make[p.id] - made.get(p.id, 0)
+        for p in inputs.parts
+        if not p.matched and to_make[p.id] - made.get(p.id, 0) > 0
+    }
+    return Plan(
+        plates=plates,
+        ready_at=ready_at,
+        cost=cost,
+        short=short,
+        extra=extra,
+        caps=start.caps,
+        packing=start.packing,
+        alternatives=start.alternatives,
+        preference_s=start.preference_s,
+    )
 
 
 def plan(inputs: PlanInputs) -> Plan:
@@ -1048,5 +1429,15 @@ def plan(inputs: PlanInputs) -> Plan:
                     if better(candidate, best):
                         best, best_caps = candidate, caps
     assert best is not None  # there is always at least one cap combination
+    # The cheapest few plans are improved: another may end up cheaper once improved.
+    # Several caps often build the very same plan: each is improved once.
+    distinct: dict[tuple, Plan] = {}
+    for built in sorted(tried.values(), key=lambda p: (p.cost, len(p.plates))):
+        key = tuple(sorted((p.printer_id, p.start, p.option.id) for p in built.plates))
+        distinct.setdefault(key, built)
+        if len(distinct) == IMPROVE_PLANS:
+            break
+    leaders = list(distinct.values())
+    best = min((_improve(inputs, leader, covers) for leader in leaders), key=lambda p: (p.cost, len(p.plates)))
     best.alternatives = dict(alternatives)
     return best

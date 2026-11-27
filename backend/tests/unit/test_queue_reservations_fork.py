@@ -22,10 +22,18 @@ from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.queue_reservations import QueueReservation
+from backend.app.models.settings import Settings
 from backend.app.services.print_scheduler import PrintScheduler
-from backend.app.services.queue_forecast import ForecastJob, ForecastPrinter, place_jobs
+from backend.app.services.queue_forecast import ForecastJob, ForecastPrinter, is_filament_hold_reason, place_jobs
 from backend.app.services.queue_plan import planned_order
-from backend.app.services.queue_reservations import QueueReservations, release, reserve
+from backend.app.services.queue_reservations import (
+    SOURCE_PLAN,
+    SOURCE_USER,
+    YIELD_SETTING_KEY,
+    QueueReservations,
+    release,
+    reserve,
+)
 
 NOW = datetime(2026, 11, 23, 12, 0, tzinfo=timezone.utc)
 HOUR = 3600
@@ -67,13 +75,13 @@ async def farm():
         await engine.dispose()
 
 
-async def _add_job(ctx, *, reserved_for: int | None = None, **extra) -> int:
+async def _add_job(ctx, *, reserved_for: int | None = None, source: str = SOURCE_USER, **extra) -> int:
     async with ctx.session_maker() as db:
         item = PrintQueueItem(status="pending", position=1, target_model="P1S", library_file_id=10, **extra)
         db.add(item)
         await db.flush()
         if reserved_for is not None:
-            await reserve(db, item, reserved_for)
+            await reserve(db, item, reserved_for, source=source)
         await db.commit()
         return item.id
 
@@ -155,7 +163,9 @@ class TestWhenAReservationHolds:
 
 
 class TestQueuePass:
-    async def _pass(self, ctx, idle: dict[int, bool] | None = None, connected=frozenset({1, 2, 3, 4})):
+    async def _pass(self, ctx, idle: dict[int, bool] | None = None, connected=frozenset({1, 2, 3, 4}), printing=None):
+        """One queue pass. ``printing``: printer id -> minutes left on the print it runs."""
+        printing = printing or {}
         scheduler = PrintScheduler()
         launched = MagicMock()
         patches = [
@@ -165,7 +175,10 @@ class TestQueuePass:
                 "backend.app.services.print_scheduler.printer_manager.is_connected",
                 MagicMock(side_effect=lambda pid: pid in connected),
             ),
-            patch("backend.app.services.print_scheduler.printer_manager.get_status", lambda pid: None),
+            patch(
+                "backend.app.services.print_scheduler.printer_manager.get_status",
+                lambda pid: SimpleNamespace(state="RUNNING", remaining_time=printing[pid]) if pid in printing else None,
+            ),
             patch(
                 "backend.app.services.print_scheduler.ha_sensor_manager.blocked_printers",
                 AsyncMock(return_value={}),
@@ -222,6 +235,176 @@ class TestQueuePass:
         item_id = await _add_job(farm, reserved_for=2)
         launched = await self._pass(farm, connected=frozenset({1, 3, 4}))
         assert launched.call_args[0][1] == {item_id: 1}
+
+
+class TestWhoReserved:
+    async def _row(self, ctx, item_id):
+        async with ctx.session_maker() as db:
+            return await db.get(QueueReservation, item_id)
+
+    async def _again(self, ctx, item_id, printer_id, source):
+        async with ctx.session_maker() as db:
+            await reserve(db, await db.get(PrintQueueItem, item_id), printer_id, source=source)
+            await db.commit()
+
+    async def test_someone_by_default_and_the_planner_when_it_says_so(self, farm):
+        assert (await self._row(farm, await _add_job(farm, reserved_for=2))).source == SOURCE_USER
+        assert (await self._row(farm, await _add_job(farm, reserved_for=2, source=SOURCE_PLAN))).source == SOURCE_PLAN
+
+    async def test_someones_hold_on_the_same_printer_stays_theirs(self, farm):
+        item_id = await _add_job(farm, reserved_for=2)
+        await self._again(farm, item_id, 2, SOURCE_PLAN)
+        assert (await self._row(farm, item_id)).source == SOURCE_USER
+
+    async def test_the_planner_moving_someones_hold_makes_it_the_planners(self, farm):
+        item_id = await _add_job(farm, reserved_for=2)
+        await self._again(farm, item_id, 1, SOURCE_PLAN)
+        row = await self._row(farm, item_id)
+        assert (row.printer_id, row.source) == (1, SOURCE_PLAN)
+
+    async def test_a_row_from_before_the_column_becomes_the_planners(self, farm):
+        item_id = await _add_job(farm, reserved_for=2)
+        async with farm.session_maker() as db:
+            (await db.get(QueueReservation, item_id)).source = None
+            await db.commit()
+        await self._again(farm, item_id, 2, SOURCE_PLAN)
+        assert (await self._row(farm, item_id)).source == SOURCE_PLAN
+
+    async def test_someone_takes_over_the_planners_hold(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        await self._again(farm, item_id, 2, SOURCE_USER)
+        assert (await self._row(farm, item_id)).source == SOURCE_USER
+
+
+class TestSoftOrHard:
+    async def test_the_planners_hold_is_soft_with_the_preferred_printers_margin(self, farm):
+        item, reservations = await _reservations(
+            farm, await _add_job(farm, reserved_for=2, source=SOURCE_PLAN, print_time_seconds=4 * HOUR)
+        )
+        assert reservations.is_soft(item)
+        # max(30 minutes, 25 % of four hours): the planner's defaults.
+        assert reservations.yield_margin_s(item) == HOUR
+        # It still narrows the job to its printer: that one is offered it first.
+        assert reservations.narrow(item, PrinterScope()).printer_ids == frozenset({2})
+
+    async def test_someones_hold_and_an_old_row_are_hard(self, farm):
+        item, reservations = await _reservations(farm, await _add_job(farm, reserved_for=2))
+        assert not reservations.is_soft(item)
+        item_id = await _add_job(farm, reserved_for=2)
+        async with farm.session_maker() as db:
+            (await db.get(QueueReservation, item_id)).source = None
+            await db.commit()
+        item, reservations = await _reservations(farm, item_id)
+        assert not reservations.is_soft(item)
+
+    async def test_hard_when_yielding_is_turned_off(self, farm):
+        async with farm.session_maker() as db:
+            db.add(Settings(key=YIELD_SETTING_KEY, value="false"))
+            await db.commit()
+        item, reservations = await _reservations(farm, await _add_job(farm, reserved_for=2, source=SOURCE_PLAN))
+        assert not reservations.is_soft(item)
+
+
+class TestTheQueuePassYields:
+    """A job the product planner reserved goes elsewhere when its printer cannot take it soon."""
+
+    BUSY_2 = {1: True, 2: False, 3: True, 4: True}
+    _pass = TestQueuePass._pass
+
+    async def _waiting(self, ctx, item_id):
+        async with ctx.session_maker() as db:
+            item = await _load(db, item_id)
+        return item.printer_id, item.waiting_reason
+
+    async def test_its_own_printer_first(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        launched = await self._pass(farm)
+        assert launched.call_args[0][1] == {item_id: 2}
+
+    async def test_to_another_idle_printer_while_its_own_prints_for_long(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN, print_time_seconds=HOUR)
+        launched = await self._pass(farm, idle=self.BUSY_2, printing={2: 9 * 60})
+        assert launched.call_args[0][1] == {item_id: 1}
+
+    async def test_to_another_when_its_own_is_idle_but_cannot_start_it(self, farm):
+        # Not printing (a plate to clear, an error): nothing says it is about to be free.
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        launched = await self._pass(farm, idle=self.BUSY_2)
+        assert launched.call_args[0][1] == {item_id: 1}
+
+    async def test_waits_for_its_own_when_that_is_nearly_done(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN, print_time_seconds=HOUR)
+        launched = await self._pass(farm, idle=self.BUSY_2, printing={2: 20})
+        launched.assert_not_called()
+        assert await self._waiting(farm, item_id) == (None, "Busy: P1S-2")
+
+    async def test_waits_when_yielding_is_turned_off(self, farm):
+        async with farm.session_maker() as db:
+            db.add(Settings(key=YIELD_SETTING_KEY, value="false"))
+            await db.commit()
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        launched = await self._pass(farm, idle=self.BUSY_2, printing={2: 9 * 60})
+        launched.assert_not_called()
+        assert await self._waiting(farm, item_id) == (None, "Busy: P1S-2")
+
+    async def test_someones_hold_never_yields(self, farm):
+        item_id = await _add_job(farm, reserved_for=2)
+        launched = await self._pass(farm, idle=self.BUSY_2, printing={2: 9 * 60})
+        launched.assert_not_called()
+        assert await self._waiting(farm, item_id) == (None, "Busy: P1S-2")
+
+    async def test_when_no_other_can_take_it_it_says_why_its_own_cannot(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        launched = await self._pass(farm, idle={1: False, 2: False, 3: False, 4: True}, printing={2: 9 * 60})
+        launched.assert_not_called()
+        assert await self._waiting(farm, item_id) == (None, "Busy: P1S-2")
+
+
+class TestFilamentHoldWording:
+    """The forecast tells a job held for filament by the scheduler's own wording."""
+
+    async def _reason(self, ctx, **kwargs):
+        scheduler = PrintScheduler()
+        with (
+            patch("backend.app.services.print_scheduler.printer_manager.is_connected", MagicMock(return_value=True)),
+            patch("backend.app.services.print_scheduler.printer_manager.get_status", lambda pid: None),
+            patch.object(scheduler, "_is_printer_idle", MagicMock(return_value=True)),
+            patch.object(scheduler, "_get_missing_filament_types", MagicMock(return_value=["PETG"])),
+            patch.object(scheduler, "_get_missing_force_color_slots", MagicMock(return_value=["PLA (Red)"])),
+        ):
+            async with ctx.session_maker() as db:
+                printer_id, reason = await scheduler._find_idle_printer_for_model(db, "P1S", set(), **kwargs)
+        assert printer_id is None
+        return reason
+
+    async def test_a_missing_type(self, farm):
+        assert is_filament_hold_reason(await self._reason(farm, required_filament_types=["PETG"]))
+
+    async def test_a_missing_forced_colour(self, farm):
+        overrides = [{"slot_id": 1, "type": "PLA", "color": "#FF0000", "force_color_match": True}]
+        assert is_filament_hold_reason(await self._reason(farm, filament_overrides=overrides))
+
+    async def test_a_slot_the_matcher_cannot_fill(self, farm):
+        async def unmatched_on(pid):
+            return ["PLA #FFFFFF (left nozzle)"]
+
+        assert is_filament_hold_reason(await self._reason(farm, unmatched_on=unmatched_on))
+
+    def test_not_other_holds(self):
+        for reason in (
+            None,
+            "Busy: P1S-1",
+            "No P1S has a 0.6mm nozzle: P1S-1 (0.4mm)",
+            "Its owner no longer has access to this printer — move it to another printer",
+            "Every file for this job has been deleted — add a file back or remove the item",
+            "File was sliced for H2D, which is not compatible with P1S — edit the item and fix its target model",
+            "Waiting on Enclosure Door",
+            "The last print failed on every free matching printer",
+        ):
+            assert not is_filament_hold_reason(reason), reason
+
+    def test_the_unmatched_filament_hold(self):
+        assert is_filament_hold_reason("Needs PLA Basic White")
 
 
 class TestForecast:

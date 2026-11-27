@@ -1,11 +1,16 @@
 """The timeline's forecast places each pending job the way the scheduler will take it (fork)."""
 
+import threading
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from backend.app.services.queue_forecast import (
+    HELD_SWAP_S,
+    ForecastInputs,
     ForecastJob,
     ForecastPrinter,
     ForecastVariant,
+    OffTimeline,
     Refusal,
     place_jobs,
     placement_refusal,
@@ -196,3 +201,135 @@ def test_an_unknown_sliced_model_does_not_block_a_drop():
     job = ForecastJob(id=10, printer_id=1)
 
     assert placement_refusal(job, ForecastPrinter(id=2, model="H2D"), exact_model=False) is None
+
+
+def _finishes(run):
+    """``run()``'s result, failing rather than hanging should it never return."""
+    result = []
+    worker = threading.Thread(target=lambda: result.append(run()), daemon=True)
+    worker.start()
+    worker.join(5)
+    assert result, "place_jobs did not finish"
+    return result[0]
+
+
+def _soft(job_id: int, printer_id: int, margin_h: float = 0.5, hours: float = 1, **over) -> ForecastJob:
+    """A job the product planner reserved for ``printer_id``."""
+    return _any(
+        job_id, hours, reserved_printer_id=printer_id, reservation_soft=True, yield_margin_s=margin_h * HOUR, **over
+    )
+
+
+class TestTheProductPlannersHold:
+    def test_another_printer_takes_it_while_its_own_is_far_off(self):
+        printers = [_p1s(1), _p1s(2, free_at=NOW + timedelta(hours=9))]
+
+        [placement], _ = place_jobs([_soft(10, 2)], printers, NOW)
+
+        assert (placement.printer_id, placement.start, placement.reserved) == (1, NOW, False)
+
+    def test_it_waits_for_its_own_when_that_is_due_within_the_margin(self):
+        printers = [_p1s(1), _p1s(2, free_at=NOW + timedelta(minutes=20))]
+
+        [placement], _ = place_jobs([_soft(10, 2)], printers, NOW)
+
+        assert (placement.printer_id, placement.start, placement.reserved) == (2, NOW + timedelta(minutes=20), True)
+
+    def test_its_own_takes_it_when_both_are_free(self):
+        # Printer 1 comes first in the pick order, yet steps aside for the job's own.
+        [placement], _ = place_jobs([_soft(10, 2)], [_p1s(1), _p1s(2)], NOW)
+
+        assert (placement.printer_id, placement.reserved) == (2, True)
+
+    def test_another_printer_takes_it_once_its_own_has_filled_up(self):
+        # Both wait for printer 2, due in 20 minutes. It takes the first; then it
+        # is an hour further off and printer 1 takes the second, from then.
+        printers = [_p1s(1), _p1s(2, free_at=NOW + timedelta(minutes=20))]
+
+        placements, _ = _finishes(lambda: place_jobs([_soft(10, 2), _soft(11, 2)], printers, NOW))
+
+        assert _where(placements) == {10: (2, 1 / 3), 11: (1, 1 / 3)}
+
+    def test_a_printer_with_only_such_jobs_does_not_spin(self):
+        # Printer 1 fits nothing but the job held for printer 2, due soon: it
+        # waits, and printer 2 takes the job. Ties at the same moment too.
+        due_soon = [_p1s(1), _p1s(2, free_at=NOW + timedelta(minutes=10)), ForecastPrinter(id=3, model="H2S")]
+        jobs = [_soft(10, 2), ForecastJob(id=11, target_model="H2S", duration_s=HOUR)]
+
+        placements, unplaced = _finishes(lambda: place_jobs(jobs, due_soon, NOW))
+        assert unplaced == []
+        assert _where(placements) == {10: (2, 1 / 6), 11: (3, 0)}
+
+        placements, _ = _finishes(lambda: place_jobs([_soft(10, 2)], [_p1s(1), _p1s(2)], NOW))
+        assert _where(placements) == {10: (2, 0)}
+
+    def test_a_soft_job_scheduled_for_later_still_places(self):
+        later = NOW + timedelta(hours=2)
+        placements, _ = _finishes(lambda: place_jobs([_soft(10, 2, scheduled_time=later)], [_p1s(1), _p1s(2)], NOW))
+        assert _where(placements) == {10: (2, 2)}
+
+    def test_someones_hold_still_waits_for_its_printer(self):
+        printers = [_p1s(1), _p1s(2, free_at=NOW + timedelta(hours=9))]
+
+        [placement], _ = place_jobs([_any(10, reserved_printer_id=2)], printers, NOW)
+
+        assert (placement.printer_id, placement.reserved) == (2, True)
+
+
+def _inputs(schedulable, held, pending_ids, someone_there=NOW):
+    return ForecastInputs(
+        now=NOW,
+        sjf_enabled=False,
+        printers=[],
+        printer_states=[],
+        pending=[SimpleNamespace(id=i) for i in pending_ids],
+        jobs={job.id: job for job in [*schedulable, *held]},
+        schedulable=schedulable,
+        off_timeline=[OffTimeline(job.id, "waiting", "Waiting for filament: PETG") for job in held],
+        reservations={},
+        turnaround=SimpleNamespace(someone_there=lambda: (someone_there, "now"), as_function=lambda: None),
+        plate_waits=[],
+        held=held,
+    )
+
+
+class TestPlanningJobs:
+    def test_held_jobs_join_in_dispatch_order_once_someone_has_loaded_them(self):
+        on_lanes, held = [_any(10), _any(12)], [_any(11)]
+        inputs = _inputs(on_lanes, held, [10, 11, 12], someone_there=NOW + timedelta(hours=2))
+
+        jobs = inputs.planning_jobs(HELD_SWAP_S)
+
+        assert [job.id for job in jobs] == [10, 11, 12]
+        assert jobs[1].manual_start_from == NOW + timedelta(hours=2, seconds=HELD_SWAP_S)
+        assert jobs[0].manual_start_from is None and jobs[2].manual_start_from is None
+
+    def test_copies(self):
+        on_lanes, held = [_any(10)], [_any(11)]
+        inputs = _inputs(on_lanes, held, [10, 11])
+
+        jobs = inputs.planning_jobs(HELD_SWAP_S)
+
+        assert all(job is not inputs.jobs[job.id] for job in jobs)
+        assert held[0].manual_start_from is None
+
+    def test_a_held_job_already_waiting_longer_keeps_its_time(self):
+        late = NOW + timedelta(hours=5)
+        inputs = _inputs([], [_any(11, manual_start_from=late)], [11])
+
+        [job] = inputs.planning_jobs(HELD_SWAP_S)
+
+        assert job.manual_start_from == late
+
+    def test_a_held_job_takes_lane_time_once_its_filament_can_be_loaded(self):
+        # The timeline leaves the held job off; planning puts it on printer 1.
+        # Not loadable for ten minutes, it lets the job behind it go first;
+        # loadable at once, it goes first and that one moves back.
+        inputs = _inputs([_any(12)], [_any(11)], [11, 12])
+        printers = [_p1s(1)]
+
+        placements, _ = place_jobs(inputs.planning_jobs(HELD_SWAP_S), printers, NOW)
+
+        assert _where(placements) == {12: (1, 0), 11: (1, 1)}
+        placements, _ = place_jobs(inputs.planning_jobs(0), printers, NOW)
+        assert _where(placements) == {11: (1, 0), 12: (1, 1)}

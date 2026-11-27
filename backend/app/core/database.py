@@ -6166,6 +6166,8 @@ async def _run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE custom_base_orders ADD COLUMN buyer_login VARCHAR(100)")
     # Fork (Base sync): a choice saved on a waiting order before it is sent.
     await _safe_execute(conn, "ALTER TABLE custom_base_orders ADD COLUMN draft JSON")
+    # Fork (queue): who reserved a job for a printer, the product planner or someone.
+    await _safe_execute(conn, "ALTER TABLE custom_queue_reservations ADD COLUMN source VARCHAR(8)")
     # Fork (products): someone checked a finished job's pieces, and the bad ones.
     await _safe_execute(
         conn,

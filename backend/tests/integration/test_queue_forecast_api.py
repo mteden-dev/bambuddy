@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -208,3 +208,66 @@ async def test_a_job_with_alternatives_shows_the_file_its_printer_gets(
     }
     start, end = datetime.fromisoformat(placement["start"]), datetime.fromisoformat(placement["end"])
     assert (end - start).total_seconds() == 7200
+
+
+async def test_a_job_the_product_planner_reserved_goes_where_the_scheduler_will_send_it(
+    async_client: AsyncClient, db_session, printer_factory, archive_factory
+):
+    from backend.app.services.queue_reservations import SOURCE_PLAN, SOURCE_USER, reserve
+
+    a = await printer_factory(name="P1S-A", model="P1S")
+    b = await printer_factory(name="P1S-B", model="P1S")
+    a_id, b_id = a.id, b.id
+    archive_id = (await archive_factory(a_id, sliced_for_model="P1S")).id
+    planned = await _item(db_session, archive_id, 1, target_model="P1S")
+    mine = await _item(db_session, archive_id, 2, target_model="P1S")
+    for item_id, source in ((planned, SOURCE_PLAN), (mine, SOURCE_USER)):
+        await reserve(db_session, await db_session.get(PrintQueueItem, item_id), b_id, source=source)
+    await db_session.commit()
+
+    # B prints for nine more hours: far past the planner's margin.
+    connected, status = _live({a_id, b_id}, printing={b_id: 9 * 60})
+    with connected, status:
+        response = await async_client.get("/api/v1/queue/forecast")
+
+    assert response.status_code == 200, response.text
+    placed = {p["item_id"]: (p["printer_id"], p["reserved"]) for p in response.json()["placements"]}
+    # The planner's job yields to idle A; someone's waits for B.
+    assert placed == {planned: (a_id, False), mine: (b_id, True)}
+
+
+async def test_jobs_held_for_filament_are_planned_but_stay_off_the_timeline(
+    async_client: AsyncClient, db_session, printer_factory, archive_factory
+):
+    from backend.app.services.queue_forecast import HELD_SWAP_S, build_queue_forecast
+
+    a = await printer_factory(name="P1S-A", model="P1S")
+    a_id = a.id
+    archive_id = (await archive_factory(a_id, sliced_for_model="P1S")).id
+    held = await _item(
+        db_session, archive_id, 1, target_model="P1S", waiting_reason="Waiting for filament: P1S-A (needs PETG)"
+    )
+    nozzle = await _item(
+        db_session, archive_id, 2, target_model="P1S", waiting_reason="No P1S has a 0.6mm nozzle: P1S-A (0.4mm)"
+    )
+    queued = await _item(db_session, archive_id, 3, target_model="P1S")
+
+    connected, status = _live({a_id})
+    with connected, status:
+        forecast = await build_queue_forecast(db_session)
+        response = await async_client.get("/api/v1/queue/forecast")
+
+    # The timeline: only the queued job on the lane, both holds listed apart.
+    assert [p.item_id for p in forecast.placements] == [queued]
+    assert {o.item_id for o in forecast.off_timeline} == {held, nozzle}
+    # Planning: the filament hold takes A once someone has loaded it, after
+    # the job that can start now; the nozzle hold stays out.
+    planning = {p.item_id: p for p in forecast.planning_placements}
+    assert set(planning) == {held, queued}
+    assert planning[held].start >= forecast.generated_at + timedelta(seconds=HELD_SWAP_S)
+    assert planning[held].start >= planning[queued].end
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "planning_placements" not in body
+    assert [p["item_id"] for p in body["placements"]] == [queued]

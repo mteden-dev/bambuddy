@@ -16,6 +16,15 @@ A job that waits for someone to press Start goes on the lanes from when someone
 is expected to be there (``PlateTurnaround.someone_there``): like a job
 scheduled for later, it holds back no job behind it until then.
 
+A job the product planner reserved holds its printer only softly, as the
+scheduler keeps to it (services/queue_reservations.py): another printer may take
+it once its own is further off than the margin.
+
+The product planner plans with the jobs held for filament someone has to load
+as well (``ForecastInputs.planning_jobs``, ``QueueForecast.planning_placements``):
+they start soon after someone is there, and take lane time from then. The
+timeline itself still lists them apart.
+
 ``placement_refusal`` is the one answer to "may this job go on that printer",
 for the forecast's "Any" jobs and for the timeline's drag and drop alike.
 """
@@ -23,7 +32,7 @@ for the forecast's "Any" jobs and for the timeline's drag and drop alike.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -43,6 +52,16 @@ ACTIVE_PRINT_STATES = ("RUNNING", "PAUSE", "PREPARE", "SLICING")
 # Stand-in for a job whose file gives no print time, and for a running print that
 # reports neither a remaining time nor a duration (the timeline used the same).
 DEFAULT_DURATION_S = 3600
+# For planning: how long someone takes to load the filament a held job waits for.
+HELD_SWAP_S = 600
+
+# The scheduler's wording for a job no printer has the filament for
+# (PrintScheduler._find_idle_printer_for_model): a printer lacks a type or a
+# colour, or the slot matcher cannot fill a slot on it. A printer is named
+# there only once it passed every other check (nozzle, scope, model), so
+# loading the filament lets the job start, whatever else the reason says
+# about other printers or alternatives.
+_FILAMENT_WAIT_MARKERS = ("Waiting for filament:", "No matching material/color.")
 
 
 @dataclass(frozen=True)
@@ -108,6 +127,10 @@ class ForecastJob:
     # The printer the timeline's plan holds this "Any" job for, while that holds
     # (services/queue_reservations.py): like a pinned job, it waits for it.
     reserved_printer_id: int | None = None
+    # The product planner's hold: another printer may take the job while its
+    # own is further off than ``yield_margin_s``.
+    reservation_soft: bool = False
+    yield_margin_s: float = 0.0
 
 
 @dataclass
@@ -120,7 +143,7 @@ class Placement:
     projected: bool
     # For a job with alternatives: the one this printer's model takes.
     variant: ForecastVariant | None = None
-    # Held for this printer by the timeline's plan.
+    # Held for this printer by the timeline's plan (or the product planner).
     reserved: bool = False
 
 
@@ -207,7 +230,10 @@ def place_jobs(
     printer earlier in that order. A pinned job
     waits for its printer even when the printer is offline, so it stays on its
     lane; an "Any" job only counts printers that can take work, and one the
-    timeline's plan reserved only its printer. ``ready_after`` says when a
+    timeline's plan reserved only its printer. One the product planner
+    reserved (``reservation_soft``) may also go on any printer it fits, but
+    only while its own is free more than ``yield_margin_s`` later than that
+    one. ``ready_after`` says when a
     printer whose print ends at a given time can start the next one (someone
     has to clear the plate: services/staffed_hours.py); without it, at once.
 
@@ -216,15 +242,23 @@ def place_jobs(
     rank = {p.id: i for i, p in enumerate(printers)}
     model_of = {p.id: p.model for p in printers}
     free_at = {p.id: max(_aware(p.free_at) or now, now) for p in printers}
+    # Breaks ties after free_at: a printer that stepped aside for a soft hold's
+    # own printer goes after it at the same moment.
+    behind = dict.fromkeys(rank, 0)
     takers: dict[int, set[int]] = {}
     unplaced: list[int] = []
+    soft: dict[int, int] = {}  # job id -> the printer its soft hold is for
     for job in jobs:
+        reserved = job.reserved_printer_id if job.reserved_printer_id in rank else None
         if job.printer_id is not None:
             ids = {job.printer_id} if job.printer_id in rank else set()
-        elif job.reserved_printer_id is not None and job.reserved_printer_id in rank:
-            ids = {job.reserved_printer_id}
+        elif reserved is not None and not job.reservation_soft:
+            ids = {reserved}
         else:
             ids = {p.id for p in printers if p.available and placement_refusal(job, p, exact_model=True) is None}
+            if reserved is not None:
+                ids.add(reserved)
+                soft[job.id] = reserved
         if ids:
             takers[job.id] = ids
         elif job.printer_id is None:
@@ -233,17 +267,34 @@ def place_jobs(
     waiting = [job for job in jobs if job.id in takers]
     open_printers = set().union(*takers.values()) if takers else set()
     placements: list[Placement] = []
+
+    def deferred(job: ForecastJob, printer_id: int, t: datetime) -> bool:
+        # A soft hold's job, on another printer than its own, while its own is
+        # due within the margin.
+        own = soft.get(job.id)
+        return own is not None and own != printer_id and (free_at[own] - t).total_seconds() <= job.yield_margin_s
+
     while waiting and open_printers:
-        printer_id = min(open_printers, key=lambda pid: (free_at[pid], rank[pid]))
+        printer_id = min(open_printers, key=lambda pid: (free_at[pid], behind[pid], rank[pid]))
         t = free_at[printer_id]
         fits = [job for job in waiting if printer_id in takers[job.id]]
         if not fits:
             open_printers.discard(printer_id)
             continue
-        ready = next((job for job in fits if (earliest_start(job) or t) <= t), None)
+        ready = next(
+            (job for job in fits if (earliest_start(job) or t) <= t and not deferred(job, printer_id, t)), None
+        )
         if ready is None:
-            # Only jobs scheduled for later fit: the printer idles until the first.
-            free_at[printer_id] = min(earliest_start(job) for job in fits)  # type: ignore[type-var]
+            # Only jobs scheduled for later fit, or soft holds' jobs whose own
+            # printer is due soon: the printer idles until the first comes, or
+            # until that printer has had its turn (then it took the job, or is
+            # further off).
+            later = [s for job in fits if (s := earliest_start(job)) is not None and s > t]
+            owners = [soft[job.id] for job in fits if (earliest_start(job) or t) <= t]
+            wake = min([*later, *(free_at[own] for own in owners)])
+            if owners and wake == min(free_at[own] for own in owners):
+                behind[printer_id] = 1 + max(behind[own] for own in owners if free_at[own] == wake)
+            free_at[printer_id] = wake
             continue
         # A job with alternatives prints the first whose model this printer is,
         # as the scheduler walks them, and takes that file's print time.
@@ -256,10 +307,11 @@ def place_jobs(
                 end,
                 projected=ready.printer_id is None,
                 variant=variant_for(ready, model_of[printer_id]),
-                reserved=ready.printer_id is None and ready.reserved_printer_id is not None,
+                reserved=ready.printer_id is None and ready.reserved_printer_id == printer_id,
             )
         )
         free_at[printer_id] = ready_after(end) if ready_after is not None else end
+        behind[printer_id] = 0
         waiting.remove(ready)
     return placements, unplaced
 
@@ -318,6 +370,9 @@ class QueueForecast:
     plate_waits: list[PlateWait] = field(default_factory=list)
     # When someone is there to clear plates, and whether the scheduler waits for it.
     turnaround: PlateTurnaround | None = None
+    # For the product planner only, never sent to the timeline: the placements
+    # with the jobs held for filament on the lanes too (ForecastInputs.planning_jobs).
+    planning_placements: list[Placement] = field(default_factory=list)
 
 
 @dataclass
@@ -339,10 +394,30 @@ class ForecastInputs:
     turnaround: PlateTurnaround
     # Printers whose plate waits to be cleared before their first forecast job.
     plate_waits: list[PlateWait]
+    # Jobs in ``off_timeline`` as "waiting" for filament someone has to load or
+    # change (is_filament_hold_reason), in dispatch order.
+    held: list[ForecastJob] = field(default_factory=list)
 
     @property
     def ready_after(self) -> Callable[[datetime], datetime] | None:
         return self.turnaround.as_function()
+
+    def planning_jobs(self, swap_s: int) -> list[ForecastJob]:
+        """The jobs to plan with: those on the lanes and those held for filament,
+        in dispatch order. A held job starts no sooner than someone is there
+        and has had ``swap_s`` to load its filament. Copies: the jobs here stay
+        as they are."""
+        loaded_by = self.turnaround.someone_there()[0] + timedelta(seconds=swap_s)
+        held = {job.id for job in self.held}
+        order = {item.id: index for index, item in enumerate(self.pending)}
+        result = []
+        for job in sorted([*self.schedulable, *self.held], key=lambda job: order.get(job.id, len(order))):
+            if job.id in held:
+                start = max(_aware(job.manual_start_from) or loaded_by, loaded_by)
+                result.append(replace(job, manual_start_from=start))
+            else:
+                result.append(replace(job))
+        return result
 
 
 def _dispatch_order_key(sjf_enabled: bool):
@@ -356,6 +431,22 @@ def _dispatch_order_key(sjf_enabled: bool):
         return (not item.been_jumped, duration is None, duration or 0, *position)
 
     return key
+
+
+def is_filament_hold_reason(reason: str | None) -> bool:
+    """Whether a waiting job is held for filament someone has to load or change.
+
+    The matcher's missing type or colour and unfillable slot, and the
+    unmatched-filament hold's "Needs ..." (a job staged for a manual start,
+    which goes on the lanes anyway). A spool too light stages the job for a
+    manual start too. Any other hold (nozzle, access, deleted files, a file
+    sliced for another model, a sensor interlock, printer tags) is not one.
+    """
+    from backend.app.services.print_scheduler import _is_unmatched_hold_reason
+
+    if not reason:
+        return False
+    return _is_unmatched_hold_reason(reason) or any(marker in reason for marker in _FILAMENT_WAIT_MARKERS)
 
 
 def _is_busy_only(reason: str) -> bool:
@@ -525,6 +616,7 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
     reservations: dict[int, tuple[int, bool]] = {}
     schedulable: list[ForecastJob] = []
     off_timeline: list[OffTimeline] = []
+    held: list[ForecastJob] = []
     manual_start_from = turnaround.someone_there()[0]
     for item in pending:
         variant_models = tuple(v.target_model for v in item.variants if v.target_model)
@@ -561,6 +653,9 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
             reservations[item.id] = (reserved_for, holds)
             if holds:
                 job.reserved_printer_id = reserved_for
+                if stored_reservations.is_soft(item):
+                    job.reservation_soft = True
+                    job.yield_margin_s = stored_reservations.yield_margin_s(item)
 
         if item.manual_start:
             # Whatever else it waits for (filament to load, #1496/#2799), someone
@@ -572,6 +667,8 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
             schedulable.append(job)
         elif item.waiting_reason and not _is_busy_only(item.waiting_reason) and not _waits_only_for_its_plate(item):
             off_timeline.append(OffTimeline(item.id, "waiting", item.waiting_reason))
+            if is_filament_hold_reason(item.waiting_reason):
+                held.append(job)
         elif item.printer_id is None and not item.target_model and not variant_models:
             off_timeline.append(OffTimeline(item.id, "unassigned"))
         else:
@@ -589,6 +686,7 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
         reservations=reservations,
         turnaround=turnaround,
         plate_waits=plate_waits,
+        held=held,
     )
 
 
@@ -636,4 +734,5 @@ async def build_queue_forecast(db: AsyncSession, now: datetime | None = None) ->
         variants={item_id: job.variants for item_id, job in inputs.jobs.items() if job.variants},
         plate_waits=plate_waits,
         turnaround=inputs.turnaround,
+        planning_placements=place_jobs(inputs.planning_jobs(HELD_SWAP_S), inputs.printers, inputs.now, ready_after)[0],
     )
