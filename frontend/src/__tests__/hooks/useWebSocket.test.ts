@@ -471,6 +471,50 @@ describe('useWebSocket hook', () => {
       expect(received).toEqual([{ printer_id: 3, printer_name: 'X1C', reason: 'no_camera_frame' }]);
     });
 
+    it('relays a decided OrcaSlicer upload to the import dialog (fork)', async () => {
+      const { useWebSocket } = await import('../../hooks/useWebSocket');
+      const received: unknown[] = [];
+      const listener = (event: Event) => received.push((event as CustomEvent).detail);
+      window.addEventListener('slicer-upload-decided', listener);
+
+      renderHook(() => useWebSocket(), { wrapper: createWrapper(queryClient) });
+      const ws = await waitForWs();
+      act(() => {
+        ws.open();
+      });
+      act(() => {
+        ws.simulateMessage({
+          type: 'slicer_upload_decided',
+          data: { file_id: 10, decision: 'queued', claim: 'tab:1' },
+        });
+      });
+      window.removeEventListener('slicer-upload-decided', listener);
+
+      expect(received).toEqual([{ file_id: 10, decision: 'queued', claim: 'tab:1' }]);
+    });
+
+    it('relays a product replan to the products pages (fork)', async () => {
+      const { useWebSocket } = await import('../../hooks/useWebSocket');
+      const received: unknown[] = [];
+      const listener = (event: Event) => received.push((event as CustomEvent).detail);
+      window.addEventListener('bambuddy:products-replanned', listener);
+
+      renderHook(() => useWebSocket(), { wrapper: createWrapper(queryClient) });
+      const ws = await waitForWs();
+      act(() => {
+        ws.open();
+      });
+      act(() => {
+        ws.simulateMessage({ type: 'products_replanned', product_ids: [3, 4] });
+      });
+      act(() => {
+        ws.simulateMessage({ type: 'products_replanned' });
+      });
+      window.removeEventListener('bambuddy:products-replanned', listener);
+
+      expect(received).toEqual([{ product_ids: [3, 4] }, { product_ids: [] }]);
+    });
+
     it('invalidates inventory queries on inventory_changed message', async () => {
       vi.useFakeTimers();
       const { useWebSocket } = await import('../../hooks/useWebSocket');

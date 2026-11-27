@@ -87,6 +87,70 @@ describe('compareLocales (parity-script self-test)', () => {
     ).toBe(true);
   });
 
+  it('accepts the extra plural categories a language needs (pl: _few, _many)', () => {
+    const en = toMap({ item_one: '{{count}} item', item_other: '{{count}} items' });
+    const result = compareLocales({
+      en,
+      pl: toMap({
+        item_one: '{{count}} element',
+        item_few: '{{count}} elementy',
+        item_many: '{{count}} elementów',
+        item_other: '{{count}} elementu',
+      }),
+    });
+    expect(result.failed).toBe(false);
+  });
+
+  it('fails a strict locale that lacks a plural category', () => {
+    const result = compareLocales({
+      en: toMap({ item_one: 'item', item_other: 'items', legacy: '{{count}} x', legacy_plural: '{{count}} xs' }),
+      pl: toMap({
+        item_one: 'element',
+        item_few: 'elementy',
+        item_other: 'elementu',
+        legacy: '{{count}} x',
+        legacy_plural: '{{count}} xs',
+      }),
+    });
+    expect(result.failed).toBe(true);
+    expect(hasReport(result.reports, 'pl: plural key mismatch', 'missing plural forms _many: item')).toBe(true);
+    // The legacy _plural style is a plural base too: pl needs all four forms.
+    expect(hasReport(result.reports, 'pl: plural key mismatch', '_one, _few, _many, _other: legacy')).toBe(true);
+  });
+
+  it('flags a category the language does not use', () => {
+    const result = compareLocales({
+      en: toMap({ item_one: 'item', item_other: 'items' }),
+      de: toMap({ item_one: 'Element', item_few: 'Elemente', item_other: 'Elemente' }),
+    });
+    expect(result.failed).toBe(true);
+    expect(hasReport(result.reports, 'de: extra keys vs en', 'item_few')).toBe(true);
+    expect(hasReport(result.reports, 'plural key mismatch', 'unexpected _few not present in en')).toBe(true);
+  });
+
+  it('only lists the gaps of a locale that is not strict yet', () => {
+    const result = compareLocales({
+      en: toMap({ item_one: 'item', item_other: 'items' }),
+      cs: toMap({ item_one: 'položka', item_other: 'položky' }),
+    });
+    expect(result.failed).toBe(false);
+    expect(hasReport(result.warnings, 'cs: plural categories missing', 'item: _few, _many')).toBe(true);
+  });
+
+  it('checks the placeholders of a locale-only plural form', () => {
+    const result = compareLocales({
+      en: toMap({ item_one: '{{count}} item', item_other: '{{count}} items' }),
+      pl: toMap({
+        item_one: '{{count}} element',
+        item_few: '{{n}} elementy',
+        item_many: '{{count}} elementów',
+        item_other: '{{count}} elementu',
+      }),
+    });
+    expect(result.failed).toBe(true);
+    expect(hasReport(result.reports, 'placeholder mismatch', 'item_few')).toBe(true);
+  });
+
   it('throws when the en locale is absent', () => {
     expect(() =>
       compareLocales({ 'zh-CN': toMap({ a: 'x' }) } as Record<string, LocaleMap>),

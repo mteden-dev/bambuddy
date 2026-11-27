@@ -180,7 +180,7 @@ async def test_base_sync_plans_the_soonest_due_first(async_client: AsyncClient, 
         done = await base_sync.replan_products(
             db_session, {later.id, sooner.id}, await base_sync.read_config(db_session)
         )
-    assert done == sorted([later.id, sooner.id])
+    assert done is not None and sorted(done.outcomes) == sorted([later.id, sooner.id])
     assert [product_id for product_id, _ in calls] == [sooner.id, later.id]
 
 

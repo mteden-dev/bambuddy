@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, PackageCheck, RotateCcw, Undo2 } from 'lucide-react';
@@ -8,9 +8,11 @@ import type { ProductJobOrders, QueueJobCancelResult, QueueJobCancelThen } from 
 import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
 import { useToast } from '../../contexts/ToastContext';
+import { useModalBehavior } from '../../hooks/useModalBehavior';
 import { shipKind, urgentFirst } from '../../utils/baseOrders';
+import { usePlanReport, withNote } from './usePlanReport';
 
-const TOUCH = 'pointer-coarse:min-h-11!';
+const TOUCH = 'pointer-coarse:min-h-[44px]!';
 const DOT: Record<string, string> = { allegro: 'bg-[#FF5A00]', shop: 'bg-sky-400' };
 
 interface OrderJobCancelModalProps {
@@ -38,6 +40,7 @@ export function OrderJobCancelModal({ itemId, name, entry, onClose }: OrderJobCa
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const planNote = usePlanReport();
   const orders = urgentFirst(entry);
   const [then, setThen] = useState<QueueJobCancelThen | null>(null);
   const [chosen, setChosen] = useState<Set<number>>(() => new Set(orders.map((o) => o.product_order_id)));
@@ -54,11 +57,14 @@ export function OrderJobCancelModal({ itemId, name, entry, onClose }: OrderJobCa
       }
       const labels = orders.filter((o) => chosen.has(o.product_order_id)).map((o) => o.label);
       showToast(
-        then === 'withdraw'
-          ? t('products.cancelJob.toast.withdrawn', { orders: labels.join(', ') })
-          : then === 'stock'
-            ? t('products.cancelJob.toast.stocked')
-            : t('products.cancelJob.toast.replanned'),
+        withNote(
+          then === 'withdraw'
+            ? t('products.cancelJob.toast.withdrawn', { orders: labels.join(', ') })
+            : then === 'stock'
+              ? t('products.cancelJob.toast.stocked')
+              : t('products.cancelJob.toast.replanned'),
+          planNote(result),
+        ),
         'success',
       );
       if (result.short.length) showToast(t('products.cancelJob.toast.short'), 'warning');
@@ -67,13 +73,8 @@ export function OrderJobCancelModal({ itemId, name, entry, onClose }: OrderJobCa
     onError: (e: Error) => showToast(e.message, 'error'),
   });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !cancel.isPending) onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, cancel.isPending]);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const requestClose = useModalBehavior(onClose, overlayRef, cancel.isPending);
 
   const toggle = (id: number) =>
     setChosen((current) => {
@@ -86,11 +87,13 @@ export function OrderJobCancelModal({ itemId, name, entry, onClose }: OrderJobCa
 
   return (
     <div
+      ref={overlayRef}
       className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center sm:p-4"
-      onClick={cancel.isPending ? undefined : onClose}
+      onClick={requestClose}
     >
       <Card
-        className="w-full sm:max-w-md max-h-[90dvh] overflow-y-auto rounded-b-none sm:rounded-b-xl"
+        tabIndex={-1}
+        className="outline-none w-full sm:max-w-md max-h-[90dvh] overflow-y-auto rounded-b-none sm:rounded-b-xl"
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -145,7 +148,7 @@ export function OrderJobCancelModal({ itemId, name, entry, onClose }: OrderJobCa
                     role="radio"
                     aria-checked={selected}
                     onClick={() => setThen(value)}
-                    className="w-full flex items-start gap-3 p-3 text-left min-h-11"
+                    className="w-full flex items-start gap-3 p-3 text-left min-h-[44px]"
                   >
                     <Icon
                       aria-hidden="true"
@@ -169,7 +172,7 @@ export function OrderJobCancelModal({ itemId, name, entry, onClose }: OrderJobCa
                       {orders.map((tag) => (
                         <label
                           key={tag.product_order_id}
-                          className="flex items-center gap-3 min-h-11 text-sm text-white cursor-pointer"
+                          className="flex items-center gap-3 min-h-[44px] text-sm text-white cursor-pointer"
                         >
                           <input
                             type="checkbox"

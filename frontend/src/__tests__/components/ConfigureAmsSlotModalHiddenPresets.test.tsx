@@ -140,6 +140,21 @@ describe('ConfigureAmsSlotModal hidden presets', () => {
     await waitFor(() => expect(screen.queryByText(BUILTIN_PRESET)).not.toBeInTheDocument());
   });
 
+  it('offers to undo hiding a preset, as one tap hides it for the whole install', async () => {
+    withSettings({ hidden_filament_presets: JSON.stringify(['local_7']) });
+    render(<ConfigureAmsSlotModal {...defaultProps} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: `Hide this preset: ${BUILTIN_PRESET}` }));
+    expect(await screen.findByText(`Preset hidden: ${BUILTIN_PRESET}`)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(2));
+    expect(mocked(api.updateSettings).mock.calls[1][0]).toEqual({
+      hidden_filament_presets: JSON.stringify(['local_7']),
+    });
+    expect(await screen.findByText(BUILTIN_PRESET)).toBeInTheDocument();
+  });
+
   it('removes the ID when the user shows a hidden preset again', async () => {
     withSettings({ hidden_filament_presets: JSON.stringify(['local_7', 'GFSL05_09']) });
     render(<ConfigureAmsSlotModal {...defaultProps} />);

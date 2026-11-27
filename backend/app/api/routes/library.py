@@ -5785,6 +5785,11 @@ async def delete_file(
         if file.created_by_id != user.id:
             raise HTTPException(status_code=403, detail="You can only delete your own files")
 
+    # Fork: a waiting OrcaSlicer upload a pending queue job prints stays (409), as in the inbox.
+    from backend.app.api.routes.octoprint_compat import refuse_trashing_queued_upload
+
+    await refuse_trashing_queued_upload(db, file)
+
     if file.is_external:
         # External files bypass the trash — just drop the DB row + our thumbnail.
         abs_thumb_path = to_absolute_path(file.thumbnail_path)

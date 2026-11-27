@@ -6,6 +6,7 @@ import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { BaseOrdersView } from '../components/products/BaseOrdersView';
 import { ProductQcView } from '../components/products/ProductQc';
+import { useProductsReplanned } from '../components/products/useProductsReplanned';
 
 type Tab = 'base' | 'qc';
 const TABS: Tab[] = ['base', 'qc'];
@@ -33,6 +34,8 @@ function initialTab(): Tab {
 export function OrdersPage() {
   const { t } = useTranslation();
   const { hasPermission } = useAuth();
+  // A plan made elsewhere (another tab, the queue, a Base read) shows here too.
+  useProductsReplanned();
   const [tab, setTab] = useState<Tab>(initialTab);
   const { data: toCheck } = useQuery({
     queryKey: ['products', 'qc'],
@@ -69,7 +72,7 @@ export function OrdersPage() {
             role="tab"
             aria-selected={tab === id}
             onClick={() => choose(id)}
-            className={`px-4 py-2.5 text-sm flex items-center gap-2 border-b-2 -mb-px transition-colors whitespace-nowrap pointer-coarse:min-h-11 ${
+            className={`px-4 py-2.5 text-sm flex items-center gap-2 border-b-2 -mb-px transition-colors whitespace-nowrap pointer-coarse:min-h-[44px] ${
               tab === id ? 'text-white border-bambu-green font-medium' : 'text-bambu-gray border-transparent hover:text-white'
             }`}
           >

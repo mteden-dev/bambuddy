@@ -763,6 +763,9 @@ _UI_FLAG_FIELDS: tuple[str, ...] = (
     # Whether a queue item added from an OrcaSlicer upload waits for a
     # manual start (the app's import dialog sends it with the item).
     "slicer_inbox_manual_start",
+    # Whether every job asks for its file's colours (fork, services/file_colors):
+    # the print dialog warns of a job that would then wait for a colour.
+    "require_file_colors",
 )
 
 

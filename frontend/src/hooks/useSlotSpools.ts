@@ -33,9 +33,12 @@ export function useKeepSameRoll() {
   return useMutation({
     mutationFn: ({ printerId, amsId, trayId }: { printerId: number; amsId: number; trayId: number }) =>
       api.keepSameSlotRoll(printerId, amsId, trayId),
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['slot-spool-prompts'] });
-      showToast(t('slotSpool.toastSame'), 'success');
+      // No prompt left to clear: the slot went empty again or a new roll was
+      // set up meanwhile, so "still counting on the same roll" would be untrue.
+      if (result?.cleared === false) showToast(t('slotSpool.toastSameGone'), 'info');
+      else showToast(t('slotSpool.toastSame'), 'success');
     },
     onError: (error: Error) => showToast(t('slotSpool.saveFailed', { error: error.message }), 'error'),
   });

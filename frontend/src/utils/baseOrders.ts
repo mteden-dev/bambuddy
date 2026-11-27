@@ -1,5 +1,6 @@
 import type { BaseOrder, ProductJobOrders, ProductOrderTag } from '../api/client';
-import { parseUTCDate } from './date';
+import { formatDateTime, formatTimeOnly, parseUTCDate } from './date';
+import type { TimeFormat } from './date';
 
 /** Products an order's mapped lines want: product id -> units. */
 export function wantedUnits(order: BaseOrder): Map<number, number> {
@@ -78,6 +79,34 @@ export function missingParts(order: BaseOrder): { name: string; pieces: number }
   return order.progress.flatMap((product) =>
     product.parts.filter((part) => (part.missing ?? 0) > 0).map((part) => ({ name: part.name, pieces: part.missing })),
   );
+}
+
+/**
+ * The orders table's columns: on from xl (a MacBook), below it (every iPad) a
+ * card. The actions column has a fixed width in the rows and in the heading
+ * row alike, so headings line up with the cells. A literal for Tailwind.
+ */
+export const ORDER_GRID = 'xl:grid-cols-[104px_200px_minmax(0,1fr)_230px_240px]';
+
+/** A time today as "14:10", another day with its weekday ("Thu 08:10"). */
+export function shortWhen(value: string | null | undefined, timeFormat: TimeFormat, now: Date = new Date()): string {
+  const date = parseUTCDate(value);
+  if (!date) return '';
+  if (date.toDateString() === now.toDateString()) return formatTimeOnly(date, timeFormat);
+  return formatDateTime(value ?? null, timeFormat, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** An estimate after its deadline (ship-by or due date). */
+export function isLate(estimate: string | null | undefined, deadline: string | null | undefined): boolean {
+  const ready = parseUTCDate(estimate);
+  const due = parseUTCDate(deadline);
+  return !!ready && !!due && ready.getTime() > due.getTime();
+}
+
+/** An order in production expected after its ship-by date (any of its products). */
+export function orderLate(order: BaseOrder): boolean {
+  if (order.state !== 'accepted' || order.ready || order.packed) return false;
+  return order.progress.some((p) => isLate(p.estimated_ready_at, order.ship_by));
 }
 
 /** "jan_k", "jan_k +1", or the stock label for a plate printed for no order; null for none. */

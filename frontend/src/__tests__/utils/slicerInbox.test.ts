@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import type { LibraryFolderTree, PendingSlicerUpload } from '../../api/client';
-import { flattenFolders, keepTargets, nextPendingUpload, quickQueueItem } from '../../utils/slicerInbox';
+import {
+  flattenFolders,
+  folderPathLabel,
+  isOwnClaim,
+  keepTargets,
+  newDecisionClaim,
+  nextPendingUpload,
+  quickQueueItem,
+} from '../../utils/slicerInbox';
 
 function upload(id: number, over: Partial<PendingSlicerUpload> = {}): PendingSlicerUpload {
   return {
@@ -59,5 +67,26 @@ describe('folders', () => {
 
   it('offers writable folders other than the inbox', () => {
     expect(keepTargets(tree, 1).map((o) => o.name)).toEqual(['b', 'child']);
+  });
+
+  it('labels a folder with its whole path, so two of one name differ (fork)', () => {
+    const twins = [folder(6, 'H2S', [folder(7, 'Boxes', [], { parent_id: 6 })]), folder(8, 'P1S', [folder(9, 'Boxes', [], { parent_id: 8 })])];
+    expect(flattenFolders(twins).map(folderPathLabel)).toEqual(['H2S', 'H2S / Boxes', 'P1S', 'P1S / Boxes']);
+  });
+});
+
+describe('decision claims (fork)', () => {
+  it('are new for every decision and recognised as this tab’s own', () => {
+    const a = newDecisionClaim();
+    const b = newDecisionClaim();
+    expect(a).not.toBe(b);
+    expect(isOwnClaim(a)).toBe(true);
+    expect(isOwnClaim('another-tab:1')).toBe(false);
+    expect(isOwnClaim(null)).toBe(false);
+  });
+
+  it('go with the one-click queue item', () => {
+    expect(quickQueueItem(upload(5), false, 'tab:3')).toMatchObject({ slicer_inbox_claim: 'tab:3' });
+    expect(quickQueueItem(upload(5), false)).not.toHaveProperty('slicer_inbox_claim');
   });
 });

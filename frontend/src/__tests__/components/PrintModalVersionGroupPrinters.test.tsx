@@ -11,7 +11,7 @@
 
 import type { ComponentProps } from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
@@ -35,6 +35,9 @@ const PRINTERS = [
 
 type Body = Record<string, unknown>;
 let posted: Body[];
+// Answers each POST; the index counts every POST of the test, refused ones too.
+let reply: (body: Body, index: number) => Response;
+let postCount: number;
 
 function mockBackend() {
   server.use(
@@ -61,8 +64,10 @@ function mockBackend() {
       }),
     ),
     http.post('/api/v1/queue/', async ({ request }) => {
-      posted.push((await request.json()) as Body);
-      return HttpResponse.json({ id: posted.length, status: 'pending' });
+      const body = (await request.json()) as Body;
+      const response = reply(body, postCount++);
+      if (response.status < 300) posted.push(body);
+      return response;
     }),
   );
 }
@@ -88,6 +93,9 @@ const printButton = () => screen.getByRole('button', { name: /^Print$/i });
 describe('PrintModal: a version group on chosen printers (fork)', () => {
   beforeEach(() => {
     posted = [];
+    postCount = 0;
+    reply = () => HttpResponse.json({ id: postCount, status: 'pending' });
+    window.sessionStorage.clear();
     mockBackend();
   });
 
@@ -173,6 +181,32 @@ describe('PrintModal: a version group on chosen printers (fork)', () => {
     await user.click(printButton());
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({ library_file_id: 22, printer_id: 3 });
+  });
+
+  it('sends the OrcaSlicer import dialog’s decision id with every job (fork)', async () => {
+    const user = userEvent.setup();
+    render(
+      <PrintModal
+        mode="create"
+        libraryFileId={BOTTOM_P1S.id}
+        archiveName="bottom"
+        slicerInboxClaim="tab:9"
+        cleanupLibraryAfterDispatch
+        onClose={() => {}}
+      />,
+    );
+    await user.click(await screen.findByText('P1S One'));
+    await user.click(screen.getByText('P1S Two'));
+    await waitFor(() => expect(printButton()).toBeEnabled());
+    await user.click(printButton());
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted.map((b) => b.slicer_inbox_claim)).toEqual(['tab:9', 'tab:9']);
+  });
+
+  it('counts one queue item per printer in the quantity hint, not one per version', async () => {
+    renderGroup({ initialSelectedPrinterIds: [3] });
+    fireEvent.change(await screen.findByLabelText('Quantity'), { target: { value: '2' } });
+    expect(await screen.findByText('Creates 2 queue items')).toBeInTheDocument();
   });
 
   it('refuses a printer chosen before opening that no version fits', async () => {
@@ -261,5 +295,110 @@ describe('queueSeparateJobs with a pair filter (fork)', () => {
     ]);
     expect(result.failure).toBeNull();
     expect(result.queuedFileIds).toEqual([21, 22]);
+  });
+});
+
+// Fork: a version group on chosen printers that stops at a refusal. The
+// printers that got their version stay chosen and are shown as done, never
+// queued again, in this dialog or in the same group opened again.
+describe('PrintModal: a version group run that stopped at a refusal (fork)', () => {
+  beforeEach(() => {
+    posted = [];
+    postCount = 0;
+    // The second POST (P1S Two) is refused, everything else goes in.
+    reply = (_body, index) =>
+      index === 1
+        ? HttpResponse.json({ detail: 'Printer is in maintenance' }, { status: 400 })
+        : HttpResponse.json({ id: index + 1, status: 'pending' });
+    window.sessionStorage.clear();
+    mockBackend();
+  });
+
+  async function runAndRefuse() {
+    const user = userEvent.setup();
+    await user.click(await screen.findByText('P1S One'));
+    await user.click(screen.getByText('P1S Two'));
+    await user.click(screen.getByText('H2S Big'));
+    await waitFor(() => expect(printButton()).toBeEnabled());
+    await user.click(printButton());
+    await screen.findByTestId('run-report');
+  }
+
+  it('keeps what went in, what not and why on screen, and retries only the rest', async () => {
+    renderGroup({ initialMultiFileMode: 'printers' });
+    await runAndRefuse();
+    const report = screen.getByTestId('run-report');
+    expect(report).toHaveTextContent('In the queue (1):');
+    expect(report).toHaveTextContent('bottom.gcode.3mf → P1S One');
+    expect(report).toHaveTextContent('bottom.gcode.3mf → P1S Two: Printer is in maintenance');
+    expect(report).toHaveTextContent('Not tried yet (1):');
+    expect(report).toHaveTextContent('H2S.bottom.gcode.3mf → H2S Big');
+
+    // The queued printer is done, not one that no version fits.
+    expect(screen.queryByText(/No version of this group fits/)).not.toBeInTheDocument();
+    expect(screen.getByText('Already in the queue on: P1S One')).toBeInTheDocument();
+    expect(printButton()).toBeEnabled();
+
+    reply = (_body, index) => HttpResponse.json({ id: index + 1, status: 'pending' });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry the rest' }));
+    await waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted.slice(1).map((b) => [b.printer_id, b.library_file_id])).toEqual([
+      [2, 21],
+      [3, 22],
+    ]);
+    // Complete: nothing is remembered for the next time.
+    expect(Object.keys(window.sessionStorage).filter((k) => k.startsWith('bambuddy.groupRun.'))).toEqual([]);
+  });
+
+  it('opened again, skips the printers that already have their version', async () => {
+    const first = render(
+      <PrintModal
+        mode="create"
+        libraryFileId={BOTTOM_P1S.id}
+        variantFiles={[BOTTOM_P1S, BOTTOM_H2S]}
+        archiveName="bottom +1 more"
+        initialMultiFileMode="printers"
+        onClose={() => {}}
+      />,
+    );
+    await runAndRefuse();
+    first.unmount();
+
+    reply = (_body, index) => HttpResponse.json({ id: index + 1, status: 'pending' });
+    renderGroup({ initialMultiFileMode: 'printers' });
+    expect(await screen.findByTestId('group-run-resumed')).toHaveTextContent('Already queued on 1 printers');
+    expect(await screen.findByText('Already in the queue on: P1S One')).toBeInTheDocument();
+    const user = userEvent.setup();
+    await waitFor(() => expect(printButton()).toBeEnabled());
+    await user.click(printButton());
+    await waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted.slice(1).map((b) => b.printer_id).sort()).toEqual([2, 3]);
+  });
+
+  it('one file on several printers: says who got it, and retries only the printer that refused', async () => {
+    const user = userEvent.setup();
+    render(<PrintModal mode="create" libraryFileId={BOTTOM_P1S.id} archiveName="bottom" onClose={() => {}} />);
+    await user.click(await screen.findByText('P1S One'));
+    await user.click(screen.getByText('P1S Two'));
+    await waitFor(() => expect(printButton()).toBeEnabled());
+    await user.click(printButton());
+
+    const report = await screen.findByTestId('run-report');
+    expect(report).toHaveTextContent('In the queue (1):');
+    expect(report).toHaveTextContent('P1S One');
+    expect(report).toHaveTextContent('P1S Two: Printer is in maintenance');
+
+    reply = (_body, index) => HttpResponse.json({ id: index + 1, status: 'pending' });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry the rest' }));
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted.map((b) => b.printer_id)).toEqual([1, 2]);
+  });
+
+  it('can start over on purpose', async () => {
+    renderGroup({ initialMultiFileMode: 'printers' });
+    await runAndRefuse();
+    fireEvent.click(screen.getByRole('button', { name: 'Start over' }));
+    expect(screen.queryByText('Already in the queue on: P1S One')).not.toBeInTheDocument();
+    expect(screen.getByText(/^Prints on: P1S One, P1S Two$/)).toBeInTheDocument();
   });
 });

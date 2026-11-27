@@ -32,6 +32,10 @@ export function PrinterTagPicker({ value, onChange, options, allowCreate, disabl
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const boxRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  // On a touch screen the search field is not focused on open: the keyboard
+  // would come up over the list it is meant to search.
+  const touch = typeof window !== 'undefined' && !!window.matchMedia?.('(any-pointer: coarse)').matches;
 
   const names = useMemo(() => new Map(options.map((o) => [o.id, o.name])), [options]);
   const q = query.trim().toLowerCase();
@@ -50,7 +54,16 @@ export function PrinterTagPicker({ value, onChange, options, allowCreate, disabl
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    // The picker sits in a scrolling dialog: bring the list into view, and
+    // again when the on-screen keyboard shrinks the viewport.
+    const reveal = () => dropdownRef.current?.scrollIntoView?.({ block: 'nearest' });
+    const raf = requestAnimationFrame(reveal);
+    window.visualViewport?.addEventListener('resize', reveal);
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener('mousedown', onDown);
+      window.visualViewport?.removeEventListener('resize', reveal);
+    };
   }, [open]);
 
   const create = useMutation({
@@ -84,7 +97,7 @@ export function PrinterTagPicker({ value, onChange, options, allowCreate, disabl
               <button
                 type="button"
                 onClick={() => onChange(value.filter((v) => v !== tagId))}
-                className="p-0.5 rounded-full hover:bg-bambu-green/25"
+                className="p-0.5 any-pointer-coarse:min-w-[44px] any-pointer-coarse:min-h-[44px] inline-flex items-center justify-center rounded-full hover:bg-bambu-green/25"
                 aria-label={t('printerTags.remove', { name: names.get(tagId) ?? tagId })}
               >
                 <X className="w-3 h-3" />
@@ -96,7 +109,7 @@ export function PrinterTagPicker({ value, onChange, options, allowCreate, disabl
           <button
             type="button"
             onClick={() => setOpen((o) => !o)}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border border-dashed border-bambu-dark-tertiary text-bambu-gray hover:border-bambu-green hover:text-bambu-green"
+            className="inline-flex items-center gap-1 px-2 py-0.5 any-pointer-coarse:min-h-[44px] any-pointer-coarse:px-3 rounded-full text-xs border border-dashed border-bambu-dark-tertiary text-bambu-gray hover:border-bambu-green hover:text-bambu-green"
           >
             <Plus className="w-3 h-3" />
             {t('printerTags.add')}
@@ -105,9 +118,9 @@ export function PrinterTagPicker({ value, onChange, options, allowCreate, disabl
         {disabled && value.length === 0 && <span className="text-xs text-bambu-gray">{t('printerTags.none')}</span>}
       </div>
       {open && (
-        <div className="absolute z-20 mt-1 w-64 max-w-full rounded-lg border border-bambu-dark-tertiary bg-bambu-dark-secondary shadow-lg">
+        <div ref={dropdownRef} className="absolute z-20 mt-1 w-64 max-w-full rounded-lg border border-bambu-dark-tertiary bg-bambu-dark-secondary shadow-lg">
           <input
-            autoFocus
+            autoFocus={!touch}
             type="text"
             value={query}
             maxLength={64}
@@ -131,7 +144,7 @@ export function PrinterTagPicker({ value, onChange, options, allowCreate, disabl
                 <button
                   type="button"
                   onClick={() => pick(o.id)}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark-tertiary/50"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 any-pointer-coarse:min-h-[44px] text-left text-sm text-white hover:bg-bambu-dark-tertiary/50"
                 >
                   <Tag className="w-3.5 h-3.5 text-bambu-gray flex-shrink-0" />
                   <span className="truncate">{o.name}</span>
@@ -144,7 +157,7 @@ export function PrinterTagPicker({ value, onChange, options, allowCreate, disabl
                   type="button"
                   onClick={() => create.mutate(query.trim())}
                   disabled={create.isPending}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-bambu-green hover:bg-bambu-dark-tertiary/50"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 any-pointer-coarse:min-h-[44px] text-left text-sm text-bambu-green hover:bg-bambu-dark-tertiary/50"
                 >
                   {create.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                   <span className="truncate">{t('printerTags.create', { name: query.trim() })}</span>

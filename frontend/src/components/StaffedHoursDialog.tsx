@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarClock, CalendarDays, Repeat, X } from 'lucide-react';
+import { CalendarClock, CalendarDays, Loader2, Repeat, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api, type QueueStaffedHours, type QueueStaffedHoursView } from '../api/client';
 import { formatDuration } from '../utils/date';
 import { stampToMin, zoneNowMin } from '../utils/staffedMarks';
+import { useModalBehavior } from '../hooks/useModalBehavior';
 import { Button } from './Button';
 import { StaffedMarksCalendar } from './StaffedMarksCalendar';
 
@@ -68,19 +69,26 @@ export function StaffedHoursDialog({
     queryFn: api.getStaffedHours,
   });
   const [hours, setHours] = useState<QueueStaffedHours | null>(null);
+  // As loaded, to tell whether anything was changed (fork).
+  const [loaded, setLoaded] = useState<QueueStaffedHours | null>(null);
   useEffect(() => {
     if (stored && !hours) {
       // Never set up: hours are entered in this browser's time zone.
-      setHours({
+      const initial = {
         enabled: stored.enabled,
         timezone: !stored.enabled && stored.timezone === 'UTC' ? browserZone() : stored.timezone,
         days: stored.days,
         clear_minutes: stored.clear_minutes,
         learn: stored.learn ?? true,
         marks: stored.marks ?? [],
-      });
+      };
+      setHours(initial);
+      setLoaded(initial);
     }
   }, [stored, hours]);
+  const dirty = hours != null && loaded != null && JSON.stringify(hours) !== JSON.stringify(loaded);
+  // Closing with changes asks first (fork): a tap beside the sheet must not drop painted marks.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const learned = stored?.learned ?? null;
   const [tab, setTab] = useState<'calendar' | 'week'>(initialTab);
 
@@ -91,14 +99,22 @@ export function StaffedHoursDialog({
       onClose();
     },
   });
+  const requestClose = () => {
+    // A save under way keeps the dialog: its outcome shows here.
+    if (save.isPending) return;
+    if (dirty && canEdit) setConfirmDiscard(true);
+    else onClose();
+  };
+  // The heat map's hour tapped: its usual wait, said below the map.
+  const [heatCell, setHeatCell] = useState<number | null>(null);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // Escape, and a phone's Back on the bottom sheet, ask like Cancel does;
+  // asked already, they go back to editing.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalBehavior(() => (confirmDiscard ? setConfirmDiscard(false) : requestClose()), dialogRef, {
+    busy: save.isPending,
+    backCloses: 'narrow',
+  });
 
   // 1 January 2024 was a Monday.
   const dayNames = Array.from({ length: 7 }, (_, i) =>
@@ -107,6 +123,13 @@ export function StaffedHoursDialog({
   const shortDayNames = Array.from({ length: 7 }, (_, i) =>
     new Date(2024, 0, 1 + i).toLocaleDateString(i18n.language, { weekday: 'short' }),
   );
+  // The heat map's words for one hour of the week, Monday 00:00 first.
+  const heatText = (cell: number) =>
+    t('queue.timeline.staffed.heatmapCell', {
+      day: dayNames[Math.floor(cell / 24)],
+      hour: `${String(cell % 24).padStart(2, '0')}:00`,
+      duration: formatDuration((learned?.typical_minutes?.[cell] ?? 0) * 60),
+    });
   const setDay = (index: number, value: QueueStaffedHours['days'][number]) =>
     setHours((h) => (h ? { ...h, days: h.days.map((d, i) => (i === index ? value : d)) } : h));
   const readOnly = !canEdit;
@@ -120,16 +143,18 @@ export function StaffedHoursDialog({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4" onClick={onClose} role="presentation">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4" onClick={requestClose} role="presentation">
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={t('queue.timeline.staffed.title')}
         data-testid="staffed-hours-dialog"
-        className="w-full sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-t-2xl sm:rounded-2xl shadow-2xl"
+        className="outline-none w-full sm:max-w-2xl max-h-[90vh] flex flex-col bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-t-2xl sm:rounded-2xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-2 p-4 sm:p-5 border-b border-bambu-dark-tertiary">
+        <div className="shrink-0 flex items-start justify-between gap-2 p-4 sm:p-5 border-b border-bambu-dark-tertiary">
           <div>
             <h2 className="text-lg font-semibold text-white flex items-center gap-2">
               <CalendarClock className="w-5 h-5 text-bambu-green" />
@@ -139,18 +164,19 @@ export function StaffedHoursDialog({
           </div>
           <button
             type="button"
-            onClick={onClose}
-            className="p-1 -mr-1 rounded-lg text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary"
+            onClick={requestClose}
+            className="p-1 -mr-1 shrink-0 inline-flex items-center justify-center rounded-lg text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary any-pointer-coarse:min-w-[44px] any-pointer-coarse:min-h-[44px]"
             aria-label={t('common.close')}
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
+        {/* Fork: the body scrolls; Save below stays in view. */}
         {isLoading || !hours ? (
-          <div className="p-5 text-sm text-bambu-gray">{t('common.loading')}</div>
+          <div className="p-5 text-sm text-bambu-gray flex-1 min-h-0">{t('common.loading')}</div>
         ) : (
-          <div className="p-4 sm:p-5 space-y-4">
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 space-y-4" data-testid="staffed-hours-body">
             {!waitsForPlate && (
               <p className="text-xs rounded-lg border border-amber-400/40 bg-amber-500/10 text-amber-200 px-3 py-2" data-testid="staffed-no-plate-clear">
                 {t('queue.timeline.staffed.noPlateClear')}
@@ -205,8 +231,9 @@ export function StaffedHoursDialog({
                 {dayNames.map((name, index) => {
                   const day = hours.days[index];
                   return (
-                    <div key={index} className="flex items-center gap-2" data-testid={`staffed-day-${index}`}>
-                      <label className="flex items-center gap-2 w-36 shrink-0 text-sm text-white capitalize">
+                    // Fork: the day's name over its hours on a phone, beside them from sm.
+                    <div key={index} className="flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1" data-testid={`staffed-day-${index}`}>
+                      <label className="flex items-center gap-2 w-full sm:w-36 shrink-0 text-sm text-white capitalize any-pointer-coarse:min-h-[44px]">
                         <input
                           type="checkbox"
                           checked={day != null}
@@ -224,7 +251,7 @@ export function StaffedHoursDialog({
                             disabled={readOnly || !hours.enabled}
                             onChange={(e) => e.target.value && setDay(index, { ...day, start: e.target.value })}
                             aria-label={`${name} ${t('queue.timeline.staffed.from')}`}
-                            className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                            className="min-w-0 flex-1 sm:flex-none px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm any-pointer-coarse:min-h-[44px]"
                           />
                           <span className="text-bambu-gray">–</span>
                           <input
@@ -233,7 +260,7 @@ export function StaffedHoursDialog({
                             disabled={readOnly || !hours.enabled}
                             onChange={(e) => e.target.value && setDay(index, { ...day, end: e.target.value })}
                             aria-label={`${name} ${t('queue.timeline.staffed.to')}`}
-                            className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                            className="min-w-0 flex-1 sm:flex-none px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm any-pointer-coarse:min-h-[44px]"
                           />
                         </>
                       ) : (
@@ -307,21 +334,26 @@ export function StaffedHoursDialog({
                             <span className="pr-1 leading-4 capitalize">{day}</span>
                             {Array.from({ length: 24 }, (_, h) => {
                               const minutes = learned.typical_minutes![d * 24 + h];
+                              const cell = d * 24 + h;
                               return (
-                                <span
+                                <button
+                                  type="button"
                                   key={h}
-                                  className={`h-4 rounded-[2px] ${waitShade(minutes)}`}
-                                  title={t('queue.timeline.staffed.heatmapCell', {
-                                    day: dayNames[d],
-                                    hour: `${String(h).padStart(2, '0')}:00`,
-                                    duration: formatDuration(minutes * 60),
-                                  })}
+                                  onClick={() => setHeatCell(cell)}
+                                  className={`h-4 rounded-[2px] ${waitShade(minutes)} ${heatCell === cell ? 'ring-2 ring-white' : ''}`}
+                                  title={heatText(cell)}
+                                  aria-label={heatText(cell)}
+                                  data-testid="staffed-heat-cell"
                                 />
                               );
                             })}
                           </div>
                         ))}
                       </div>
+                      {/* The hour tapped, as a hover says it on a desktop. */}
+                      <p className="text-xs text-white min-h-4" aria-live="polite" data-testid="staffed-heat-info">
+                        {heatCell != null ? heatText(heatCell) : t('queue.timeline.staffed.heatmapTap')}
+                      </p>
                       <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-bambu-gray">
                         {SHADE_SCALE.map(([key, shade]) => (
                           <span key={key} className="flex items-center gap-1">
@@ -355,14 +387,31 @@ export function StaffedHoursDialog({
           </div>
         )}
 
-        <div className="flex justify-end gap-2 px-4 sm:px-5 py-3 border-t border-bambu-dark-tertiary">
-          <Button variant="secondary" onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-          {canEdit && (
-            <Button onClick={() => hours && save.mutate(hours)} disabled={!hours || save.isPending}>
-              {t('common.save')}
-            </Button>
+        <div className="shrink-0 flex flex-wrap items-center justify-end gap-2 px-4 sm:px-5 py-3 border-t border-bambu-dark-tertiary" data-testid="staffed-hours-footer">
+          {confirmDiscard ? (
+            <>
+              <span className="mr-auto text-sm text-white" role="alert" data-testid="staffed-discard-ask">
+                {t('queue.timeline.staffed.discardAsk')}
+              </span>
+              <Button variant="secondary" onClick={() => setConfirmDiscard(false)}>
+                {t('queue.timeline.staffed.keepEditing')}
+              </Button>
+              <Button variant="danger" onClick={onClose}>
+                {t('queue.timeline.staffed.discard')}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={requestClose} disabled={save.isPending}>
+                {t('common.cancel')}
+              </Button>
+              {canEdit && (
+                <Button onClick={() => hours && save.mutate(hours)} disabled={!hours || save.isPending}>
+                  {save.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {t('common.save')}
+                </Button>
+              )}
+            </>
           )}
         </div>
       </div>

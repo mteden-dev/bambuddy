@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, AlertTriangle, Layers, Loader2, Pencil, Printer, ThumbsUp, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CostCenterSummary, PrintQueueItemCreate, PrintQueueItemUpdate, SlotMaterial } from '../../api/client';
 import { api } from '../../api/client';
@@ -8,6 +8,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
 import { ConfirmModal } from '../ConfirmModal';
+import { useUpstreamModalLayer } from '../../hooks/useModalBehavior';
 import { useToast } from '../../contexts/ToastContext';
 import {
   buildAmsMapping,
@@ -44,8 +45,18 @@ import {
   versionForModel,
   type MultiFileMode,
 } from './multiFile';
-import { fileHasQueuedPair, queueSeparateJobs, runAsapTail } from './separateJobs';
-import { mappingSwapsMaterial, perFileAmsMapping, perFileMappingKey } from './perFileMapping';
+import {
+  clearGroupRun,
+  fileHasQueuedPair,
+  queuedPairKey,
+  queueSeparateJobs,
+  readGroupRun,
+  runAsapTail,
+  storeGroupRun,
+  wantedPairs,
+  type RunReport,
+} from './separateJobs';
+import { perFileAmsMapping, perFileForcedOverrides, perFileMappingKey, rowsWaitingForColor } from './perFileMapping';
 import { CostCenterSelect } from './CostCenterSelect';
 import type {
   AssignmentMode,
@@ -118,6 +129,7 @@ export function PrintModal({
   initialMultiFileMode,
   resumeSeparateJobs,
   onSeparateJobsProgress,
+  slicerInboxClaim,
 }: PrintModalProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -149,12 +161,16 @@ export function PrintModal({
   // for the first free printer, or printers the user picks, each getting the
   // version sliced for its model.
   const isVersionGroup = isMultiFile && !separateJobsAllowed;
+  // A version group's run on chosen printers that stopped at a refusal (fork):
+  // reopened, it starts from the printers already queued, which are shown as
+  // done and never sent again (`readGroupRun`).
+  const [groupResume] = useState(() => (isVersionGroup ? readGroupRun(variantFiles!) : null));
   const [multiFileMode, setMultiFileMode] = useState<MultiFileMode>(() =>
     resumed
       ? 'separate'
       : separateJobsAllowed && isMultiFile
         ? defaultMultiFileMode(variantFiles!)
-        : isVersionGroup && (initialMultiFileMode === 'printers' || !!initialSelectedPrinterIds?.length)
+        : isVersionGroup && (initialMultiFileMode === 'printers' || !!initialSelectedPrinterIds?.length || !!groupResume)
           ? 'printers'
           : 'alternatives',
   );
@@ -170,21 +186,30 @@ export function PrintModal({
   // The rest is the remainder of those jobs, so the mode is no longer offered:
   // as alternatives it could be a job of one candidate, or one whose filament
   // panel describes a file that has already been queued and left the list.
-  const [partlyQueued, setPartlyQueued] = useState(resumed);
+  const [partlyQueued, setPartlyQueued] = useState(resumed || !!groupResume);
   // File and printer pairs earlier submits of a partly queued run got into the
   // queue. The next submit skips them, so a file one printer took and another
   // refused is not queued on the first printer again.
   const [queuedPairs, setQueuedPairs] = useState<ReadonlySet<string>>(
-    () => new Set(resumed ? resumeSeparateJobs!.queuedPairs : []),
+    () => new Set(resumed ? resumeSeparateJobs!.queuedPairs : groupResume?.queuedPairs ?? []),
   );
   // ASAP positions the run has taken so far. The backend moves everything at
   // or below an inserted position down, so a second submit that restarted at 1
   // would put the rest ahead of what is already queued.
-  const [asapPositionsTaken, setAsapPositionsTaken] = useState(resumed ? resumeSeparateJobs!.asapInserted : 0);
+  const [asapPositionsTaken, setAsapPositionsTaken] = useState(
+    resumed ? resumeSeparateJobs!.asapInserted : groupResume?.asapInserted ?? 0,
+  );
   // The run's own queue items and batches, to find where its ASAP items end
   // in the queue as it is at the next submit.
-  const [runItemIds, setRunItemIds] = useState<number[]>(() => (resumed ? resumeSeparateJobs!.queuedItemIds ?? [] : []));
-  const [runBatchIds, setRunBatchIds] = useState<number[]>(() => (resumed ? resumeSeparateJobs!.queuedBatchIds ?? [] : []));
+  const [runItemIds, setRunItemIds] = useState<number[]>(() =>
+    resumed ? resumeSeparateJobs!.queuedItemIds ?? [] : groupResume?.queuedItemIds ?? [],
+  );
+  const [runBatchIds, setRunBatchIds] = useState<number[]>(() =>
+    resumed ? resumeSeparateJobs!.queuedBatchIds ?? [] : groupResume?.queuedBatchIds ?? [],
+  );
+  // What the last submit got into the queue and what not, kept on screen after
+  // a partial failure (fork) instead of only a toast.
+  const [runReport, setRunReport] = useState<RunReport | null>(null);
   // A group opened for a printer already chosen (the printer card) prints the
   // version for that printer; there is nothing to choose between.
   const showModeToggle =
@@ -257,8 +282,13 @@ export function PrintModal({
       return initialSelectedPrinterIds;
     }
     if (resumedSettings) return resumedSettings.printerIds;
+    if (groupResume) return groupResume.printerIds;
     return [];
   });
+
+  // Set once the user changes the printer choice: printer tags arriving late
+  // then leave it alone (fork, see the tag switch below).
+  const printerPickedByUserRef = useRef(false);
 
   // Multi-select plates: create mode users can pick a subset of plates
   const [selectedPlates, setSelectedPlates] = useState<Set<number>>(() => {
@@ -580,34 +610,51 @@ export function PrintModal({
   // "Chosen printers" of a version group (fork): the version each printer
   // prints, the printers the picker offers (those some version fits), and
   // which selected printers print each version.
+  // From the whole group as opened, not from what is left to queue: a
+  // printer whose version went in on an earlier submit still has it.
+  const groupFiles = useMemo(() => (isVersionGroup ? variantFiles ?? [] : []), [isVersionGroup, variantFiles]);
   const versionByPrinter = useMemo(() => {
     const byPrinter = new Map<number, VariantCandidate>();
     if (!isGroupPrinters) return byPrinter;
     for (const printer of printers ?? []) {
-      const version = versionForModel(candidates, printer.model);
+      const version = versionForModel(groupFiles, printer.model);
       if (version) byPrinter.set(printer.id, version);
     }
     return byPrinter;
-  }, [isGroupPrinters, printers, candidates]);
+  }, [isGroupPrinters, printers, groupFiles]);
   const groupPrinterChoices = useMemo(
     () => (isGroupPrinters ? (printers ?? []).filter((p) => versionByPrinter.has(p.id)) : []),
     [isGroupPrinters, printers, versionByPrinter],
   );
+  const printerName = useCallback(
+    (printerId: number) => printers?.find((p) => p.id === printerId)?.name ?? `#${printerId}`,
+    [printers],
+  );
+  // Selected printers still to get their version; those an earlier submit
+  // queued are listed apart as done.
   const assignedPrinters = useMemo(() => {
     const byFile: Record<number, string[]> = {};
     if (!isGroupPrinters) return byFile;
     for (const printerId of selectedPrinters) {
       const version = versionByPrinter.get(printerId);
-      if (!version) continue;
-      const name = printers?.find((p) => p.id === printerId)?.name ?? `#${printerId}`;
-      (byFile[version.id] ??= []).push(name);
+      if (!version || queuedPairs.has(queuedPairKey(version.id, printerId))) continue;
+      (byFile[version.id] ??= []).push(printerName(printerId));
     }
     return byFile;
-  }, [isGroupPrinters, selectedPrinters, versionByPrinter, printers]);
+  }, [isGroupPrinters, selectedPrinters, versionByPrinter, printerName, queuedPairs]);
+  const queuedPrinters = useMemo(() => {
+    const byFile: Record<number, string[]> = {};
+    if (!isGroupPrinters) return byFile;
+    for (const key of queuedPairs) {
+      const [fileId, printerId] = key.split(':').map(Number);
+      if (Number.isFinite(fileId) && Number.isFinite(printerId)) (byFile[fileId] ??= []).push(printerName(printerId));
+    }
+    return byFile;
+  }, [isGroupPrinters, queuedPairs, printerName]);
   // The versions that get a queue item, in list order.
   const groupJobFiles = useMemo(
-    () => (isGroupPrinters ? candidates.filter((c) => assignedPrinters[c.id]?.length) : []),
-    [isGroupPrinters, candidates, assignedPrinters],
+    () => (isGroupPrinters ? groupFiles.filter((c) => assignedPrinters[c.id]?.length) : []),
+    [isGroupPrinters, groupFiles, assignedPrinters],
   );
   // Selected printers no version fits: only a printer chosen before the
   // dialog opened (the printer card) can be one.
@@ -620,6 +667,23 @@ export function PrintModal({
   );
   // The files the per-file mapping panels and the queue loop work on.
   const separateJobFiles = isGroupPrinters ? groupJobFiles : candidates;
+  // Which file and printer pairs separate jobs queue: a group's printers only
+  // their own version, everything else every pair.
+  const separateJobIncludes = isGroupPrinters
+    ? (file: VariantCandidate, printerId: number | null) =>
+        printerId != null && versionByPrinter.get(printerId)?.id === file.id
+    : undefined;
+  // "Box.gcode.3mf → P1S-2" (or "→ Any P1S") for a `queuedPairKey`.
+  const pairLabel = (key: string) => {
+    const [fileId, printerPart] = key.split(':');
+    const file = (variantFiles ?? candidates).find((c) => String(c.id) === fileId);
+    const printerId = Number(printerPart);
+    const target =
+      printerPart === 'null' || !Number.isFinite(printerId)
+        ? t('printModal.runReport.anyModel', { model: targetModel ?? '' })
+        : printerName(printerId);
+    return `${file?.filename ?? `#${fileId}`} → ${target}`;
+  };
   // The model gate (#2578) per file: each separate job runs its own file, and
   // the backend refuses each one sliced for an incompatible model. A file that
   // names no model passes, as a single file does.
@@ -979,6 +1043,11 @@ export function PrintModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPerFileFilamentMapping, separateJobFiles, perFileReqQueries.map((q) => q.dataUpdatedAt).join('|')]);
 
+  // Files whose filaments could not be read: no panel, and no mapping sent.
+  const perFileUnreadable = showPerFileFilamentMapping
+    ? separateJobFiles.filter((_, i) => perFileReqQueries[i]?.isError)
+    : [];
+
   const perFileKey = (fileId: number) =>
     perFileMappingKey(effectivePrinterId ?? 0, fileId, candidatePlates[fileId] ?? null);
 
@@ -1176,14 +1245,24 @@ export function PrintModal({
         p.model === tagTargetModel &&
         printerAcceptsTags(printerTagsData.byPrinter.get(p.id), effectiveJobTags),
     );
+  // Tags no active printer of the model takes make a job that waits forever:
+  // Print waits for "add anyway" (fork). Asked again when the tags change.
+  const tagsKey = effectiveJobTags.join(',');
+  const [tagsAcknowledgedFor, setTagsAcknowledgedFor] = useState<string | null>(null);
+  const tagsAcknowledged = tagsAcknowledgedFor === tagsKey;
+  const tagsBlockPrint = showJobTags && !!tagTargetModel && !somePrinterFitsTags && !tagsAcknowledged;
   // A new job for a file with printer tags opens on "Any <model>": printed on
   // one chosen printer, the tags would decide nothing. Once, and not over a
-  // choice the dialog was opened with.
+  // choice the dialog was opened with, nor over a printer the user picked
+  // before the tags arrived (fork): only the automatic default gives way, and
+  // a line says it did.
   const tagModeAppliedRef = useRef(false);
+  const [tagModeSwitched, setTagModeSwitched] = useState(false);
   useEffect(() => {
     if (tagModeAppliedRef.current || fileTagIds.length === 0) return;
     tagModeAppliedRef.current = true;
     if (
+      printerPickedByUserRef.current ||
       mode !== 'create' ||
       isCrossModel ||
       isGroupPrinters ||
@@ -1196,6 +1275,7 @@ export function PrintModal({
     }
     setAssignmentMode('model');
     setSelectedPrinters([]);
+    setTagModeSwitched(true);
   }, [fileTagIds, mode, isCrossModel, isGroupPrinters, initialSelectedPrinterIds, resumedSettings, assignmentMode, selectedPrinters.length]);
 
   // The sliced-for metadata loads async. If the user switched to model mode
@@ -1241,6 +1321,7 @@ export function PrintModal({
     }
   }, [settings?.per_printer_mapping_expanded, selectedPrinters, initialExpandApplied, multiPrinterMapping]);
 
+  useUpstreamModalLayer(); // fork: a fork dialog under this one leaves Escape to it
   // Close on Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1414,6 +1495,7 @@ export function PrintModal({
     options?: { skipFilamentCheck?: boolean; acknowledgedPrinters?: number[] },
   ) => {
     e?.preventDefault();
+    setRunReport(null);
 
     if (billingEnabled && selectedCostCenter == null) {
       showToast(t('printModal.noPrintableCostCenters'), 'error');
@@ -1610,6 +1692,9 @@ export function PrintModal({
       failed: 0,
       errors: [],
     };
+    // Fork: who got the job and who refused, for the summary kept on screen.
+    const succeeded: string[] = [];
+    const refusedPrinters: number[] = [];
 
     // Convert filament overrides from Record to array format for API.
     // Include all slots that either have a user override or have force_color_match enabled
@@ -1811,7 +1896,7 @@ export function PrintModal({
       // A group's chosen printers (fork): each printer once, with its version.
       setSubmitProgress({
         current: 0,
-        total: isGroupPrinters ? selectedPrinters.length : candidates.length * printerIds.length,
+        total: wantedPairs(separateJobFiles, printerIds, separateJobIncludes, queuedPairs).length,
       });
       try {
         // The rest of a partly queued run goes in right behind the run's own
@@ -1832,9 +1917,7 @@ export function PrintModal({
           files: separateJobFiles,
           plateByFile: candidatePlates,
           printerIds,
-          includes: isGroupPrinters
-            ? (file, printerId) => printerId != null && versionByPrinter.get(printerId)?.id === file.id
-            : undefined,
+          includes: separateJobIncludes,
           alreadyQueued: queuedPairs,
           asapInsertedBefore,
           quantity: effectiveQuantity,
@@ -1858,6 +1941,7 @@ export function PrintModal({
               project_id: projectId ?? undefined,
               cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
               cleanup_library_after_dispatch: cleanupLibraryAfterDispatch,
+              ...(slicerInboxClaim ? { slicer_inbox_claim: slicerInboxClaim } : {}),
             };
             if (useStagger) {
               const groupIndex = Math.floor(printerIndex / scheduleOptions.staggerGroupSize);
@@ -1867,14 +1951,20 @@ export function PrintModal({
               }
             }
             // A file mapped by hand in its own panel (one printer only) carries
-            // that mapping, the rest none (see `perFileAmsMapping`).
+            // that mapping, the rest none (see `perFileAmsMapping`). Its picks
+            // go as forced overrides (`perFileForcedOverrides`), never with
+            // skip_filament_check: the job may start hours later, and then
+            // asks for the filament picked, not for whatever is in that tray.
             const fileMapping =
               showPerFileFilamentMapping && printerId === effectivePrinterId ? perFileAmsMappings.get(file.id) : undefined;
             if (fileMapping) {
               item.ams_mapping = fileMapping;
-              if (mappingSwapsMaterial(perFileReqs.get(file.id), fileMapping, buildLoadedFilaments(printerStatus))) {
-                item.skip_filament_check = true;
-              }
+              const forced = perFileForcedOverrides(
+                perFileReqs.get(file.id),
+                buildLoadedFilaments(printerStatus),
+                manualMappingsByFile[perFileKey(file.id)],
+              );
+              if (forced) item.filament_overrides = forced;
             }
             return item;
           },
@@ -1907,10 +1997,34 @@ export function PrintModal({
             }),
             'error',
           );
+          // Kept on screen (fork): what went in, what was refused and why, and
+          // what was not tried, with "Retry the rest" next to it.
+          const failedKey = queuedPairKey(outcome.failure.file.id, outcome.failure.printerId);
+          setRunReport({
+            queued: [...allQueued].map(pairLabel),
+            failed: [`${pairLabel(failedKey)}: ${outcome.failure.message}`],
+            notTried: wantedPairs(separateJobFiles, printerIds, separateJobIncludes, allQueued)
+              .map(({ file, printerId }) => queuedPairKey(file.id, printerId))
+              .filter((key) => key !== failedKey)
+              .map(pairLabel),
+          });
           // Only files queued on every printer leave the list; the refused one
-          // stays, even if a printer before the refusal took it.
-          const remaining = candidates.filter((c) => !outcome.queuedFileIds.includes(c.id));
-          setCandidates(remaining);
+          // stays, even if a printer before the refusal took it. A version
+          // group keeps its whole list (fork): its printers each have one
+          // version, and the queued ones are shown as done instead.
+          const remaining = isGroupPrinters
+            ? candidates
+            : candidates.filter((c) => !outcome.queuedFileIds.includes(c.id));
+          if (!isGroupPrinters) setCandidates(remaining);
+          if (isGroupPrinters) {
+            storeGroupRun(groupFiles, {
+              queuedPairs: [...allQueued],
+              asapInserted: outcome.asapInserted,
+              queuedItemIds: allItemIds,
+              queuedBatchIds: allBatchIds,
+              printerIds: selectedPrinters,
+            });
+          }
           // Any item in the queue makes this run partly queued, also one of
           // the refused file on an earlier printer.
           if (outcome.itemsCreated > 0) setPartlyQueued(true);
@@ -1947,6 +2061,7 @@ export function PrintModal({
         // Nothing posted means every remaining pair was already queued (a
         // refusing printer deselected since): a success, but "0 items queued"
         // would say otherwise.
+        if (isGroupPrinters) clearGroupRun(groupFiles);
         if (outcome.itemsCreated > 0) await showQueuedToast(outcome.itemsCreated);
         queryClient.invalidateQueries({ queryKey: ['queue'] });
         onSuccess?.();
@@ -2067,6 +2182,7 @@ export function PrintModal({
       estimated_cost: billingEnabled && selectedCostCenterId != null ? plateEstimatedCost : undefined,
       batch_id: autoBatchId ?? undefined,
       cleanup_library_after_dispatch: cleanupLibraryAfterDispatch,
+      ...(slicerInboxClaim ? { slicer_inbox_claim: slicerInboxClaim } : {}),
       };
     };
 
@@ -2110,6 +2226,7 @@ export function PrintModal({
             await addToQueueMutation.mutateAsync(queueData);
           }
           results.success++;
+          succeeded.push(plate ? plate.name || `Plate ${plate.index}` : t('printModal.runReport.anyModel', { model: targetModel ?? '' }));
         } catch (error) {
           results.failed++;
           const plateName = plate ? (plate.name || `Plate ${plate.index}`) : '';
@@ -2194,8 +2311,11 @@ export function PrintModal({
               await addToQueueMutation.mutateAsync(queueData);
             }
             results.success++;
+            const doneName = printers?.find(p => p.id === printerId)?.name || `Printer ${printerId}`;
+            succeeded.push(plate ? `${doneName} (${plate.name || `Plate ${plate.index}`})` : doneName);
           } catch (error) {
             results.failed++;
+            refusedPrinters.push(printerId);
             const printerName = printers?.find(p => p.id === printerId)?.name || `Printer ${printerId}`;
             const plateName = plate ? (plate.name || `Plate ${plate.index}`) : '';
             const label = plateName ? `${printerName} (${plateName})` : printerName;
@@ -2221,9 +2341,21 @@ export function PrintModal({
       onClose();
     } else if (results.success === 0) {
       showToast(`Failed: ${results.errors[0]}`, 'error');
+      if (!isEditing) setRunReport({ queued: [], failed: results.errors, notTried: [] });
     } else {
       showToast(`${results.success} succeeded, ${results.failed} failed`, 'error');
       queryClient.invalidateQueries({ queryKey: ['queue'] });
+      // Fork: say which went in and which not, and leave only the printers
+      // that refused selected, so "Retry the rest" cannot queue the others
+      // a second time. One plate only: with several, a printer may have
+      // taken one plate and refused another.
+      if (!isEditing) {
+        setRunReport({ queued: succeeded, failed: results.errors, notTried: [] });
+        if (assignmentMode === 'printer' && platesToQueue.length === 1) {
+          printerPickedByUserRef.current = true;
+          setSelectedPrinters([...new Set(refusedPrinters)]);
+        }
+      }
     }
   };
 
@@ -2261,6 +2393,8 @@ export function PrintModal({
     // version for each of them (fork).
     if (isCrossModel && includedCandidates.length === 0) return false;
     if (isGroupPrinters && (groupJobFiles.length === 0 || printersWithoutVersion.length > 0)) return false;
+    // Printer tags no printer takes: only once the user chose to add it anyway.
+    if (tagsBlockPrint) return false;
 
     // For multi-plate files, need at least one plate selected. Separate jobs
     // take each file's plate from the candidate list, not from this selection.
@@ -2296,6 +2430,7 @@ export function PrintModal({
     isGroupPrinters,
     groupJobFiles.length,
     printersWithoutVersion.length,
+    tagsBlockPrint,
     billingEnabled,
     loadingCostCenters,
     selectedCostCenter,
@@ -2403,6 +2538,72 @@ export function PrintModal({
     && (isCrossModel || !!targetModel)
     && !!effectiveAvailableFilaments
     && effectiveAvailableFilaments.length > 0;
+
+  // Fork: with "always require the file's colours" on, a row matched to a tray
+  // of another colour makes a job on this printer wait for that colour (see
+  // `rowsWaitingForColor`). Said before queueing, with "Any <model>" offered,
+  // which goes to a printer that has the colour. Not for a job that skips the
+  // filament check (a pick of another material): that one starts as mapped.
+  const colorWaitRows = useMemo(() => {
+    if (!settings?.require_file_colors || assignmentMode !== 'printer' || selectedPrinters.length !== 1 || !effectivePrinterId) {
+      return [] as { key: string; label: string }[];
+    }
+    const loaded = buildLoadedFilaments(printerStatus);
+    if (loaded.length === 0) return [];
+    const inventory = inventoryByTrayIdPerPrinter.get(effectivePrinterId);
+    const describe = (row: { type: string; color: string }) => `${row.type} ${getColorName(row.color)} (${row.color})`;
+    if (showPerFileFilamentMapping) {
+      return separateJobFiles.flatMap((file) => {
+        const picks = manualMappingsByFile[perFileKey(file.id)] ?? {};
+        const rows = rowsWaitingForColor(
+          buildFilamentComparison(perFileReqs.get(file.id), loaded, picks, singlePrinterPreferLowest, inventory),
+          // Hand picks go as forced overrides of the tray's own filament.
+          new Set(Object.keys(picks).map(Number)),
+        );
+        return rows.map((row) => ({ key: `${file.id}:${row.slot_id}`, label: `${file.filename}: ${describe(row)}` }));
+      });
+    }
+    if (isSeparateJobs || isMultiPlateSelection || !mappingFilamentReqs) return [];
+    if (mappingSubstitutesMaterial(effectivePrinterId, selectedPlate, amsMapping)) return [];
+    // A ticked slot set to a tray by hand asks for that tray's filament.
+    const exempt = new Set(
+      Object.keys(manualMappings)
+        .map(Number)
+        .filter((slotId) => forceColorMatch[slotId]),
+    );
+    return rowsWaitingForColor(
+      buildFilamentComparison(mappingFilamentReqs, loaded, manualMappings, singlePrinterPreferLowest, inventory),
+      exempt,
+    ).map((row) => ({ key: String(row.slot_id), label: describe(row) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the helpers read the same state listed here
+  }, [
+    settings?.require_file_colors,
+    assignmentMode,
+    selectedPrinters.length,
+    effectivePrinterId,
+    printerStatus,
+    inventoryByTrayIdPerPrinter,
+    showPerFileFilamentMapping,
+    separateJobFiles,
+    manualMappingsByFile,
+    perFileReqs,
+    singlePrinterPreferLowest,
+    isSeparateJobs,
+    isMultiPlateSelection,
+    mappingFilamentReqs,
+    manualMappings,
+    forceColorMatch,
+    amsMapping,
+    selectedPlate,
+  ]);
+  const colorWaitModel = printers?.find((p) => p.id === effectivePrinterId)?.model ?? null;
+  const switchToAnyModel = () => {
+    if (!colorWaitModel) return;
+    printerPickedByUserRef.current = true;
+    setAssignmentMode('model');
+    setTargetModel(colorWaitModel);
+    setSelectedPrinters([]);
+  };
 
   // Dual-nozzle gate for the Nozzle Offset Calibration toggle (#1682).
   // Mirrors backend `DUAL_NOZZLE_MODELS` so model-based assignment can show
@@ -2564,6 +2765,7 @@ export function PrintModal({
                 onToggleExcluded={isCrossModel ? toggleExcluded : undefined}
                 reorderable={!isGroupPrinters}
                 assignedPrinters={isGroupPrinters ? assignedPrinters : undefined}
+                queuedPrinters={isGroupPrinters ? queuedPrinters : undefined}
               />
             )}
 
@@ -2594,7 +2796,11 @@ export function PrintModal({
                 // A group's chosen printers: only those some version fits.
                 printers={isGroupPrinters ? groupPrinterChoices : printers || []}
                 selectedPrinterIds={selectedPrinters}
-                onMultiSelect={setSelectedPrinters}
+                onMultiSelect={(ids) => {
+                  printerPickedByUserRef.current = true;
+                  setTagModeSwitched(false);
+                  setSelectedPrinters(ids);
+                }}
                 isLoading={loadingPrinters}
                 allowMultiple={true}
                 showInactive={mode === 'edit-queue-item'}
@@ -2612,13 +2818,29 @@ export function PrintModal({
                 onUpdatePrinterConfig={multiPrinterMapping.updatePrinterConfig}
                 assignmentMode={assignmentMode}
                 // "Any printer of a model" is the other mode of a group.
-                onAssignmentModeChange={isGroupPrinters ? undefined : setAssignmentMode}
+                onAssignmentModeChange={
+                  isGroupPrinters
+                    ? undefined
+                    : (next) => {
+                        printerPickedByUserRef.current = true;
+                        setTagModeSwitched(false);
+                        setAssignmentMode(next);
+                      }
+                }
                 targetModel={targetModel}
                 onTargetModelChange={isGroupPrinters ? undefined : setTargetModel}
                 targetLocation={targetLocation}
                 onTargetLocationChange={setTargetLocation}
                 slicedForModel={selectorModel}
               />
+            )}
+
+            {/* Fork: the file's printer tags turned the default printer into
+                "Any <model>"; said once, until the user picks again. */}
+            {tagModeSwitched && assignmentMode === 'model' && (
+              <p className="text-xs text-bambu-gray -mt-2" data-testid="tag-mode-switched">
+                {t('printerTags.switchedToModel', { model: targetModel ?? slicedForModel ?? '' })}
+              </p>
             )}
 
             {/* Fork: which of the model's printers the job may run on. */}
@@ -2634,6 +2856,8 @@ export function PrintModal({
                 names={printerTagsData.names}
                 model={tagTargetModel}
                 somePrinterFits={somePrinterFitsTags}
+                acknowledged={tagsAcknowledged}
+                onAcknowledge={() => setTagsAcknowledgedFor(tagsKey)}
               />
             )}
 
@@ -2858,10 +3082,26 @@ export function PrintModal({
                 order, each mapping that file's own slots. Collapsed, with the
                 file's match status in the header. No force-colour box, rack
                 picker or slicer mapping: none of those is sent per file. */}
-            {showPerFileFilamentMapping && perFileReqs.size > 0 && (
+            {showPerFileFilamentMapping && (perFileReqs.size > 0 || perFileUnreadable.length > 0) && (
               <div className="mb-4">
                 <p className="text-xs text-bambu-gray mb-2">{t('printModal.multiFile.perFileMappingHint')}</p>
                 {separateJobFiles.map((file) => {
+                  // A 3MF that can't be read gets a line, not silence (fork):
+                  // its job goes without a mapping and the queue picks trays at start.
+                  if (perFileUnreadable.includes(file)) {
+                    return (
+                      <p
+                        key={`unreadable-${file.id}`}
+                        className="mb-4 flex items-start gap-2 text-sm text-bambu-gray min-w-0"
+                        data-testid="per-file-unreadable"
+                      >
+                        <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-orange-500" />
+                        <span className="min-w-0 break-words">
+                          {t('printModal.multiFile.perFileUnreadable', { filename: file.filename })}
+                        </span>
+                      </p>
+                    );
+                  }
                   const fileReqs = perFileReqs.get(file.id);
                   if (!fileReqs?.filaments?.length) return null;
                   const key = perFileKey(file.id);
@@ -2882,6 +3122,34 @@ export function PrintModal({
                     />
                   );
                 })}
+              </div>
+            )}
+
+            {/* Fork: rows a job on this printer would wait for (require_file_colors). */}
+            {colorWaitRows.length > 0 && (
+              <div
+                role="alert"
+                data-testid="color-wait-warning"
+                className="p-3 bg-red-50 dark:bg-red-500/10 border border-red-300 dark:border-red-500/30 rounded-lg text-sm space-y-2"
+              >
+                <div className="flex items-start gap-2 text-red-700 dark:text-red-400">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <div className="min-w-0">
+                    <p>
+                      {t('printModal.colorWait.intro', {
+                        printer: printers?.find((p) => p.id === effectivePrinterId)?.name ?? '',
+                      })}
+                    </p>
+                    <ul className="list-disc pl-5 break-words">
+                      {colorWaitRows.map((row) => <li key={row.key}>{row.label}</li>)}
+                    </ul>
+                  </div>
+                </div>
+                {colorWaitModel && !isGroupPrinters && mode === 'create' && (
+                  <Button type="button" size="sm" variant="secondary" onClick={switchToAnyModel}>
+                    {t('printModal.colorWait.anyModel', { model: colorWaitModel })}
+                  </Button>
+                )}
               </div>
             )}
 
@@ -2932,9 +3200,22 @@ export function PrintModal({
                 />
                 {quantity > 1 && (
                   <span className="text-xs text-bambu-gray">
-                    {/* Separate jobs post the quantity once per listed file. */}
+                    {/* Separate jobs post the quantity once per file and printer
+                        pair they queue (a group: each printer its version). */}
                     {t('queue.quantityHint', 'Creates {{count}} queue items', {
-                      count: isGroupPrinters ? quantity : isSeparateJobs ? quantity * candidates.length : quantity,
+                      count: isSeparateJobs
+                        ? quantity *
+                          Math.max(
+                            1,
+                            wantedPairs(
+                              separateJobFiles,
+                              // No printer picked yet: count as for one.
+                              assignmentMode === 'printer' && selectedPrinters.length > 0 ? selectedPrinters : [null],
+                              separateJobIncludes,
+                              queuedPairs,
+                            ).length,
+                          )
+                        : quantity * Math.max(1, assignmentMode === 'printer' ? selectedPrinters.length : 1),
                     })}
                   </span>
                 )}
@@ -3001,10 +3282,80 @@ export function PrintModal({
               </p>
             )}
 
-            {/* Actions */}
-            <div className="flex gap-3 pt-2">
+            {/* What the last submit got into the queue and what not (fork). */}
+            {runReport && (
+              <div
+                role="alert"
+                data-testid="run-report"
+                className="p-3 bg-red-50 dark:bg-red-500/10 border border-red-300 dark:border-red-500/30 rounded-lg text-sm space-y-2"
+              >
+                {runReport.queued.length > 0 && (
+                  <div>
+                    <p className="font-medium text-bambu-green">
+                      {t('printModal.runReport.queued', { count: runReport.queued.length })}
+                    </p>
+                    <ul className="list-disc pl-5 text-bambu-gray break-words">
+                      {runReport.queued.map((line) => <li key={line}>{line}</li>)}
+                    </ul>
+                  </div>
+                )}
+                <div>
+                  <p className="font-medium text-red-700 dark:text-red-400">
+                    {t('printModal.runReport.failed', { count: runReport.failed.length })}
+                  </p>
+                  <ul className="list-disc pl-5 text-red-700 dark:text-red-300 break-words">
+                    {runReport.failed.map((line) => <li key={line}>{line}</li>)}
+                  </ul>
+                </div>
+                {runReport.notTried.length > 0 && (
+                  <div>
+                    <p className="font-medium text-bambu-gray">
+                      {t('printModal.runReport.notTried', { count: runReport.notTried.length })}
+                    </p>
+                    <ul className="list-disc pl-5 text-bambu-gray break-words">
+                      {runReport.notTried.map((line) => <li key={line}>{line}</li>)}
+                    </ul>
+                  </div>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={!canSubmit}
+                  onClick={() => void handleSubmit()}
+                >
+                  {t('printModal.runReport.retry')}
+                </Button>
+              </div>
+            )}
+
+            {/* A version group's printers that already have their version
+                (fork): kept from an earlier submit, also across a reopen. */}
+            {isGroupPrinters && queuedPairs.size > 0 && !isPending && (
+              <p className="text-xs text-bambu-gray" data-testid="group-run-resumed">
+                {t('printModal.multiFile.groupAlreadyQueued', { count: queuedPairs.size })}{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearGroupRun(groupFiles);
+                    setQueuedPairs(new Set());
+                    setAsapPositionsTaken(0);
+                    setRunItemIds([]);
+                    setRunBatchIds([]);
+                    setPartlyQueued(false);
+                    setRunReport(null);
+                  }}
+                  className="text-bambu-green hover:underline any-pointer-coarse:min-h-[44px]"
+                >
+                  {t('printModal.multiFile.groupStartOver')}
+                </button>
+              </p>
+            )}
+
+            {/* Actions: stay on screen however long the dialog is (fork). */}
+            <div className="sticky bottom-0 z-10 -mx-4 -mb-4 flex gap-3 border-t border-bambu-dark-tertiary bg-bambu-dark-secondary px-4 py-3">
               <Button type="button" variant="secondary" onClick={onClose} className="flex-1" disabled={isSubmitting}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button
                 type="submit"

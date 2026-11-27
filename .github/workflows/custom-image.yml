@@ -97,7 +97,9 @@ jobs:
             backend/tests/unit/test_sqlite_autoincrement.py \
             backend/tests/unit/services/test_filament_deficit.py \
             backend/tests/unit/test_scheduler_filament_deficit.py \
-            backend/tests/unit/test_state_writers.py
+            backend/tests/unit/test_state_writers.py \
+            backend/tests/integration/test_product_plan_report_fork.py \
+            backend/tests/unit/test_server_messages_table.py
 
       - uses: actions/setup-node@v6
         with:
@@ -156,7 +158,32 @@ jobs:
             src/__tests__/pages/SettingsPageFileColors.test.tsx \
             src/__tests__/components/HexColorText.test.tsx \
             src/__tests__/pages/QueuePage.test.tsx \
-            src/__tests__/pages/SettingsPage.test.tsx
+            src/__tests__/pages/SettingsPage.test.tsx \
+            src/__tests__/components/ForkDialogBehavior.test.tsx \
+            src/__tests__/hooks/useModalBehavior.test.tsx \
+            src/__tests__/components/Button.test.tsx \
+            src/__tests__/components/OrderJobCancelModal.test.tsx \
+            src/__tests__/components/OrderPlatesModal.test.tsx \
+            src/__tests__/components/PrinterTagPicker.test.tsx \
+            src/__tests__/components/QueueStartButton.test.tsx \
+            src/__tests__/components/PrinterQueueWidget.test.tsx \
+            src/__tests__/components/QueueItemPlateThumbnail.test.tsx \
+            src/__tests__/components/StaffedMarksCalendar.test.tsx \
+            src/__tests__/utils/staffedMarks.test.ts \
+            src/__tests__/utils/timelineLayout.test.ts \
+            src/__tests__/utils/queueHold.test.ts \
+            src/__tests__/utils/queueTimelinePlan.test.ts \
+            src/__tests__/components/SlicerUploadSettings.test.tsx \
+            src/__tests__/components/SlotSpoolCheckSettings.test.tsx \
+            src/__tests__/components/FilamentHoverCard.test.tsx \
+            src/__tests__/pages/PrintersPageKProfileDisplay.test.tsx \
+            src/__tests__/pages/PrintersPageClearPlateNextJob.test.tsx \
+            src/__tests__/pages/FileManagerTouchAndHistory.test.tsx \
+            src/__tests__/pages/fileManager/useBulkVariantPrint.test.tsx \
+            src/__tests__/hooks/useWebSocket.test.ts \
+            src/__tests__/utils/serverMessages.test.ts \
+            src/__tests__/i18n/plural-forms.test.ts \
+            src/__tests__/i18n/parity-script.test.ts
 
   typecheck:
     name: Type check the backend

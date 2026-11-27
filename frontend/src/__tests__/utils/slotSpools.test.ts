@@ -5,9 +5,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   canLoadSlotRoll,
+  parseGrams,
+  rollGramsValid,
   slotHasRoll,
   slotSpoolAmountRequest,
   slotSpoolAmountValid,
+  slotSpoolOutlineClass,
+  slotSpoolRingClass,
   slotSpoolState,
   withFilamentMargin,
 } from '../../utils/slotSpools';
@@ -67,6 +71,22 @@ describe('slotSpoolState', () => {
   it('lights nothing when disabled (Spoolman mode, no permission)', () => {
     expect(slotSpoolState({ ...base, enabled: false, tray: { exists: true } })).toBeNull();
   });
+
+  it('lights nothing while the slot rows are not known', () => {
+    // Loading, failed or not readable: "no spool" would offer to replace a counted roll.
+    expect(slotSpoolState({ ...base, hasAssignment: null, tray: { exists: true, tray_type: 'PLA' } })).toBeNull();
+    expect(slotSpoolState({ ...base, hasAssignment: null, hasPrompt: true, tray: { exists: true } })).toBeNull();
+  });
+});
+
+describe('slot rings', () => {
+  it('frames "same roll?" with an outline of its own, never the amber ring of the expected slot', () => {
+    expect(slotSpoolRingClass('check')).toBe('');
+    expect(slotSpoolOutlineClass('check')).toContain('outline-dashed');
+    expect(slotSpoolOutlineClass('check')).not.toContain('amber');
+    expect(slotSpoolRingClass('new')).toContain('ring-sky-400');
+    expect(slotSpoolOutlineClass('new')).toBe('');
+  });
 });
 
 describe('canLoadSlotRoll', () => {
@@ -84,11 +104,26 @@ describe('amounts', () => {
     expect(slotSpoolAmountRequest({ kind: 'full' })).toEqual({ remaining_grams: 1000, restore_spool_id: null });
   });
 
-  it('another amount needs a number', () => {
+  it('another amount needs a believable number of grams', () => {
     expect(slotSpoolAmountValid({ kind: 'grams', grams: null })).toBe(false);
     expect(slotSpoolAmountValid({ kind: 'grams', grams: -1 })).toBe(false);
-    expect(slotSpoolAmountValid({ kind: 'grams', grams: 0 })).toBe(true);
+    // 0 g would be a used-up roll at once, lighting the slot "new" again.
+    expect(slotSpoolAmountValid({ kind: 'grams', grams: 0 })).toBe(false);
+    expect(slotSpoolAmountValid({ kind: 'grams', grams: 1 })).toBe(true);
+    expect(slotSpoolAmountValid({ kind: 'grams', grams: 5000 })).toBe(true);
+    // 6500 is a typo for 650.
+    expect(slotSpoolAmountValid({ kind: 'grams', grams: 6500 })).toBe(false);
     expect(slotSpoolAmountRequest({ kind: 'grams', grams: 420 })).toEqual({ remaining_grams: 420, restore_spool_id: null });
+  });
+
+  it('reads grams typed with a decimal comma', () => {
+    expect(parseGrams('650')).toBe(650);
+    expect(parseGrams('412,5')).toBe(412.5);
+    expect(parseGrams(' 412.5 ')).toBe(412.5);
+    expect(parseGrams('')).toBeNull();
+    expect(parseGrams('abc')).toBeNull();
+    expect(parseGrams('1,2,3')).toBeNull();
+    expect(rollGramsValid(parseGrams('0,5'))).toBe(false);
   });
 
   it('a restored roll needs a pick and keeps its own amount', () => {

@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useMemo, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useState, useMemo, useEffect, useLayoutEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import {
   DndContext,
   DragOverlay,
@@ -16,18 +17,24 @@ import {
   type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type Announcements,
 } from '@dnd-kit/core';
 import {
   AlertTriangle,
+  Bookmark,
+  BookmarkX,
   CalendarClock,
   Check,
   ChevronLeft,
   ChevronRight,
   Clock,
   Hand,
+  HelpCircle,
   Layers,
+  Loader2,
   Lock,
   Moon,
+  Move,
   PencilRuler,
   Pin,
   Printer as PrinterIcon,
@@ -55,11 +62,21 @@ import type {
 import { queueJobModels, queueJobName, queueJobPrintTime, queueJobThumbnailUrl } from '../utils/queueJobDisplay';
 import { Button } from './Button';
 import { QueueJobDetails, type QueuePinTarget } from './QueueJobDetails';
+import {
+  planIsStale,
+  rebasePlan,
+  reservationState,
+  zoomForTrackWidth,
+  ZOOM_HOURS,
+  type PlanLanes,
+  type QueueHoldKind,
+} from '../utils/queueTimelinePlan';
 import { StaffedHoursDialog } from './StaffedHoursDialog';
 import { useJobOrders } from '../hooks/useJobOrders';
 import { jobOrdersText, urgentFirst } from '../utils/baseOrders';
 import { fitBarHeight, LANE_BAR_HEIGHT_PX, LANE_PADDING_PX } from '../utils/timelineLayout';
 import { queueHold } from '../utils/queueHold';
+import { translateWaitingReason } from '../utils/serverMessages';
 import { withColorSquares } from '../utils/colorSquares';
 
 /** Gantt-style rolling timeline. One horizontal swimlane per printer. A
@@ -80,15 +97,25 @@ import { withColorSquares } from '../utils/colorSquares';
  *  printer, handed back to any of its model or released from its printer. */
 
 const HOUR_MS = 60 * 60 * 1000;
-// Zoom (fork): how many hours the window shows, from close up to three days.
-const ZOOM_HOURS = [4, 8, 12, 24, 48, 72];
-// Fork: 24 hours, 12 on a narrow screen (an iPad upright), where 24 leave a
-// print a few dozen pixels.
+// The printer column and the page around the track, for a guess before it is measured.
+const TRACK_CHROME_PX = 260;
 function defaultZoom(): number {
-  const narrow = typeof window !== 'undefined' && window.innerWidth < 1024;
-  return ZOOM_HOURS.indexOf(narrow ? 12 : 24);
+  const width = typeof window !== 'undefined' ? window.innerWidth : 1440;
+  return zoomForTrackWidth(width - TRACK_CHROME_PX);
 }
 const ZOOM_STORAGE_KEY = 'queueTimelineZoomHours';
+// Fork: the legend and the hints, shown or folded away; remembered.
+const HELP_STORAGE_KEY = 'queueTimelineHelpOpen';
+function storedHelpOpen(): boolean {
+  try {
+    const stored = localStorage.getItem(HELP_STORAGE_KEY);
+    if (stored === '1' || stored === '0') return stored === '1';
+  } catch {
+    // Private mode: the default below.
+  }
+  // Folded on a short or narrow window, where the lanes need the room.
+  return typeof window !== 'undefined' && window.innerWidth >= 1024 && window.innerHeight >= 900;
+}
 // Hours between axis ticks at each zoom: about six to twelve labels.
 function tickStepHours(rangeHours: number): number {
   if (rangeHours <= 4) return 0.5;
@@ -97,18 +124,21 @@ function tickStepHours(rangeHours: number): number {
   if (rangeHours <= 48) return 4;
   return 6;
 }
-function storedZoom(): number {
+/** The zoom someone chose before, or null. */
+function storedZoom(): number | null {
   try {
     const index = ZOOM_HOURS.indexOf(Number(localStorage.getItem(ZOOM_STORAGE_KEY)));
-    return index === -1 ? defaultZoom() : index;
+    return index === -1 ? null : index;
   } catch {
-    return defaultZoom();
+    return null;
   }
 }
 // Trackpad pinch arrives as ctrl+wheel in small steps: this much makes one zoom step.
 const WHEEL_ZOOM_STEP = 40;
 // A two-finger pinch zooms a step each time the fingers spread or close this much.
 const PINCH_ZOOM_RATIO = 1.3;
+// A drag that ends this close to where it began was a long tap: it opens the job.
+const TAP_SLOP_PX = 10;
 // Minimum bar width — short prints (a few minutes) would otherwise render as
 // 1-2px slivers and be unclickable. 32px keeps them at thumb size.
 const MIN_BAR_PX = 32;
@@ -162,16 +192,19 @@ interface ScheduleEvent {
   projected?: boolean;
   /** For a job with alternatives: the one its printer takes. */
   variant?: QueueForecastVariant | null;
-  /** An "Any" job held for this printer: by the plan applied, or the one laid out. */
-  reserved?: boolean;
+  /** An "Any" job held for a printer (fork): firm, the planner's soft choice, or a soft choice that gave way. */
+  hold?: QueueHoldKind | null;
   /** Moved in the plan being laid out, not applied yet. */
   moved?: boolean;
 }
 
-/** The plan being laid out: each printer's queued jobs in order, and the jobs moved. */
+/** The plan being laid out: each printer's queued jobs in order, the jobs
+ *  moved, and the forecast's lanes it was laid out on (to tell when the queue
+ *  changed under it, and which lanes the user changed). */
 interface Draft {
-  lanes: Record<number, number[]>;
+  lanes: PlanLanes;
   moved: number[];
+  base: PlanLanes;
 }
 
 /** Where a job is moved to: a printer, or back to any printer of a model. */
@@ -205,15 +238,19 @@ interface QueueTimelineViewProps {
   onStopItem?: (item: PrintQueueItem) => void;
   /** Fork: press Start on a job waiting for it (manual start). */
   onStartItem?: (item: PrintQueueItem) => void;
+  /** Fork: a job to open the details of (a link from the Products page); done is called once handled. */
+  focusItemId?: number | null;
+  onFocusItemDone?: () => void;
   t: (key: string, options?: Record<string, unknown>) => string;
 }
 
-function formatHour(date: Date): string {
-  return date.toLocaleTimeString(undefined, { hour: 'numeric' });
+// Fork: times in the app's language, not the device's ("15", not "3 PM", in a Polish UI).
+function formatHour(date: Date, language: string): string {
+  return date.toLocaleTimeString(language, { hour: 'numeric' });
 }
 
-function formatTooltipTime(date: Date): string {
-  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+function formatTooltipTime(date: Date, language: string): string {
+  return date.toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' });
 }
 
 /** A printer model for comparing: "P1S", "p1s" and "P1-S" are one. */
@@ -272,6 +309,7 @@ function TimelineBar({
     data: { item: ev.item },
     disabled: !draggable,
   });
+  const { i18n } = useTranslation();
   const barHeight = useContext(BarHeightContext);
   const displayName = queueJobName(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
@@ -282,24 +320,28 @@ function TimelineBar({
   const { data: jobOrders } = useJobOrders();
   const orders = jobOrders?.items[String(ev.item.id)];
   const orderText = jobOrdersText(orders, t('products.orderLabel.forStock'));
+  // A desktop's hover summary; all of it is also in the job's details, which a tap opens.
   const tooltipParts = [
     displayName,
     urgentFirst(orders).length
       ? t('products.orderLabel.forTooltip', {
-          list: urgentFirst(orders).map((o) => `${o.label} (${o.title})`).join(', '),
+          // A hand order's title is empty when it would repeat the label: no empty brackets then.
+          list: urgentFirst(orders)
+            .map((o) => (o.title ? `${o.label} (${o.title})` : o.label))
+            .join(', '),
         })
       : null,
-    `${formatTooltipTime(ev.estimatedStart)} → ${formatTooltipTime(ev.estimatedEnd)}`,
+    `${formatTooltipTime(ev.estimatedStart, i18n.language)} → ${formatTooltipTime(ev.estimatedEnd, i18n.language)}`,
     printTime ? formatDuration(printTime) : null,
     isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null,
     ev.projected && models.length > 0 ? `${t('queue.filter.any')} ${models.join(' / ')}` : null,
-    ev.item.batch_name ? `batch: ${ev.item.batch_name}` : null,
+    ev.item.batch_name ? `${t('queue.timeline.details.batch')}: ${ev.item.batch_name}` : null,
     // Placed from when someone is expected to be there to press Start; held
     // by a problem (fork), it says which and that it will not start by itself.
     hold?.problem
       ? `${hold.text} — ${t('queue.hold.wontStart')}`
       : !isPrinting && ev.item.manual_start
-        ? [t('queue.timeline.manualStartHelp'), ev.item.waiting_reason].filter(Boolean).join(': ')
+        ? [t('queue.timeline.manualStartHelp'), translateWaitingReason(ev.item.waiting_reason, t)].filter(Boolean).join(': ')
         : null,
   ].filter(Boolean).join(' · ');
   return (
@@ -310,12 +352,14 @@ function TimelineBar({
       onClick={onClick}
       title={tooltipParts}
       data-bar-item={ev.item.id}
-      data-kind={isPrinting ? 'printing' : ev.reserved ? 'reserved' : ev.projected ? 'projected' : 'pinned'}
+      data-kind={isPrinting ? 'printing' : ev.hold === 'firm' ? 'reserved' : ev.hold === 'soft' ? 'planner' : ev.projected ? 'projected' : 'pinned'}
+      data-reservation={ev.hold ?? undefined}
       data-moved={ev.moved ? 'true' : undefined}
       data-manual={!isPrinting && ev.item.manual_start ? 'true' : undefined}
       data-hold={hold?.problem ? 'problem' : undefined}
       className={`@container absolute rounded-md transition-[filter,opacity] hover:brightness-110 hover:z-10 overflow-hidden flex items-center gap-1.5 px-1.5 text-left ${barClasses(ev)} ${
-        ev.moved ? 'ring-2 ring-amber-300/80 ring-offset-1 ring-offset-bambu-dark-secondary' : ''
+        // Moved in the open plan: a white dashed outline, unlike any hold's border.
+        ev.moved ? 'outline-2 outline-dashed outline-white/80 outline-offset-1' : ''
       } ${draggable ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging || dimmed ? 'opacity-40' : ''}`}
       style={{
         left: `${leftPct}%`,
@@ -336,8 +380,10 @@ function barClasses(ev: ScheduleEvent): string {
   if (ev.item.status === 'pending' && ev.item.manual_start && (ev.item.filament_short || ev.item.waiting_reason)) {
     return 'bg-red-500/15 border-2 border-red-400/80';
   }
-  // Held for its printer: solid like a pinned job, amber like the plan.
-  if (ev.reserved) return 'bg-amber-500/15 border border-amber-400/60';
+  // Waits for its printer: solid amber. The planner's choice that may give
+  // way: dashed amber. One that gave way is drawn as the forecast placed it.
+  if (ev.hold === 'firm') return 'bg-amber-500/15 border border-amber-400/60';
+  if (ev.hold === 'soft') return 'bg-amber-500/10 border border-dashed border-amber-400/70';
   const batched = ev.item.batch_id != null;
   if (ev.projected) {
     return batched
@@ -345,6 +391,26 @@ function barClasses(ev: ScheduleEvent): string {
       : 'bg-bambu-green/10 border border-dashed border-bambu-green/70';
   }
   return batched ? 'bg-cyan-500/20 border border-cyan-400/50' : 'bg-bambu-green/20 border border-bambu-green/50';
+}
+
+/** The icons before a bar's name (fork): why it waits (a problem, a manual
+ *  start) and how it is tied to its printer, together, so neither is told by
+ *  colour alone. */
+function BarIcons({ ev, problem, manual }: { ev: ScheduleEvent; problem: boolean; manual: boolean }) {
+  const icon = 'w-3 h-3 shrink-0 mt-0.5';
+  const icons: ReactNode[] = [];
+  if (problem) icons.push(<AlertTriangle key="problem" className={`${icon} text-red-300`} aria-hidden data-icon="problem" />);
+  else if (manual) icons.push(<Hand key="manual" className={`${icon} text-bambu-gray`} aria-hidden data-icon="manual" />);
+  if (ev.hold === 'firm') icons.push(<Lock key="hold" className={`${icon} text-amber-300`} aria-hidden data-icon="firm" />);
+  else if (ev.hold === 'soft') icons.push(<Bookmark key="hold" className={`${icon} text-amber-300`} aria-hidden data-icon="soft" />);
+  else if (ev.hold === 'gaveWay') icons.push(<BookmarkX key="hold" className={`${icon} text-bambu-gray`} aria-hidden data-icon="gaveWay" />);
+  else if (!problem && !manual) {
+    icons.push(ev.projected
+      ? <Shuffle key="where" className={`${icon} text-bambu-gray`} aria-hidden data-icon="projected" />
+      : <Pin key="where" className={`${icon} text-bambu-gray`} aria-hidden data-icon="pinned" />);
+  }
+  if (ev.moved) icons.push(<Move key="moved" className={`${icon} text-white`} aria-hidden data-icon="moved" />);
+  return <>{icons}</>;
 }
 
 /**
@@ -364,6 +430,7 @@ function BarContent({
   orderText?: string | null;
   height?: number;
 }) {
+  const { i18n } = useTranslation();
   const thumbnailUrl = queueJobThumbnailUrl(ev.item, ev.variant);
   const isPrinting = ev.type === 'printing';
   const printTime = queueJobPrintTime(ev.item, ev.variant);
@@ -372,13 +439,15 @@ function BarContent({
   const manualText = hold?.problem ? hold.text : manual ? t('queue.timeline.manualStart') : null;
   // Lines by what fits (a name line ~15px, the small ones ~14px): from 64px
   // the orders and the hours get lines of their own, from 76px the name two
-  // lines, from 92px one more line of details, from 108px a third name line.
+  // lines, from 92px one more line of details, from 108px a third name line
+  // and the hours and the print time each a line, from 136px a larger text.
   const tall = height >= 64;
   const roomy = height >= 92;
+  const spacious = height >= 108;
   // A tall screen's bars: a bigger picture and details a size up.
   const large = height >= 136;
   const progress = isPrinting && ev.progress != null ? `${Math.round(ev.progress)}%` : null;
-  const when = `${formatTooltipTime(ev.estimatedStart)}–${formatTooltipTime(ev.estimatedEnd)}`;
+  const when = `${formatTooltipTime(ev.estimatedStart, i18n.language)}–${formatTooltipTime(ev.estimatedEnd, i18n.language)}`;
   const second = [
     hold?.problem ? hold.text : null,
     orderText,
@@ -387,7 +456,8 @@ function BarContent({
     printTime ? formatDuration(printTime) : null,
     progress,
   ].filter(Boolean).join(' · ');
-  const timing = [when, printTime ? formatDuration(printTime) : null, progress].filter(Boolean).join(' · ');
+  const length = [printTime ? formatDuration(printTime) : null, progress].filter(Boolean).join(' · ');
+  const timing = [when, length || null].filter(Boolean).join(' · ');
   const grams = ev.item.filament_used_grams;
   const filament = [ev.item.filament_type, grams ? `${Math.round(grams)} g` : null].filter(Boolean).join(' ');
   const more = [filament || null, hold?.problem ? null : manualText, anyModelLabel(ev, t), ev.item.batch_name]
@@ -400,15 +470,17 @@ function BarContent({
   const thumbMax = tall ? Math.min(height - 12, large ? THUMB_LARGE_MAX_PX : THUMB_MAX_PX) : 28;
   // A narrow bar has no room for the details line: the name takes it.
   const nameLines =
-    height >= 108
-      ? 'line-clamp-3 break-words'
-      : height >= 92
-        ? 'line-clamp-2 @max-[9rem]:line-clamp-3 break-words'
-        : height >= 76 || (!tall && height >= 48)
-          ? 'line-clamp-2 break-words'
-          : 'truncate';
-  const small = large ? 'text-xs' : 'text-[10px]';
-  const medium = large ? 'text-[13px]' : 'text-[11px]';
+    large
+      ? 'line-clamp-4 break-words'
+      : spacious
+        ? 'line-clamp-3 break-words'
+        : height >= 92
+          ? 'line-clamp-2 @max-[9rem]:line-clamp-3 break-words'
+          : height >= 76 || (!tall && height >= 48)
+            ? 'line-clamp-2 break-words'
+            : 'truncate';
+  const small = large ? 'text-[13px]' : spacious ? 'text-[11px]' : 'text-[10px]';
+  const medium = large ? 'text-sm' : 'text-[11px]';
   return (
     <>
       {thumbnailUrl && (
@@ -425,18 +497,10 @@ function BarContent({
       <div className="min-w-0 flex-1">
         <div
           className={`text-white font-medium leading-tight flex gap-1 ${
-            large ? 'text-sm items-start' : tall ? 'text-xs items-start @min-[15rem]:text-sm' : `text-xs ${height >= 48 ? 'items-start' : 'items-center'}`
+            large ? 'text-[15px] items-start' : tall ? 'text-xs items-start @min-[15rem]:text-sm' : `text-xs ${height >= 48 ? 'items-start' : 'items-center'}`
           }`}
         >
-          {!isPrinting && (hold?.problem
-            ? <AlertTriangle className="w-3 h-3 shrink-0 text-red-300 mt-0.5" aria-hidden />
-            : manual
-            ? <Hand className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />
-            : ev.reserved
-            ? <Lock className="w-3 h-3 shrink-0 text-amber-300 mt-0.5" aria-hidden />
-            : ev.projected
-              ? <Shuffle className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />
-              : <Pin className="w-3 h-3 shrink-0 text-bambu-gray mt-0.5" aria-hidden />)}
+          {!isPrinting && <BarIcons ev={ev} problem={!!hold?.problem} manual={manual} />}
           <span className={nameLines}>{barName(queueJobName(ev.item, ev.variant))}</span>
         </div>
         {tall ? (
@@ -451,9 +515,23 @@ function BarContent({
                 {orderText}
               </div>
             )}
-            <div className={`${small} text-bambu-gray truncate leading-tight mt-0.5`} data-bar-line="timing">
-              {timing}
-            </div>
+            {spacious ? (
+              // Room enough: the hours and the print time each a line, so neither is cut.
+              <>
+                <div className={`${small} text-bambu-gray truncate leading-tight mt-0.5`} data-bar-line="timing">
+                  {when}
+                </div>
+                {length && (
+                  <div className={`${small} text-bambu-gray truncate leading-tight mt-0.5`} data-bar-line="length">
+                    {length}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className={`${small} text-bambu-gray truncate leading-tight mt-0.5`} data-bar-line="timing">
+                {timing}
+              </div>
+            )}
             {roomy && more && (
               <div
                 className={`hidden @min-[9rem]:flex items-center gap-1 ${small} text-bambu-gray leading-tight mt-0.5 min-w-0`}
@@ -466,7 +544,7 @@ function BarContent({
                     aria-hidden
                   />
                 )}
-                <span className="truncate">{more}</span>
+                <span className={spacious ? 'line-clamp-2 break-words' : 'truncate'}>{more}</span>
               </div>
             )}
           </>
@@ -598,8 +676,12 @@ export function QueueTimelineView({
   onCancelItem,
   onStopItem,
   onStartItem,
+  focusItemId = null,
+  onFocusItemDone,
   t,
 }: QueueTimelineViewProps) {
+  const { i18n } = useTranslation();
+  const language = i18n.language;
   // Tick "now" every minute so the NOW line and ETA labels stay live.
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -610,17 +692,15 @@ export function QueueTimelineView({
   // User can shift the window forward/back by half its width. Default =
   // current time, so the timeline reads "next 24h from now."
   const [windowOffsetMs, setWindowOffsetMs] = useState(0);
-  const [zoomIndex, setZoomIndex] = useState(storedZoom);
+  const [zoomIndex, setZoomIndex] = useState(() => storedZoom() ?? defaultZoom());
   const rangeHours = ZOOM_HOURS[zoomIndex];
   const rangeMs = rangeHours * HOUR_MS;
   const stepHours = tickStepHours(rangeHours);
-  // Remembered once someone zooms (fork): until then the default follows the screen.
-  const zoomChosen = useRef(false);
+  // Remembered once someone zooms (fork): until then the default follows the
+  // track's measured width.
+  const zoomChosen = useRef(storedZoom() != null);
   useEffect(() => {
-    if (!zoomChosen.current) {
-      zoomChosen.current = true;
-      return;
-    }
+    if (!zoomChosen.current) return;
     try {
       localStorage.setItem(ZOOM_STORAGE_KEY, String(rangeHours));
     } catch {
@@ -644,6 +724,7 @@ export function QueueTimelineView({
   const zoomBy = (direction: -1 | 1, clientX?: number) => {
     const next = Math.min(ZOOM_HOURS.length - 1, Math.max(0, zoomIndex + direction));
     if (next === zoomIndex) return;
+    zoomChosen.current = true;
     const rect = axisRef.current?.getBoundingClientRect();
     if (clientX != null && rect && rect.width > 0) {
       const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
@@ -658,6 +739,14 @@ export function QueueTimelineView({
   // The listeners below are attached once; they call the latest zoomBy.
   const zoomByRef = useRef(zoomBy);
   zoomByRef.current = zoomBy;
+  // A sideways swipe moves the window by whole axis steps (fork).
+  const pan = {
+    by: (steps: number) => setWindowOffsetMs((v) => v + steps * stepHours * HOUR_MS),
+    // One axis step in pixels of the track.
+    stepPx: () => (axisRef.current?.clientWidth ?? 0) * (stepHours / rangeHours),
+  };
+  const panRef = useRef(pan);
+  panRef.current = pan;
 
   // Pinch to zoom: ctrl/cmd + wheel (a trackpad pinch) and two fingers on a
   // touch screen. Native listeners, since React's are passive and could not
@@ -668,17 +757,58 @@ export function QueueTimelineView({
     const el = chartRef.current;
     if (!el) return;
     let wheel = 0;
+    let sideways = 0;
     let pinch: number | null = null;
+    // Safari's trackpad pinch (gesture events, with a scale): the step it last zoomed at.
+    let gesture: number | null = null;
     const spread = (touches: TouchList) =>
       Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
+      if (!e.ctrlKey && !e.metaKey) {
+        // A sideways two-finger swipe (fork): the track scrolls while it can,
+        // then the window moves, and the browser never takes it for Back.
+        if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+        const canScroll = e.deltaX < 0 ? el.scrollLeft > 0 : el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+        if (canScroll) return;
+        e.preventDefault();
+        sideways += e.deltaX;
+        const stepPx = Math.max(panRef.current.stepPx(), 40);
+        const steps = Math.trunc(sideways / stepPx);
+        if (steps !== 0) {
+          panRef.current.by(steps);
+          sideways -= steps * stepPx;
+        }
+        return;
+      }
       e.preventDefault();
+      // Safari sends its pinch as gesture events too: those zoom.
+      if (gesture != null) return;
       wheel += e.deltaY;
       if (Math.abs(wheel) < WHEEL_ZOOM_STEP) return;
       // Spreading the fingers (or scrolling up) zooms in.
       zoomByRef.current(wheel < 0 ? -1 : 1, e.clientX);
       wheel = 0;
+    };
+    type GestureLike = Event & { scale?: number; clientX?: number };
+    const onGestureStart = (e: Event) => {
+      e.preventDefault();
+      gesture = (e as GestureLike).scale ?? 1;
+    };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const { scale = 1, clientX } = e as GestureLike;
+      if (gesture == null) gesture = 1;
+      if (scale / gesture >= PINCH_ZOOM_RATIO) {
+        zoomByRef.current(-1, clientX);
+        gesture = scale;
+      } else if (gesture / scale >= PINCH_ZOOM_RATIO) {
+        zoomByRef.current(1, clientX);
+        gesture = scale;
+      }
+    };
+    const onGestureEnd = (e: Event) => {
+      e.preventDefault();
+      gesture = null;
     };
     const onTouchStart = (e: TouchEvent) => {
       pinch = e.touches.length === 2 ? spread(e.touches) : null;
@@ -700,17 +830,36 @@ export function QueueTimelineView({
       if (e.touches.length < 2) pinch = null;
     };
     el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('gesturestart', onGestureStart, { passive: false });
+    el.addEventListener('gesturechange', onGestureChange, { passive: false });
+    el.addEventListener('gestureend', onGestureEnd, { passive: false });
     el.addEventListener('touchstart', onTouchStart, { passive: true });
     el.addEventListener('touchmove', onTouchMove, { passive: false });
     el.addEventListener('touchend', onTouchEnd);
     el.addEventListener('touchcancel', onTouchEnd);
     return () => {
       el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('gesturestart', onGestureStart);
+      el.removeEventListener('gesturechange', onGestureChange);
+      el.removeEventListener('gestureend', onGestureEnd);
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('touchcancel', onTouchEnd);
     };
+  }, [hasLanes]);
+
+  // Until someone zooms, the zoom follows the track's measured width (fork):
+  // at least MIN_HOUR_PX an hour, so an iPad across gets 12 hours, not 24.
+  useLayoutEffect(() => {
+    const fit = () => {
+      const width = axisRef.current?.clientWidth ?? 0;
+      if (zoomChosen.current || width <= 0) return;
+      setZoomIndex(zoomForTrackWidth(width));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
   }, [hasLanes]);
 
   // What the forecast depends on, so it is fetched again as soon as the queue
@@ -723,7 +872,7 @@ export function QueueTimelineView({
       .join('|'),
     [queueItems],
   );
-  const { data: forecast, isError: forecastFailed } = useQuery<QueueForecast>({
+  const { data: forecast, isError: forecastFailed, isPending: forecastLoading, dataUpdatedAt } = useQuery<QueueForecast>({
     queryKey: ['queue', 'forecast', sjfEnabled, queueSignature],
     queryFn: () => api.getQueueForecast(),
     refetchInterval: 30_000,
@@ -793,6 +942,24 @@ export function QueueTimelineView({
     }
     return lanes;
   }, [draft, forecastLanes, itemsById, offTimelineIds]);
+  // Fork: the queue changed under the open plan (a job the user did not move
+  // changed lane or order, or one arrived or left): applying it would rewrite
+  // the queue from old data, so it asks to be refreshed first.
+  const planStale = useMemo(
+    () => draft != null && settlingSince == null && planIsStale(draft.base, forecastLanes, draft.moved),
+    [draft, settlingSince, forecastLanes],
+  );
+
+  // How a hold of an "Any" job shows on the lane `printerId` (fork); null: no hold to show there.
+  const holdOn = (item: PrintQueueItem, printerId: number, reservedHere?: boolean): QueueHoldKind | null => {
+    if (item.printer_id != null) return null;
+    const reservation = forecast?.reservations?.[String(item.id)];
+    if (!reservation) return reservedHere ? 'firm' : null;
+    const { kind } = reservationState(reservation, printerId);
+    if (kind !== 'firm') return kind;
+    // A firm hold shows where it holds: on its printer, while it is kept to.
+    return reservedHere ?? (reservation.active && reservation.printer_id === printerId) ? 'firm' : null;
+  };
 
   // The alternative (#671) a printer prints of a job, for its name and time on that lane.
   const variantOn = (item: PrintQueueItem, printer: Printer): QueueForecastVariant | null => {
@@ -954,7 +1121,6 @@ export function QueueTimelineView({
           if (item.manual_start && someoneThereMs != null && someoneThereMs > t) t = someoneThereMs;
           const duration = (variant?.print_time_seconds ?? item.print_time_seconds ?? 3600) * 1000;
           const moved = draft.moved.includes(id);
-          const reservation = forecast?.reservations?.[String(id)];
           if (!map.has(printer.id)) map.set(printer.id, []);
           map.get(printer.id)!.push({
             item,
@@ -964,8 +1130,8 @@ export function QueueTimelineView({
             projected: item.printer_id == null,
             variant,
             moved,
-            reserved: item.printer_id == null
-              && (moved || (reservation?.active === true && reservation.printer_id === printer.id)),
+            // A moved "Any" job becomes a firm hold once applied.
+            hold: item.printer_id == null && moved ? 'firm' : holdOn(item, printer.id),
           });
           const end = t + duration;
           const next = explainWait(end);
@@ -994,7 +1160,7 @@ export function QueueTimelineView({
         type: 'queued',
         projected: placement.projected,
         variant: placement.variant ?? null,
-        reserved: placement.reserved ?? false,
+        hold: holdOn(item, placement.printer_id, placement.reserved),
       });
     }
     return { queuedByPrinter: map, plateWaitsByPrinter: waits };
@@ -1024,7 +1190,8 @@ export function QueueTimelineView({
   const markedAwayNow = staffedMarks.find((m) => m.kind === 'away' && m.start <= nowMs && nowMs < m.end) ?? null;
   const [staffedOpen, setStaffedOpen] = useState(false);
   const shortTime = (ms: number) =>
-    new Date(ms).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    new Date(ms).toLocaleString(language, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const clockTime = (ms: number) => formatTooltipTime(new Date(ms), language);
   // What a plate wait's tooltip says: until when, and why.
   const plateWaitText = (w: PlateWaitSpan): string => {
     const time = shortTime(w.end);
@@ -1098,14 +1265,14 @@ export function QueueTimelineView({
       const date = new Date(ms);
       // Half hours need the minutes; over a day, the first tick of a day names it.
       const label = stepHours < 1
-        ? formatTooltipTime(date)
+        ? formatTooltipTime(date, language)
         : rangeHours > 24 && date.getHours() < stepHours
-          ? `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${formatHour(date)}`
-          : formatHour(date);
+          ? `${date.toLocaleDateString(language, { weekday: 'short' })} ${formatHour(date, language)}`
+          : formatHour(date, language);
       ticks.push({ ms, pct: (h / rangeHours) * 100, label });
     }
     return ticks;
-  }, [rangeStartMs, rangeHours, stepHours]);
+  }, [rangeStartMs, rangeHours, stepHours, language]);
 
   const nowPct = ((nowMs - rangeStartMs) / rangeMs) * 100;
   const nowInView = nowPct >= 0 && nowPct <= 100;
@@ -1147,6 +1314,11 @@ export function QueueTimelineView({
     placeAfter: boolean;
   } | null>(null);
 
+  // Why an "Any" job may not wait for this printer, if it may not.
+  const laneRefusal = (item: PrintQueueItem, printerId: number): QueueForecastRefusal | null => {
+    const refusals = forecast?.reserve_refusals ?? forecast?.refusals;
+    return refusals?.[String(item.id)]?.[String(printerId)] ?? null;
+  };
   const laneDragState = (printerId: number) => {
     if (!dragItem) return null;
     if (dragItem.printer_id != null) {
@@ -1162,8 +1334,7 @@ export function QueueTimelineView({
           };
     }
     // An "Any" job put on a lane waits for that printer: the scheduler's rule.
-    const refusals = forecast?.reserve_refusals ?? forecast?.refusals;
-    const refusal = refusals?.[String(dragItem.id)]?.[String(printerId)];
+    const refusal = laneRefusal(dragItem, printerId);
     if (refusal) {
       return { allowed: false, reason: refusalText(refusal, t), title: refusal.detail ?? undefined };
     }
@@ -1228,11 +1399,19 @@ export function QueueTimelineView({
   // A drop puts the job into the gap, on its lane or another, in the plan.
   const handleDragEnd = (event: DragEndEvent) => {
     const item = dragItem;
-    const target = gapFor(event);
     setDragItem(null);
     setDropTarget(null);
-    if (!item || !target || !onApplyPlan) return;
-    const base: Draft = draft && planLanes ? { lanes: planLanes, moved: draft.moved } : { lanes: forecastLanes, moved: [] };
+    // A finger held a moment starts a drag, and dnd-kit then eats the click
+    // (fork): a drag that hardly moved was a tap, so it opens the job.
+    if (item && Math.hypot(event.delta.x, event.delta.y) < TAP_SLOP_PX) {
+      setDetails({ itemId: item.id });
+      return;
+    }
+    const target = gapFor(event);
+    if (!item || !target || !onApplyPlan || planStale) return;
+    const base: Draft = draft && planLanes
+      ? { lanes: planLanes, moved: draft.moved, base: draft.base }
+      : { lanes: forecastLanes, moved: [], base: forecastLanes };
     const lanes: Record<number, number[]> = {};
     for (const [printerId, ids] of Object.entries(base.lanes)) {
       lanes[Number(printerId)] = ids.filter((id) => id !== item.id);
@@ -1247,7 +1426,7 @@ export function QueueTimelineView({
     );
     if (unchanged) return;
     setHistory((past) => [...past, base]);
-    setDraft({ lanes, moved: base.moved.includes(item.id) ? base.moved : [...base.moved, item.id] });
+    setDraft({ lanes, moved: base.moved.includes(item.id) ? base.moved : [...base.moved, item.id], base: base.base });
   };
 
   const undoPlan = () => {
@@ -1259,15 +1438,32 @@ export function QueueTimelineView({
     setDraft(null);
     setHistory([]);
   };
+  // Fork: the user's moves laid again onto the forecast as it is now.
+  const refreshPlan = () => {
+    if (!draft) return;
+    const next = rebasePlan(draft, forecastLanes, (id, printerId) => {
+      const item = itemsById.get(id);
+      if (!item || item.status !== 'pending' || offTimelineIds.has(id)) return false;
+      if (item.printer_id != null) return item.printer_id === printerId;
+      return !laneRefusal(item, printerId);
+    });
+    setDraft(next);
+    setHistory([]);
+  };
   const applyPlan = async () => {
-    if (!draft || !planLanes || !onApplyPlan) return;
+    if (!draft || !planLanes || !onApplyPlan || planStale) return;
     const onLanes = new Set(Object.values(planLanes).flat());
     // The moved "Any" jobs wait for the printer they were put on.
     const reserve = draft.moved.filter((id) => onLanes.has(id) && itemsById.get(id)?.printer_id == null);
+    // Only the lanes the user changed: the server keeps the places of the
+    // jobs it is not sent, so a lane laid out on old data is not rewritten.
+    const changed = printers.filter(
+      (p) => (planLanes[p.id] ?? []).join() !== (draft.base[p.id] ?? []).join(),
+    );
     setApplying(true);
     try {
       await onApplyPlan({
-        lanes: printers.map((p) => ({ printer_id: p.id, item_ids: planLanes[p.id] ?? [] })),
+        lanes: changed.map((p) => ({ printer_id: p.id, item_ids: planLanes[p.id] ?? [] })),
         reserve,
       });
       setSettlingSince(forecast?.generated_at ?? '');
@@ -1292,7 +1488,7 @@ export function QueueTimelineView({
   const detailsOff = detailsItem ? offTimeline.find((row) => row.item.id === detailsItem.id)?.entry : undefined;
   const detailsHeld = detailsOff
     ? detailsOff.reason === 'waiting' && detailsOff.detail
-      ? detailsOff.detail
+      ? translateWaitingReason(detailsOff.detail, t)
       : t(`queue.timeline.offTimeline.${OFF_TIMELINE_KEYS[detailsOff.reason] ?? 'waiting'}`)
     : null;
   const detailsPinChoices = detailsItem
@@ -1306,93 +1502,286 @@ export function QueueTimelineView({
   const detailsReservation = detailsItem && detailsItem.printer_id == null
     ? forecast?.reservations?.[String(detailsItem.id)] ?? null
     : null;
+  const detailsHold = detailsReservation ? reservationState(detailsReservation, detailsLane) : null;
+  // A job linked to (?item=<id>) opens once; one that no longer exists opens nothing.
+  useEffect(() => {
+    if (focusItemId == null) return;
+    if (itemsById.has(focusItemId)) setDetails({ itemId: focusItemId });
+    onFocusItemDone?.();
+  }, [focusItemId, itemsById, onFocusItemDone]);
   // A job that went away (started elsewhere, removed) closes its details.
   useEffect(() => {
     if (details && !detailsItem) setDetails(null);
   }, [details, detailsItem]);
 
+  // ── Taps that explain (fork): what hovers said, a tap now shows ───────────
+  const [info, setInfo] = useState<{ text: string; x: number; y: number } | null>(null);
+  const infoRef = useRef<HTMLDivElement>(null);
+  const showInfo = (e: ReactMouseEvent, text: string) => {
+    e.stopPropagation();
+    setInfo({ text, x: e.clientX, y: e.clientY });
+  };
+  useEffect(() => {
+    if (!info) return;
+    const close = (e: Event) => {
+      if (!infoRef.current?.contains(e.target as Node)) setInfo(null);
+    };
+    document.addEventListener('pointerdown', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [info]);
+
+  // The legend and the hints, folded behind "?" (fork).
+  const [helpOpen, setHelpOpen] = useState(storedHelpOpen);
+  const toggleHelp = () => {
+    setHelpOpen((open) => {
+      try {
+        localStorage.setItem(HELP_STORAGE_KEY, open ? '0' : '1');
+      } catch {
+        // Private mode: not remembered.
+      }
+      return !open;
+    });
+  };
+  const holdsShown = useMemo(() => {
+    const kinds = new Set<QueueHoldKind>();
+    for (const ev of allEvents) if (ev.hold) kinds.add(ev.hold);
+    return kinds;
+  }, [allEvents]);
+
+  // Screen-reader words for dragging, in the app's language (fork).
+  const nameOfDragged = (id: string | number) => {
+    const item = itemsById.get(Number(String(id).replace('item-', '')));
+    return item ? queueJobName(item) : String(id);
+  };
+  const laneName = (over: { data: { current?: Record<string, unknown> } } | null) => {
+    const printerId = over?.data.current?.printerId as number | undefined;
+    return printerId != null ? printersById.get(printerId)?.name ?? `#${printerId}` : null;
+  };
+  const announcements: Announcements = {
+    onDragStart: ({ active }) => t('queue.timeline.a11y.dragStart', { name: nameOfDragged(active.id) }),
+    onDragOver: ({ active, over }) => {
+      const printer = laneName(over);
+      return printer
+        ? t('queue.timeline.a11y.dragOver', { name: nameOfDragged(active.id), printer })
+        : t('queue.timeline.a11y.dragOverNone', { name: nameOfDragged(active.id) });
+    },
+    onDragEnd: ({ active, over }) => {
+      const printer = laneName(over);
+      return printer
+        ? t('queue.timeline.a11y.drop', { name: nameOfDragged(active.id), printer })
+        : t('queue.timeline.a11y.dragCancel', { name: nameOfDragged(active.id) });
+    },
+    onDragCancel: ({ active }) => t('queue.timeline.a11y.dragCancel', { name: nameOfDragged(active.id) }),
+  };
+
+  const rangeLabelOptions: Intl.DateTimeFormatOptions = { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+
   return (
     <div>
-      {/* Window controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-        <div className="flex flex-wrap items-center gap-2">
+      {/* The plan laid out by dragging, until it is applied or dropped. Fork:
+          laid over the controls in a zero-height sticky row, so nothing below
+          moves or changes height when it comes or goes, and it stays in view
+          under the compact header while the page scrolls. */}
+      <div className="sticky top-[var(--app-top,0px)] z-40 h-0">
+        {planOpen && (
+          <div
+            className={`absolute inset-x-0 top-0 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border bg-bambu-dark-secondary px-3 py-2 shadow-lg ${
+              planStale ? 'border-red-400/60' : 'border-amber-400/40'
+            }`}
+            data-testid="timeline-plan-bar"
+            data-stale={planStale ? 'true' : undefined}
+          >
+            {planStale ? (
+              <>
+                <AlertTriangle className="w-4 h-4 text-red-300 shrink-0" aria-hidden />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-white font-medium">{t('queue.timeline.plan.stale')}</div>
+                  <div className="text-xs text-bambu-gray">{t('queue.timeline.plan.staleHelp')}</div>
+                </div>
+                <div className="flex items-center gap-2 ml-auto">
+                  <Button variant="secondary" size="sm" onClick={discardPlan}>
+                    <X className="w-4 h-4 mr-1" />
+                    {t('queue.timeline.plan.discard')}
+                  </Button>
+                  <Button variant="primary" size="sm" onClick={refreshPlan}>
+                    <RefreshCw className="w-4 h-4 mr-1" />
+                    {t('queue.timeline.plan.refresh')}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <PencilRuler className="w-4 h-4 text-amber-300 shrink-0" aria-hidden />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-white font-medium flex items-center gap-1">
+                    {t('queue.timeline.plan.unsaved', { count: draft!.moved.length })}
+                    <button
+                      type="button"
+                      onClick={(e) => showInfo(e, t('queue.timeline.plan.hint'))}
+                      className="inline-flex items-center justify-center rounded-full text-bambu-gray hover:text-white any-pointer-coarse:min-w-[44px] any-pointer-coarse:min-h-[44px]"
+                      aria-label={t('queue.timeline.help.planHint')}
+                      data-testid="timeline-plan-hint"
+                    >
+                      <HelpCircle className="w-4 h-4" aria-hidden />
+                    </button>
+                  </div>
+                  {allDoneBy && forecastDoneBy && (
+                    <div className="text-xs text-bambu-gray truncate">
+                      {t('queue.timeline.plan.doneBy', {
+                        time: shortTime(allDoneBy.getTime()),
+                        was: shortTime(forecastDoneBy.getTime()),
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 ml-auto">
+                  <Button variant="ghost" size="sm" onClick={undoPlan} disabled={history.length === 0 || applying}>
+                    <Undo2 className="w-4 h-4 mr-1" />
+                    {t('queue.timeline.plan.undo')}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={discardPlan} disabled={applying}>
+                    <X className="w-4 h-4 mr-1" />
+                    {t('queue.timeline.plan.discard')}
+                  </Button>
+                  <Button variant="primary" size="sm" onClick={applyPlan} disabled={applying}>
+                    {applying ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Check className="w-4 h-4 mr-1" />}
+                    {t('queue.timeline.plan.apply')}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Window controls (fork): one row with the date, the zoom, the staffed
+          hours, replanning and the legend's "?". */}
+      <div className="flex flex-wrap items-center gap-1 mb-2" data-testid="timeline-toolbar">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setWindowOffsetMs((v) => v - rangeMs / 2)}
+          className="p-1.5"
+          title={t('queue.timeline.window.back', { hours: rangeHours / 2 })}
+          aria-label={t('queue.timeline.window.back', { hours: rangeHours / 2 })}
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </Button>
+        <span className="text-xs sm:text-sm font-medium text-white text-center tabular-nums" data-testid="timeline-range">
+          {new Date(rangeStartMs).toLocaleString(language, rangeLabelOptions)}
+          {' → '}
+          {new Date(rangeEndMs).toDateString() === new Date(rangeStartMs).toDateString()
+            ? clockTime(rangeEndMs)
+            : new Date(rangeEndMs).toLocaleString(language, rangeLabelOptions)}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setWindowOffsetMs((v) => v + rangeMs / 2)}
+          className="p-1.5"
+          title={t('queue.timeline.window.forward', { hours: rangeHours / 2 })}
+          aria-label={t('queue.timeline.window.forward', { hours: rangeHours / 2 })}
+        >
+          <ChevronRight className="w-4 h-4" />
+        </Button>
+        {windowOffsetMs !== 0 && (
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setWindowOffsetMs((v) => v - rangeMs / 2)}
-            className="p-1.5"
-            title={t('queue.timeline.window.back', { hours: rangeHours / 2 })}
+            onClick={() => setWindowOffsetMs(0)}
+            className="text-xs text-bambu-green"
           >
-            <ChevronLeft className="w-4 h-4" />
+            {t('queue.timeline.window.now')}
           </Button>
-          <span className="text-sm font-medium text-white min-w-[180px] text-center">
-            {new Date(rangeStartMs).toLocaleString(undefined, {
-              weekday: 'short',
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-            {' → '}
-            {new Date(rangeEndMs).toDateString() === new Date(rangeStartMs).toDateString()
-              ? new Date(rangeEndMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-              : new Date(rangeEndMs).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
+        )}
+        <div className="flex items-center gap-0.5 sm:ml-1 sm:pl-2 sm:border-l border-bambu-dark-tertiary">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => zoomBy(1)}
+            disabled={zoomIndex === ZOOM_HOURS.length - 1}
+            className="p-1.5"
+            title={t('queue.timeline.window.zoomOut')}
+            aria-label={t('queue.timeline.window.zoomOut')}
+          >
+            <ZoomOut className="w-4 h-4" />
+          </Button>
+          <span className="text-xs text-bambu-gray w-9 text-center tabular-nums" data-testid="timeline-zoom">
+            {rangeHours} h
           </span>
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setWindowOffsetMs((v) => v + rangeMs / 2)}
+            onClick={() => zoomBy(-1)}
+            disabled={zoomIndex === 0}
             className="p-1.5"
-            title={t('queue.timeline.window.forward', { hours: rangeHours / 2 })}
+            title={t('queue.timeline.window.zoomIn')}
+            aria-label={t('queue.timeline.window.zoomIn')}
           >
-            <ChevronRight className="w-4 h-4" />
+            <ZoomIn className="w-4 h-4" />
           </Button>
-          {windowOffsetMs !== 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setWindowOffsetMs(0)}
-              className="text-xs text-bambu-green"
-            >
-              {t('queue.timeline.window.now')}
-            </Button>
-          )}
-          <div className="flex items-center gap-0.5 sm:ml-1 sm:pl-2 sm:border-l border-bambu-dark-tertiary" title={t('queue.timeline.window.zoomHint')}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => zoomBy(1)}
-              disabled={zoomIndex === ZOOM_HOURS.length - 1}
-              className="p-1.5"
-              title={t('queue.timeline.window.zoomOut')}
-              aria-label={t('queue.timeline.window.zoomOut')}
-            >
-              <ZoomOut className="w-4 h-4" />
-            </Button>
-            <span className="text-xs text-bambu-gray w-9 text-center tabular-nums" data-testid="timeline-zoom">
-              {rangeHours} h
+        </div>
+        {/* What is going on: the forecast, nobody there, when all is done.
+            In the row on a wide screen; on a narrow one, a line of its own below. */}
+        <div className="order-last lg:order-none basis-full lg:basis-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs lg:ml-2">
+          {forecastLoading && (
+            <span className="text-bambu-gray flex items-center gap-1.5" data-testid="timeline-forecast-loading" role="status">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
+              {t('queue.timeline.forecastLoading')}
             </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => zoomBy(-1)}
-              disabled={zoomIndex === 0}
-              className="p-1.5"
-              title={t('queue.timeline.window.zoomIn')}
-              aria-label={t('queue.timeline.window.zoomIn')}
+          )}
+          {forecastFailed && forecast && (
+            <span className="text-amber-300 flex items-center gap-1.5" data-testid="timeline-forecast-stale" role="status">
+              <AlertTriangle className="w-3.5 h-3.5" aria-hidden />
+              {t('queue.timeline.forecastStale', { time: clockTime(dataUpdatedAt) })}
+            </span>
+          )}
+          {awayUntilMs != null && awayUntilMs > nowMs && (
+            <button
+              type="button"
+              className="text-amber-300 flex items-center gap-1.5 text-left any-pointer-coarse:min-h-[44px]"
+              data-testid="timeline-away"
+              title={t('queue.timeline.awayHelp')}
+              onClick={(e) => showInfo(e, t('queue.timeline.awayHelp'))}
             >
-              <ZoomIn className="w-4 h-4" />
-            </Button>
-          </div>
+              <UserX className="w-3.5 h-3.5 shrink-0" />
+              {t('queue.timeline.away', { time: shortTime(awayUntilMs) })}
+              <HelpCircle className="w-3.5 h-3.5 shrink-0 opacity-70" aria-hidden />
+            </button>
+          )}
+          {markedAwayNow && (
+            <button
+              type="button"
+              onClick={() => setStaffedOpen(true)}
+              className="text-red-200 flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-red-400/30 bg-red-500/10 hover:bg-red-500/20 any-pointer-coarse:min-h-[44px]"
+              data-testid="timeline-marked-away"
+            >
+              <UserX className="w-3.5 h-3.5" />
+              {t('queue.timeline.absent', { time: shortTime(markedAwayNow.end) })}
+            </button>
+          )}
+          {allDoneBy && (
+            <span className="text-bambu-gray flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5" />
+              {t('queue.timeline.allDoneBy', { time: shortTime(allDoneBy.getTime()) })}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 ml-auto">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setStaffedOpen(true)}
             className="text-xs"
             title={t('queue.timeline.staffed.title')}
+            aria-label={t('queue.timeline.staffed.button')}
           >
             <CalendarClock className="w-4 h-4" />
-            {t('queue.timeline.staffed.button')}
+            <span className="hidden sm:inline">{t('queue.timeline.staffed.button')}</span>
           </Button>
           {onReplanQueue && (
             <Button
@@ -1402,50 +1791,31 @@ export function QueueTimelineView({
               disabled={replanning}
               className="text-xs"
               title={t('queue.timeline.replan.title')}
+              aria-label={t('queue.timeline.replan.button')}
               data-testid="timeline-replan"
             >
               <RefreshCw className={`w-4 h-4 ${replanning ? 'animate-spin' : ''}`} />
-              {t('queue.timeline.replan.button')}
+              <span className="hidden sm:inline">{t('queue.timeline.replan.button')}</span>
             </Button>
           )}
+          <Button
+            variant={helpOpen ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={toggleHelp}
+            className="p-1.5"
+            aria-expanded={helpOpen}
+            aria-label={t('queue.timeline.help.toggle')}
+            title={t('queue.timeline.help.toggle')}
+            data-testid="timeline-help-toggle"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </Button>
         </div>
-        {awayUntilMs != null && awayUntilMs > nowMs && (
-          <span
-            className="text-xs text-amber-300 flex items-center gap-1.5"
-            data-testid="timeline-away"
-            title={t('queue.timeline.awayHelp')}
-          >
-            <UserX className="w-3.5 h-3.5" />
-            {t('queue.timeline.away', { time: shortTime(awayUntilMs) })}
-          </span>
-        )}
-        {markedAwayNow && (
-          <button
-            type="button"
-            onClick={() => setStaffedOpen(true)}
-            className="text-xs text-red-200 flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-red-400/30 bg-red-500/10 hover:bg-red-500/20"
-            data-testid="timeline-marked-away"
-          >
-            <UserX className="w-3.5 h-3.5" />
-            {t('queue.timeline.absent', { time: shortTime(markedAwayNow.end) })}
-          </button>
-        )}
-        {allDoneBy && (
-          <span className="text-xs text-bambu-gray flex items-center gap-1.5">
-            <Clock className="w-3.5 h-3.5" />
-            {t('queue.timeline.allDoneBy', {
-              time: allDoneBy.toLocaleString(undefined, {
-                weekday: 'short',
-                hour: '2-digit',
-                minute: '2-digit',
-              }),
-            })}
-          </span>
-        )}
       </div>
 
-      {/* Legend: what solid, dashed and blue bars mean. */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mb-4 text-xs text-bambu-gray">
+      {/* Legend and hints, behind the "?" (fork): what each bar means. */}
+      {helpOpen && (
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mb-3 text-xs text-bambu-gray" data-testid="timeline-legend">
         <span className="flex items-center gap-1.5">
           <span className="inline-flex items-center justify-center w-5 h-3.5 rounded-sm bg-bambu-green/20 border border-bambu-green/50" />
           <Pin className="w-3 h-3" aria-hidden />
@@ -1456,11 +1826,32 @@ export function QueueTimelineView({
           <Shuffle className="w-3 h-3" aria-hidden />
           {t('queue.timeline.legend.projected')}
         </span>
-        <span className="flex items-center gap-1.5">
+        <span className="flex items-center gap-1.5" data-testid="legend-hold-firm">
           <span className="inline-flex w-5 h-3.5 rounded-sm bg-amber-500/15 border border-amber-400/60" />
           <Lock className="w-3 h-3" aria-hidden />
           {t('queue.timeline.legend.reserved')}
         </span>
+        {holdsShown.has('soft') && (
+          <span className="flex items-center gap-1.5" data-testid="legend-hold-soft">
+            <span className="inline-flex w-5 h-3.5 rounded-sm bg-amber-500/10 border border-dashed border-amber-400/70" />
+            <Bookmark className="w-3 h-3" aria-hidden />
+            {t('queue.timeline.hold.legendSoft')}
+          </span>
+        )}
+        {holdsShown.has('gaveWay') && (
+          <span className="flex items-center gap-1.5" data-testid="legend-hold-gave-way">
+            <span className="inline-flex w-5 h-3.5 rounded-sm bg-bambu-green/10 border border-dashed border-bambu-green/70" />
+            <BookmarkX className="w-3 h-3" aria-hidden />
+            {t('queue.timeline.hold.legendGaveWay')}
+          </span>
+        )}
+        {planOpen && (
+          <span className="flex items-center gap-1.5" data-testid="legend-moved">
+            <span className="inline-flex w-5 h-3.5 rounded-sm outline-2 outline-dashed outline-white/80" />
+            <Move className="w-3 h-3" aria-hidden />
+            {t('queue.timeline.hold.legendMoved')}
+          </span>
+        )}
         <span className="flex items-center gap-1.5">
           <span className="inline-flex w-5 h-3.5 rounded-sm bg-blue-500/30 border border-blue-400/60" />
           {t('queue.timeline.legend.printing')}
@@ -1496,49 +1887,14 @@ export function QueueTimelineView({
             {t('queue.timeline.legend.here')}
           </span>
         )}
+        <span className="basis-full">{t('queue.timeline.window.zoomHint')}</span>
         {onApplyPlan && (
-          <span className="sm:ml-auto italic">
+          <span className="basis-full italic">
             {canReorder ? t('queue.timeline.legend.dragHint') : t('queue.timeline.legend.sjfHint')}
           </span>
         )}
+        {onApplyPlan && canReorder && <span className="basis-full">{t('queue.timeline.plan.hint')}</span>}
       </div>
-
-      {/* The plan laid out by dragging, until it is applied or dropped. */}
-      {planOpen && (
-        <div
-          className="sticky top-0 z-40 mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-amber-400/40 bg-bambu-dark-secondary px-3 py-2 shadow-lg"
-          data-testid="timeline-plan-bar"
-        >
-          <PencilRuler className="w-4 h-4 text-amber-300 shrink-0" aria-hidden />
-          <div className="min-w-0">
-            <div className="text-sm text-white font-medium">
-              {t('queue.timeline.plan.unsaved', { count: draft!.moved.length })}
-            </div>
-            {allDoneBy && forecastDoneBy && (
-              <div className="text-xs text-bambu-gray">
-                {t('queue.timeline.plan.doneBy', {
-                  time: allDoneBy.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
-                  was: forecastDoneBy.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
-                })}
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-2 sm:ml-auto">
-            <Button variant="ghost" size="sm" onClick={undoPlan} disabled={history.length === 0 || applying}>
-              <Undo2 className="w-4 h-4 mr-1" />
-              {t('queue.timeline.plan.undo')}
-            </Button>
-            <Button variant="secondary" size="sm" onClick={discardPlan} disabled={applying}>
-              <X className="w-4 h-4 mr-1" />
-              {t('queue.timeline.plan.discard')}
-            </Button>
-            <Button variant="primary" size="sm" onClick={applyPlan} disabled={applying}>
-              <Check className="w-4 h-4 mr-1" />
-              {t('queue.timeline.plan.apply')}
-            </Button>
-          </div>
-          <div className="basis-full text-[11px] text-bambu-gray">{t('queue.timeline.plan.hint')}</div>
-        </div>
       )}
 
       {forecastFailed && !forecast && (
@@ -1556,6 +1912,10 @@ export function QueueTimelineView({
         <BarHeightContext.Provider value={barHeight}>
         <DndContext
           sensors={sensors}
+          accessibility={{
+            announcements,
+            screenReaderInstructions: { draggable: t('queue.timeline.a11y.instructions') },
+          }}
           collisionDetection={pointerFirst}
           onDragStart={handleDragStart}
           onDragMove={handleDragMove}
@@ -1569,7 +1929,8 @@ export function QueueTimelineView({
           <div className="bg-bambu-dark-secondary rounded-xl border border-bambu-dark-tertiary overflow-hidden">
           {/* On a phone 24 hours would leave a print a few pixels: the track
               keeps a readable width and scrolls, the printer column stays. */}
-          <div ref={chartRef} className="overflow-x-auto touch-pan-x touch-pan-y">
+          {/* overscroll-x-contain: a sideways swipe ends here, never as the browser's Back (fork). */}
+          <div ref={chartRef} className="overflow-x-auto overscroll-x-contain touch-pan-x touch-pan-y">
           <div className="min-w-[720px]">
             {/* Hour axis */}
             <div className="flex border-b border-bambu-dark-tertiary">
@@ -1590,22 +1951,31 @@ export function QueueTimelineView({
                 {visibleMarks.map((m) => {
                   const startMs = Math.max(rangeStartMs, m.start);
                   const endMs = Math.min(rangeEndMs, m.end);
+                  const text = t(m.kind === 'away' ? 'queue.timeline.markAway' : 'queue.timeline.markHere', {
+                    from: shortTime(m.start),
+                    to: shortTime(m.end),
+                  });
+                  // A tap says what is marked (fork): a taller, invisible hit area over the thin stripe.
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={`${m.kind}-${m.start}`}
-                      className={`absolute bottom-0 h-1.5 rounded-full ${m.kind === 'here' ? 'bg-bambu-green/70' : ''}`}
+                      className="absolute bottom-0 h-4 flex items-end"
                       data-testid="axis-mark"
                       data-kind={m.kind}
-                      title={t(m.kind === 'away' ? 'queue.timeline.markAway' : 'queue.timeline.markHere', {
-                        from: shortTime(m.start),
-                        to: shortTime(m.end),
-                      })}
+                      title={text}
+                      aria-label={text}
+                      onClick={(e) => showInfo(e, text)}
                       style={{
                         left: `${((startMs - rangeStartMs) / rangeMs) * 100}%`,
                         width: `${((endMs - startMs) / rangeMs) * 100}%`,
-                        backgroundImage: m.kind === 'away' ? AWAY_STRIPES : undefined,
                       }}
-                    />
+                    >
+                      <span
+                        className={`block w-full h-1.5 rounded-full ${m.kind === 'here' ? 'bg-bambu-green/70' : ''}`}
+                        style={{ backgroundImage: m.kind === 'away' ? AWAY_STRIPES : undefined }}
+                      />
+                    </button>
                   );
                 })}
               </div>
@@ -1727,10 +2097,19 @@ export function QueueTimelineView({
                         if (endMs <= startMs) return null;
                         const away = w.reason === 'away';
                         const absent = w.reason === 'absent';
+                        const label = away
+                          ? t('queue.timeline.plateAway')
+                          : absent
+                            ? t('queue.timeline.plateAbsent')
+                            : t('queue.timeline.legend.plateWait');
+                        // A tap says until when and why (fork); the label says until when where it fits.
                         return (
-                          <div
+                          <button
+                            type="button"
                             key={`plate-${w.start}`}
-                            className={`absolute rounded-md border border-dashed flex items-center px-1.5 overflow-hidden text-[10px] ${
+                            onClick={(e) => showInfo(e, plateWaitText(w))}
+                            aria-label={plateWaitText(w)}
+                            className={`absolute rounded-md border border-dashed flex items-center px-1.5 overflow-hidden text-[10px] text-left ${
                               away
                                 ? 'border-amber-400/50 text-amber-200/90'
                                 : absent
@@ -1749,13 +2128,9 @@ export function QueueTimelineView({
                             }}
                           >
                             <span className="truncate">
-                              {away
-                                ? t('queue.timeline.plateAway')
-                                : absent
-                                  ? t('queue.timeline.plateAbsent')
-                                  : t('queue.timeline.legend.plateWait')}
+                              {label} · {clockTime(w.end)}
                             </span>
-                          </div>
+                          </button>
                         );
                       })}
 
@@ -1817,7 +2192,7 @@ export function QueueTimelineView({
                   const reason = hold?.problem
                     ? hold.text
                     : entry.reason === 'waiting' && entry.detail
-                      ? entry.detail
+                      ? translateWaitingReason(entry.detail, t)
                       : label;
                   return (
                     <OffTimelineChip
@@ -1858,6 +2233,20 @@ export function QueueTimelineView({
         </BarHeightContext.Provider>
       )}
 
+      {info && (
+        <div
+          ref={infoRef}
+          role="status"
+          className="fixed z-50 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-bambu-dark-tertiary bg-bambu-dark-secondary px-3 py-2 text-xs text-white shadow-xl"
+          style={{
+            left: Math.max(16, Math.min(info.x - 144, (typeof window !== 'undefined' ? window.innerWidth : 1024) - 16 - 288)),
+            top: info.y + 12,
+          }}
+          data-testid="timeline-info"
+        >
+          {info.text}
+        </div>
+      )}
       {staffedOpen && (
         <StaffedHoursDialog
           canEdit={canEditStaffedHours}
@@ -1870,6 +2259,7 @@ export function QueueTimelineView({
       )}
       {detailsItem && (
         <QueueJobDetails
+          key={detailsItem.id}
           item={detailsItem}
           printers={printers}
           expected={detailsExpected}
@@ -1879,10 +2269,15 @@ export function QueueTimelineView({
           pinChoices={detailsPinChoices}
           suggestedPrinterId={details?.suggestedPrinterId ?? null}
           canModify={mayModify(detailsItem)}
-          reservation={detailsReservation
+          reservation={detailsReservation && detailsHold
             ? {
                 printer: printersById.get(detailsReservation.printer_id)?.name ?? `#${detailsReservation.printer_id}`,
                 active: detailsReservation.active,
+                kind: detailsHold.kind,
+                byPlanner: detailsHold.byPlanner,
+                expectedPrinter: detailsLane != null && detailsLane !== detailsReservation.printer_id
+                  ? printersById.get(detailsLane)?.name ?? `#${detailsLane}`
+                  : null,
               }
             : null}
           onReleaseReservation={onReleaseReservation && detailsReservation

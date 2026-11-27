@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
@@ -12,16 +12,26 @@ import {
   ShoppingBag,
 } from 'lucide-react';
 import { api } from '../../api/client';
-import type { BaseOrder, BaseOrderLine } from '../../api/client';
+import type { BaseOrder, BaseOrderAcceptProduct, BaseOrderLine } from '../../api/client';
 import { Card } from '../Card';
 import { Button } from '../Button';
 import { useUiSettings } from '../../hooks/useUiSettings';
-import { formatDateOnly, formatDateTime, formatRelativeTime, formatTimeOnly, parseUTCDate } from '../../utils/date';
+import { formatDateOnly, formatDateTime, formatRelativeTime } from '../../utils/date';
 import type { TimeFormat } from '../../utils/date';
-import { missingParts, sendLabel, shipKind, wantedUnits } from '../../utils/baseOrders';
+import {
+  isLate,
+  missingParts,
+  ORDER_GRID,
+  orderLate,
+  sendLabel,
+  shipKind,
+  shortWhen,
+  wantedUnits,
+} from '../../utils/baseOrders';
 import { OrderPartsPanel } from './OrderPartsPanel';
+import type { OrderPartsControls } from './OrderPartsPanel';
 
-const TOUCH = 'pointer-coarse:min-h-11!';
+const TOUCH = 'any-pointer-coarse:min-h-[44px]!';
 
 interface OrderRowProps {
   order: BaseOrder;
@@ -33,7 +43,8 @@ interface OrderRowProps {
   /** part id -> name, for "I have: Base 1" on a waiting order. */
   partNames: Map<number, string>;
   busy: boolean;
-  onPrint: () => void;
+  /** body: the choices of an open parts panel (unsaved ones too); none prints the saved draft. */
+  onPrint: (body?: { products: BaseOrderAcceptProduct[] }) => void;
   onSkip: () => void;
   onRestore: () => void;
   onWithdraw: () => void;
@@ -97,7 +108,7 @@ function WhenCell({ order }: { order: BaseOrder }) {
         <span className="text-xs text-bambu-gray-light whitespace-nowrap">{date}</span>
       )}
       {kind && kind !== 'later' && !done && (
-        <span className="hidden lg:block text-[11px] text-bambu-gray whitespace-nowrap">{date}</span>
+        <span className="hidden xl:block text-[11px] text-bambu-gray whitespace-nowrap">{date}</span>
       )}
     </span>
   );
@@ -105,7 +116,7 @@ function WhenCell({ order }: { order: BaseOrder }) {
 
 function LineThumb({ line }: { line: BaseOrderLine }) {
   const [broken, setBroken] = useState(false);
-  const size = 'w-12 h-12 lg:w-10 lg:h-10';
+  const size = 'w-12 h-12 xl:w-10 xl:h-10';
   if (line.mapping === 'product' && line.product_id != null && line.has_thumbnail && !broken) {
     return (
       <img
@@ -135,7 +146,7 @@ function Line({ order, line, index }: { order: BaseOrder; line: BaseOrderLine; i
   // Held back per product: said once, on its first line.
   const firstOfProduct = order.lines.findIndex((other) => other.product_id === line.product_id) === index;
   return (
-    <li className="flex items-center gap-2.5 min-h-[56px] lg:min-h-[44px]">
+    <li className="flex items-center gap-2.5 min-h-[56px] xl:min-h-[44px]">
       <LineThumb line={line} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
@@ -209,11 +220,21 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
                 )}
               </span>
             ))}
-            {product.estimated_ready_at && (
+            {product.estimated_ready_at ? (
               <span className="text-bambu-gray">
                 {' · '}
-                {t('baseSync.readyAround', { time: formatTimeOnly(parseUTCDate(product.estimated_ready_at) ?? new Date(), timeFormat) })}
+                {t('baseSync.readyAround', { time: shortWhen(product.estimated_ready_at, timeFormat) })}
+                {isLate(product.estimated_ready_at, order.ship_by) && (
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded font-medium bg-red-500/20 text-red-600 dark:text-red-300">
+                    {t('products.late')}
+                  </span>
+                )}
               </span>
+            ) : (
+              product.no_estimate_reason &&
+              product.units_ready < product.units && (
+                <span className="block text-bambu-gray">{t(`products.noEtaReason.${product.no_estimate_reason}`)}</span>
+              )
             )}
           </div>
         ))}
@@ -282,6 +303,13 @@ export function OrderRow(props: OrderRowProps) {
   const { data: ui } = useUiSettings();
   const timeFormat: TimeFormat = ui?.time_format || 'system';
   const [allLines, setAllLines] = useState(false);
+  // An open parts panel: Print sends its choices, and waits while one is being saved.
+  const parts = useRef<OrderPartsControls | null>(null);
+  const [partsSaving, setPartsSaving] = useState(false);
+  const print = async () => {
+    const body = expanded && parts.current ? await parts.current.flush() : null;
+    onPrint(body ?? undefined);
+  };
   const hasProducts = order.lines.some((line) => line.mapping === 'product');
   const waiting = order.state === 'new' || order.state === 'skipped';
   // Packed in Base: done, listed with the ready ones; nothing to do on it any more.
@@ -300,14 +328,14 @@ export function OrderRow(props: OrderRowProps) {
       }`}
     >
       <div
-        className="grid gap-3 lg:grid-cols-[104px_200px_minmax(0,1fr)_230px_auto] lg:items-start cursor-pointer"
+        className={`grid gap-3 ${ORDER_GRID} xl:items-start cursor-pointer`}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest('button, a, input, select')) return;
           if (hasProducts) onToggle();
         }}
       >
-        <div className="flex items-center gap-2.5 lg:contents">
-          <div className="lg:pt-0.5">
+        <div className="flex items-center gap-2.5 xl:contents">
+          <div className="xl:pt-0.5">
             <WhenCell order={order} />
           </div>
           <div className="min-w-0 flex-1">
@@ -319,6 +347,11 @@ export function OrderRow(props: OrderRowProps) {
               >
                 {order.label}
               </span>
+              {orderLate(order) && (
+                <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-red-500/20 text-red-600 dark:text-red-300 shrink-0">
+                  {t('products.late')}
+                </span>
+              )}
               {showState && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-dark-tertiary text-bambu-gray-light shrink-0">
                   {t(
@@ -335,10 +368,10 @@ export function OrderRow(props: OrderRowProps) {
               {[order.source_name, order.date_confirmed ? formatDateTime(order.date_confirmed, timeFormat) : null]
                 .filter(Boolean)
                 .join(' · ')}
-              <span className="hidden lg:inline"> · Base {order.order_id}</span>
+              <span className="hidden xl:inline"> · Base {order.order_id}</span>
             </div>
           </div>
-          <span className="lg:hidden ml-auto text-xs text-bambu-gray shrink-0">Base {order.order_id}</span>
+          <span className="xl:hidden ml-auto text-xs text-bambu-gray shrink-0">Base {order.order_id}</span>
         </div>
 
         <div className="min-w-0">
@@ -350,7 +383,7 @@ export function OrderRow(props: OrderRowProps) {
           {hiddenLines > 0 && (
             <button
               type="button"
-              className="text-xs text-bambu-green hover:underline py-2"
+              className="text-xs text-bambu-green hover:underline py-2 any-pointer-coarse:min-h-[44px]"
               onClick={() => setAllLines(true)}
             >
               {t('baseSync.moreLines', { n: hiddenLines })}
@@ -358,7 +391,7 @@ export function OrderRow(props: OrderRowProps) {
           )}
         </div>
 
-        <div className="min-w-0 lg:pt-1">
+        <div className="min-w-0 xl:pt-1">
           <ProgressCell order={order} partNames={partNames} />
         </div>
 
@@ -399,8 +432,12 @@ export function OrderRow(props: OrderRowProps) {
               </Button>
             )}
             {waiting && (
-              <Button size="sm" className={TOUCH} onClick={onPrint} disabled={busy}>
-                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : order.draft?.nothing_to_print && <PackageCheck className="w-4 h-4" />}
+              <Button size="sm" className={TOUCH} onClick={print} disabled={busy || partsSaving}>
+                {busy || partsSaving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  order.draft?.nothing_to_print && <PackageCheck className="w-4 h-4" />
+                )}
                 {t(sendLabel(order))}
               </Button>
             )}
@@ -408,7 +445,16 @@ export function OrderRow(props: OrderRowProps) {
         )}
       </div>
       {expanded && hasProducts && (
-        <OrderPartsPanel order={order} canAct={act} onPrint={onPrint} printing={busy} onWithdraw={onWithdraw} />
+        <OrderPartsPanel
+          order={order}
+          canAct={act}
+          onPrint={print}
+          printing={busy}
+          onWithdraw={onWithdraw}
+          controls={parts}
+          onSavingChange={setPartsSaving}
+        />
+
       )}
     </Card>
   );

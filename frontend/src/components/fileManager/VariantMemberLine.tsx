@@ -19,19 +19,21 @@ import { isSlicedLibraryFile } from '../../utils/libraryFiles';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import type { VariantMemberActions } from './variantTypes';
 import type { VariantGroupActions } from './useVariantGroupActions';
+import type { GroupRow } from '../../pages/fileManager/variantGroups';
+import { TOUCH_BUTTON } from '../../pages/fileManager/useCoarsePointer';
 
 // One version of a group: printer model, print time, filament, a hint where
 // it lives when that is not the folder on screen, and the actions a plain
 // file has (#3628). Shared by the card, the list row and the columns row.
 export function VariantMemberLine({
   file,
-  groupId,
+  group,
   memberActions,
   groupActions,
   highlighted = false,
 }: {
   file: LibraryFileListItem;
-  groupId: number;
+  group: GroupRow;
   memberActions: VariantMemberActions;
   groupActions: VariantGroupActions;
   highlighted?: boolean;
@@ -83,7 +85,7 @@ export function VariantMemberLine({
     {
       label: t('fileManager.variants.removeFromGroup'),
       icon: <Unlink className="w-4 h-4" />,
-      onClick: () => groupActions.removeFromGroup(file, groupId),
+      onClick: () => groupActions.removeFromGroup(file, group),
       disabled: !groupActions.canRemove(file),
       title: !groupActions.canRemove(file) ? t('fileManager.variants.noPermissionRemove') : undefined,
     },
@@ -112,7 +114,7 @@ export function VariantMemberLine({
     <div
       data-testid="variant-member-line"
       data-file-id={file.id}
-      className={`flex items-center gap-2 min-w-0 px-2 py-1.5 rounded text-xs text-bambu-gray hover:bg-bambu-dark ${
+      className={`flex items-center gap-2 min-w-0 px-2 py-1.5 any-pointer-coarse:min-h-[44px] rounded text-xs text-bambu-gray hover:bg-bambu-dark ${
         highlighted ? 'outline outline-2 outline-yellow-400' : ''
       }`}
       // A line is not "the row": its clicks neither select the group nor open it.
@@ -154,7 +156,7 @@ export function VariantMemberLine({
           const rect = e.currentTarget.getBoundingClientRect();
           setMenuAnchor({ x: rect.left, y: rect.bottom + 4 });
         }}
-        className="p-1.5 rounded flex-shrink-0 hover:bg-bambu-dark-tertiary"
+        className={`p-1.5 rounded flex-shrink-0 hover:bg-bambu-dark-tertiary ${TOUCH_BUTTON}`}
       >
         <MoreVertical className="w-4 h-4" />
       </button>

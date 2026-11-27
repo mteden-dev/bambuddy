@@ -7,7 +7,9 @@ import { useToast } from '../../contexts/ToastContext';
 import { isSlicedLibraryFile } from '../../utils/libraryFiles';
 import type { GroupRow } from '../../pages/fileManager/variantGroups';
 import { invalidateAfterLibraryDelete } from '../../pages/fileManager/invalidate';
-import { ConfirmModal } from '../ConfirmModal';
+import { FocusedConfirmModal } from '../FocusedConfirmModal';
+import { useUndoToast } from '../../hooks/useUndoToast';
+import { AddVersionModal } from './AddVersionModal';
 
 export interface VariantGroupActions {
   /** Print the group as one job with printer alternatives. */
@@ -22,11 +24,28 @@ export interface VariantGroupActions {
   canUngroup: (row: GroupRow) => boolean;
   deleteFiles: (row: GroupRow) => void;
   canDeleteFiles: (row: GroupRow) => boolean;
-  removeFromGroup: (file: LibraryFileListItem, groupId: number) => void;
+  /** Fork: takes the row so an undo can put the version back where it was. */
+  removeFromGroup: (file: LibraryFileListItem, row: GroupRow) => void;
   canRemove: (file: LibraryFileListItem) => boolean;
+  /** Fork: pick a file of the folder on screen to join the group. */
+  addVersion: (row: GroupRow) => void;
+  canAddVersion: (row: GroupRow) => boolean;
 }
 
 type Confirm = { kind: 'ungroup' | 'delete'; row: GroupRow };
+
+// Fork: the files of the listing that may join `row`: sliced, in no group,
+// listed here rather than elsewhere, for a printer the group lacks.
+export function versionCandidates(row: GroupRow, files: readonly LibraryFileListItem[]): LibraryFileListItem[] {
+  const models = new Set(row.members.map((m) => m.sliced_for_model).filter(Boolean));
+  return files.filter(
+    (f) =>
+      isSlicedLibraryFile(f) &&
+      f.variant_group_id == null &&
+      !f.variant_elsewhere &&
+      !(f.sliced_for_model && models.has(f.sliced_for_model)),
+  );
+}
 
 // The actions of a version group (#3628), shared by the grid card, the list
 // row and the columns row: permission checks, the requests, and the confirm
@@ -35,15 +54,20 @@ type Confirm = { kind: 'ungroup' | 'delete'; row: GroupRow };
 export function useVariantGroupActions({
   onPrintGroup,
   onFilesDeleted,
+  listedFiles = [],
 }: {
   onPrintGroup: (row: GroupRow, mode?: 'printers') => void;
   onFilesDeleted: (ids: number[]) => void;
+  /** Fork: the files on screen, from which a new version is picked. */
+  listedFiles?: readonly LibraryFileListItem[];
 }): { actions: VariantGroupActions; dialogs: ReactNode } {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const showUndoToast = useUndoToast();
   const { hasPermission, canModify } = useAuth();
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [addingTo, setAddingTo] = useState<GroupRow | null>(null);
 
   const refresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['library-files'] });
@@ -63,12 +87,58 @@ export function useVariantGroupActions({
     },
   });
 
+  // Fork: puts a removed version back. Removing one of two dissolved the
+  // group, so it is made again under its name; otherwise the version is
+  // re-added and the old priority order restored. A group with members the
+  // caller cannot see may look smaller than it is, hence the fallback.
+  const undoRemove = useCallback(
+    async (file: LibraryFileListItem, row: GroupRow) => {
+      const order = row.members.map((m) => m.id);
+      const recreate = () => api.createVariantGroup(order.map((id) => ({ library_file_id: id })), row.name);
+      const readd = async () => {
+        const group = await api.addVariantGroupMember(row.id, file.id);
+        const current = group.members.map((m) => m.library_file_id);
+        const wanted = [...order.filter((id) => current.includes(id)), ...current.filter((id) => !order.includes(id))];
+        if (wanted.join() !== current.join()) await api.reorderVariantGroup(row.id, wanted);
+      };
+      const [first, second] = row.members.length <= 2 ? [recreate, readd] : [readd, recreate];
+      try {
+        try {
+          await first();
+        } catch (error) {
+          try {
+            await second();
+          } catch {
+            throw error;
+          }
+        }
+        showToast(t('fileManager.variants.removeUndone'), 'success');
+      } catch (error) {
+        showToast((error as Error).message, 'error');
+      } finally {
+        refresh();
+      }
+    },
+    [refresh, showToast, t],
+  );
+
   const removeMutation = useMutation({
-    mutationFn: ({ groupId, fileId }: { groupId: number; fileId: number }) =>
-      api.removeVariantGroupMember(groupId, fileId),
-    onSuccess: () => {
+    mutationFn: ({ row, file }: { row: GroupRow; file: LibraryFileListItem }) =>
+      api.removeVariantGroupMember(row.id, file.id),
+    onSuccess: (_, { row, file }) => {
       refresh();
-      showToast(t('fileManager.variants.removed'), 'success');
+      showUndoToast(t('fileManager.variants.removed'), () => void undoRemove(file, row));
+    },
+    onError: (error: Error) => showToast(error.message, 'error'),
+  });
+
+  const addMutation = useMutation({
+    mutationFn: ({ row, file }: { row: GroupRow; file: LibraryFileListItem }) =>
+      api.addVariantGroupMember(row.id, file.id),
+    onSuccess: (_, { file }) => {
+      refresh();
+      showToast(t('fileManager.variants.versionAdded', { name: file.print_name || file.filename }), 'success');
+      setAddingTo(null);
     },
     onError: (error: Error) => showToast(error.message, 'error'),
   });
@@ -125,10 +195,16 @@ export function useVariantGroupActions({
       if (canDeleteFiles(row)) setConfirm({ kind: 'delete', row });
     },
     canDeleteFiles,
-    removeFromGroup: (file, groupId) => {
-      if (canRemove(file)) removeMutation.mutate({ groupId, fileId: file.id });
+    removeFromGroup: (file, row) => {
+      if (canRemove(file)) removeMutation.mutate({ row, file });
     },
     canRemove,
+    addVersion: (row) => {
+      if (canUngroup(row)) setAddingTo(row);
+    },
+    // The server lets a group change only to someone who may change all of
+    // it, as for ungrouping.
+    canAddVersion: canUngroup,
   };
 
   // The confirm says how many of the versions sit in other folders: deleting
@@ -139,9 +215,9 @@ export function useVariantGroupActions({
     return elsewhere > 0 ? `${message} ${t('fileManager.variants.deleteGroupElsewhere', { count: elsewhere })}` : message;
   };
 
-  const dialogs = confirm ? (
+  const confirmDialog = confirm ? (
     confirm.kind === 'ungroup' ? (
-      <ConfirmModal
+      <FocusedConfirmModal
         title={t('fileManager.variants.ungroupTitle')}
         message={t('fileManager.variants.ungroupConfirm', { count: confirm.row.members.length, name: confirm.row.name })}
         confirmText={t('fileManager.variants.ungroup')}
@@ -152,7 +228,7 @@ export function useVariantGroupActions({
         onCancel={() => setConfirm(null)}
       />
     ) : (
-      <ConfirmModal
+      <FocusedConfirmModal
         title={t('fileManager.variants.deleteGroupTitle', { count: confirm.row.members.length })}
         message={deleteMessage(confirm.row)}
         confirmText={t('common.delete')}
@@ -164,6 +240,23 @@ export function useVariantGroupActions({
       />
     )
   ) : null;
+
+  const dialogs = (
+    <>
+      {confirmDialog}
+      {addingTo && (
+        <AddVersionModal
+          row={addingTo}
+          candidates={versionCandidates(addingTo, listedFiles).filter((f) =>
+            canModify('library', 'update', f.created_by_id),
+          )}
+          pendingFileId={addMutation.isPending ? (addMutation.variables?.file.id ?? null) : null}
+          onPick={(file) => addMutation.mutate({ row: addingTo, file })}
+          onClose={() => setAddingTo(null)}
+        />
+      )}
+    </>
+  );
 
   return { actions, dialogs };
 }

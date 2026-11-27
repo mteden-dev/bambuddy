@@ -25,10 +25,12 @@ export function Button({
       'bg-transparent hover:bg-bambu-dark-tertiary text-bambu-gray-light hover:text-white',
   };
 
+  // Touch-sized unless the primary pointer is fine from md up; any coarse
+  // pointer (an iPad, also with a keyboard case) keeps it at every width.
   const sizes = {
-    sm: 'px-3 py-1.5 text-sm gap-1.5 min-h-[44px] md:min-h-0',
-    md: 'px-4 py-2 text-sm gap-2 min-h-[44px] md:min-h-0',
-    lg: 'px-6 py-3 text-base gap-2 min-h-[48px] md:min-h-0',
+    sm: 'px-3 py-1.5 text-sm gap-1.5 min-h-[44px] md:pointer-fine:min-h-0 any-pointer-coarse:min-h-[44px]',
+    md: 'px-4 py-2 text-sm gap-2 min-h-[44px] md:pointer-fine:min-h-0 any-pointer-coarse:min-h-[44px]',
+    lg: 'px-6 py-3 text-base gap-2 min-h-[48px] md:pointer-fine:min-h-0 any-pointer-coarse:min-h-[48px]',
   };
 
   return (

@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useModalBehavior } from '../../hooks/useModalBehavior';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { api } from '../../api/client';
-import type { BaseOrder, BaseWithdrawPiece, BaseWithdrawPrint } from '../../api/client';
+import type { BaseOrder, BaseWithdrawPiece, BaseWithdrawPreview, BaseWithdrawPrint } from '../../api/client';
 import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
 
-const TOUCH = 'pointer-coarse:min-h-11!';
+const TOUCH = 'any-pointer-coarse:min-h-[44px]!';
 
 interface WithdrawOrderModalProps {
   order: BaseOrder;
@@ -71,25 +72,29 @@ export function WithdrawOrderModal({ order, busy, onConfirm, onCancel }: Withdra
     placeholderData: (previous) => previous,
   });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !busy) onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel, busy]);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const requestClose = useModalBehavior(onCancel, overlayRef, busy);
 
-  const data = preview.data;
+  // The last preview that came stays on screen (and decides) while the checkbox asks again, even if that fails.
+  const known = useRef<BaseWithdrawPreview | null>(null);
+  if (preview.data) known.current = preview.data;
+  const data = preview.data ?? known.current ?? undefined;
+  // No preview at all (it failed): no box to show, so the operator's choice (default: yes) is sent as it is.
+  const noPreview = !data && preview.isError;
+  // Before the preview the confirm waits: it decides whether "put back in stock" applies.
+  const ready = !!data || noPreview;
   const nothing =
     data && !data.removed.length && !data.added.length && !data.printing.length && !data.to_stock.length;
 
   return (
     <div
+      ref={overlayRef}
       className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center sm:p-4"
-      onClick={busy ? undefined : onCancel}
+      onClick={requestClose}
     >
       <Card
-        className="w-full sm:max-w-md max-h-[90dvh] overflow-y-auto rounded-b-none sm:rounded-b-xl"
+        tabIndex={-1}
+        className="outline-none w-full sm:max-w-md max-h-[90dvh] overflow-y-auto rounded-b-none sm:rounded-b-xl"
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -128,7 +133,7 @@ export function WithdrawOrderModal({ order, busy, onConfirm, onCancel }: Withdra
                 <p className="text-sm text-bambu-gray">{t('baseSync.withdrawPreview.nothing')}</p>
               )}
               {data.done.length > 0 && (
-                <label className="flex items-start gap-3 min-h-11 cursor-pointer">
+                <label className="flex items-start gap-3 min-h-[44px] cursor-pointer">
                   <input
                     type="checkbox"
                     className="w-5 h-5 mt-0.5 shrink-0 accent-bambu-green"
@@ -155,10 +160,17 @@ export function WithdrawOrderModal({ order, busy, onConfirm, onCancel }: Withdra
             <Button
               variant="danger"
               className={`flex-1 ${TOUCH}`}
-              onClick={() => onConfirm(returnDone && !!data?.done.length)}
-              disabled={busy}
+              onClick={() => onConfirm(data ? returnDone && data.done.length > 0 : returnDone)}
+              disabled={busy || !ready}
             >
-              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : t('baseSync.withdraw')}
+              {busy || !ready ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : noPreview ? (
+                t('baseSync.withdrawNoPreview')
+              ) : (
+                t('baseSync.withdraw')
+              )}
+
             </Button>
           </div>
         </CardContent>

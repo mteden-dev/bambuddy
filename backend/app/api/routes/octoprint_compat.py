@@ -23,6 +23,12 @@ is waiting for that decision while it is still in the folder it was uploaded
 to, not in the trash, and not referenced by a queue item -- see
 ``pending_slicer_uploads``. Nothing here changes the database schema.
 
+The dialog opens in every session of the uploader, so two devices can decide
+on one file. Whatever decides it says so over the WebSocket
+(``slicer_upload_decided``), the queue refuses a second job for a waiting
+upload unless it comes from the same decision (``claim_slicer_upload``), and
+the inbox's own discard refuses a file a queue job uses.
+
 The API key needs ``can_manage_library`` only: printing and queueing are done
 by the signed-in user in the app, not by the key.
 """
@@ -30,7 +36,7 @@ by the signed-in user in the app, not by the key.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -45,6 +51,7 @@ from backend.app.core.auth import (
     ApiKeyActor,
     RequestActor,
     require_any_permission_if_auth_enabled,
+    require_ownership_permission,
     require_permission_if_auth_enabled,
 )
 from backend.app.core.config import APP_VERSION
@@ -55,6 +62,7 @@ from backend.app.models.library import LibraryFile, LibraryFolder
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.user import User
 from backend.app.services.library_folder_access import can_write_folder, default_import_folder
+from backend.app.services.library_trash import library_trash_service
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +76,11 @@ INBOX_FOLDER_SETTING = "slicer_inbox_folder_id"
 _MAX_PLATE_INDEX = 999
 # What the WebSocket message is called (handled in frontend useWebSocket).
 SLICER_UPLOAD_WS_TYPE = "slicer_upload"
+# Sent when a waiting upload was queued, kept or discarded, so the dialog in
+# the uploader's other sessions moves on instead of offering it again.
+SLICER_DECIDED_WS_TYPE = "slicer_upload_decided"
+# The longest decision id a client may send; anything longer is cut.
+_MAX_CLAIM_LENGTH = 64
 
 # OctoPrint's own version is what OrcaSlicer reads; 1.1.0 or newer is required.
 _OCTOPRINT_API_VERSION = "0.1"
@@ -230,6 +243,95 @@ async def pending_slicer_uploads(db: AsyncSession, actor: User | ApiKeyActor | N
         .all()
     )
     return [f for f in files if f.id not in queued]
+
+
+def _clean_claim(claim: str | None) -> str | None:
+    text = (claim or "").strip()[:_MAX_CLAIM_LENGTH]
+    return text or None
+
+
+async def _queue_item_count(db: AsyncSession, file_id: int) -> int:
+    result = await db.execute(select(PrintQueueItem.id).where(PrintQueueItem.library_file_id == file_id))
+    return len(result.scalars().all())
+
+
+async def refuse_trashing_queued_upload(db: AsyncSession, library_file: LibraryFile) -> None:
+    """409 when the file manager would trash a waiting upload that a pending queue job prints.
+
+    The inbox's own discard refuses the same (``discard_slicer_upload``);
+    ``DELETE /library/files/{id}`` calls this so the trash there cannot leave
+    the job with nothing to print. Any other file is none of this.
+    """
+    if slicer_upload_info(library_file) is None or not _is_waiting(library_file):
+        return
+    pending = await db.execute(
+        select(PrintQueueItem.id).where(
+            PrintQueueItem.library_file_id == library_file.id, PrintQueueItem.status == "pending"
+        )
+    )
+    if pending.first() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This OrcaSlicer upload waits in the queue; cancel its job before moving it to the trash.",
+        )
+
+
+async def claim_slicer_upload(db: AsyncSession, library_file: LibraryFile, claim: str | None) -> bool:
+    """Refuse a second queue job for an upload another decision already queued.
+
+    Called by the queue (``add_to_queue``) for the file a job is about to be
+    created for, under the queue's insert lock. A file that is no slicer
+    upload, or one already kept in another folder, is none of this: True is
+    returned only for an upload still waiting in its inbox, so the caller
+    announces the decision once the job is committed.
+
+    ``claim`` is the decision id the app sends with the jobs of one decision
+    (one dialog printing the upload on several printers sends the same one).
+    The first job of a decision stores it on the file; a later job for the same
+    file passes only with that id. One from another device, or with none, is
+    answered 409: the upload is already in the queue.
+    """
+    info = slicer_upload_info(library_file)
+    if info is None or not _is_waiting(library_file):
+        return False
+    claim = _clean_claim(claim)
+    if await _queue_item_count(db, library_file.id):
+        if claim is None or info.get("claim") != claim:
+            raise HTTPException(
+                status_code=409,
+                detail="This OrcaSlicer upload is already in the queue (it was handled on another device).",
+            )
+        return True
+    if info.get("claim") != claim:
+        metadata = dict(library_file.file_metadata or {})
+        metadata[SLICER_UPLOAD_META_KEY] = {**info, "claim": claim}
+        library_file.file_metadata = metadata
+    return True
+
+
+async def announce_slicer_upload_decided(
+    library_file: LibraryFile,
+    decision: str,
+    actor: User | ApiKeyActor | None,
+    claim: str | None = None,
+) -> None:
+    """Tell the uploader's sessions (and the decider's) that an upload was decided.
+
+    ``decision`` is "queued", "kept", "discarded" or "restored" (an undone
+    discard, which waits again). ``claim`` comes back as sent, so the session
+    that decided can tell its own decision from another device's.
+    """
+    message = {
+        "type": SLICER_DECIDED_WS_TYPE,
+        "data": {"file_id": library_file.id, "decision": decision, "claim": _clean_claim(claim)},
+    }
+    owner = library_file.created_by_id
+    actor_id = getattr(actor, "id", None)
+    if owner is None:
+        # A key without owner: every session may be asked about it.
+        await ws_manager.broadcast_to_user(None, message)
+        return
+    await ws_manager.broadcast_to_users({i for i in (owner, actor_id) if i is not None}, message)
 
 
 # ---------------------------------------------------------------------------
@@ -399,3 +501,107 @@ async def list_pending_slicer_uploads(
             )
         )
     return out
+
+
+class SlicerUploadDecision(BaseModel):
+    """What the app sends with a decision on a waiting upload."""
+
+    # The decision id (see ``claim_slicer_upload``), echoed in the broadcast.
+    claim: str | None = None
+
+
+async def _owned_inbox_file(
+    db: AsyncSession,
+    file_id: int,
+    user: User | ApiKeyActor | None,
+    can_modify_all: bool,
+    *,
+    trashed: bool,
+) -> LibraryFile:
+    """The upload ``file_id`` still in its inbox, active or trashed, that the caller may delete."""
+    query = select(LibraryFile).where(
+        LibraryFile.id == file_id,
+        LibraryFile.source_type == SLICER_UPLOAD_SOURCE,
+        LibraryFile.deleted_at.isnot(None) if trashed else LibraryFile.deleted_at.is_(None),
+    )
+    file = (await db.execute(query)).scalar_one_or_none()
+    if file is None or not _is_waiting(file):
+        raise HTTPException(status_code=404, detail="No such upload from the slicer waits here")
+    if not can_modify_all and (user is None or file.created_by_id != user.id):
+        raise HTTPException(status_code=403, detail="You can only discard your own uploads")
+    return file
+
+
+@inbox_router.post("/{file_id}/discard")
+async def discard_slicer_upload(
+    file_id: int,
+    body: SlicerUploadDecision | None = None,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    auth_result: tuple[User | ApiKeyActor | None, bool] = Depends(
+        require_ownership_permission(Permission.LIBRARY_DELETE_ALL, Permission.LIBRARY_DELETE_OWN)
+    ),
+    actor: User | ApiKeyActor | None = RequestActor,
+):
+    """Move a waiting upload to the library trash ("Discard" in the app).
+
+    Refused with 409 while a queue job uses the file (it was queued on another
+    device meanwhile): trashing it would leave that job with nothing to print.
+    """
+    user, can_modify_all = auth_result
+    file = await _owned_inbox_file(db, file_id, user, can_modify_all, trashed=False)
+    if await _queue_item_count(db, file.id):
+        raise HTTPException(
+            status_code=409,
+            detail="This OrcaSlicer upload is in the queue (it was handled on another device); it was not discarded.",
+        )
+    file.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("Slicer upload %s discarded to the trash", file.id)
+    await announce_slicer_upload_decided(file, "discarded", actor, body.claim if body else None)
+    return {"status": "success", "id": file.id}
+
+
+@inbox_router.post("/{file_id}/restore")
+async def restore_slicer_upload(
+    file_id: int,
+    body: SlicerUploadDecision | None = None,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    auth_result: tuple[User | ApiKeyActor | None, bool] = Depends(
+        require_ownership_permission(Permission.LIBRARY_DELETE_ALL, Permission.LIBRARY_DELETE_OWN)
+    ),
+    actor: User | ApiKeyActor | None = RequestActor,
+):
+    """Undo "Discard": take a discarded upload out of the trash, so it waits again."""
+    user, can_modify_all = auth_result
+    file = await _owned_inbox_file(db, file_id, user, can_modify_all, trashed=True)
+    await library_trash_service.restore(db, file)
+    logger.info("Slicer upload %s restored from the trash", file.id)
+    await announce_slicer_upload_decided(file, "restored", actor, body.claim if body else None)
+    return {"status": "success", "id": file.id}
+
+
+@inbox_router.post("/{file_id}/kept")
+async def announce_slicer_upload_kept(
+    file_id: int,
+    body: SlicerUploadDecision | None = None,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = Depends(
+        require_any_permission_if_auth_enabled(Permission.LIBRARY_UPDATE_OWN, Permission.LIBRARY_UPDATE_ALL)
+    ),
+    actor: User | ApiKeyActor | None = RequestActor,
+):
+    """Say that an upload was kept in another folder (the app moves it itself).
+
+    Only for an upload of the caller's that really left its inbox; anything
+    else is 404, so no session is told of a decision that did not happen.
+    """
+    file = (
+        await db.execute(
+            LibraryFile.active().where(LibraryFile.id == file_id, LibraryFile.source_type == SLICER_UPLOAD_SOURCE)
+        )
+    ).scalar_one_or_none()
+    mine = actor is None or getattr(actor, "is_admin", False) or file is None or file.created_by_id == actor.id
+    if file is None or slicer_upload_info(file) is None or _is_waiting(file) or not mine:
+        raise HTTPException(status_code=404, detail="No such upload from the slicer was kept")
+    await announce_slicer_upload_decided(file, "kept", actor, body.claim if body else None)
+    return {"status": "success", "id": file.id}

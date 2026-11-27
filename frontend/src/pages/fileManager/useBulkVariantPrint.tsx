@@ -47,6 +47,10 @@ export function useBulkVariantPrint({
   // it does not tear the new one down.
   const advanced = useRef(false);
   const [partialPlan, setPartialPlan] = useState<BulkPrintPlan | null>(null);
+  // Fork: where a bulk Print of several jobs is ("Job 2 of 3"), and whether
+  // closing one is waiting for the user to say what happens to the rest.
+  const [chain, setChain] = useState<{ step: number; total: number } | null>(null);
+  const [discardPending, setDiscardPending] = useState(false);
 
   // The latest print request. A group's dialog waits for its fetch, so a
   // request made meanwhile (a version, another group) must not be overwritten
@@ -122,10 +126,13 @@ export function useBulkVariantPrint({
   const start = (next: BulkPrintPlan) => {
     if (next.fullGroups.length > 0) {
       const [first, ...rest] = next.fullGroups;
+      const total = next.fullGroups.length + (next.looseFiles.length > 0 ? 1 : 0);
+      setChain(total > 1 ? { step: 1, total } : null);
       setPrintQueue({ groups: rest, loose: next.looseFiles });
       void printVariantGroup(first);
       return;
     }
+    setChain(null);
     setPrintQueue(null);
     openLoose(next.looseFiles.length > 0 ? next.looseFiles : selectedSlicedFiles);
   };
@@ -161,7 +168,51 @@ export function useBulkVariantPrint({
   const reset = () => {
     setPrintOverride(null);
     setPrintQueue(null);
+    setChain(null);
+    setDiscardPending(false);
   };
+
+  // Jobs of a bulk Print still to open after the one on screen.
+  const remainingJobs = printQueue ? printQueue.groups.length + (printQueue.loose.length > 0 ? 1 : 0) : 0;
+
+  // Opens the next job of the queue; false when there is none.
+  const openNext = (): boolean => {
+    const queue = printQueue;
+    if (queue && queue.groups.length > 0) {
+      const [next, ...rest] = queue.groups;
+      setPrintQueue({ ...queue, groups: rest });
+      setChain((c) => (c ? { ...c, step: c.step + 1 } : c));
+      void printVariantGroup(next);
+      return true;
+    }
+    setPrintQueue(null);
+    if (queue && queue.loose.length > 0) {
+      setChain((c) => (c ? { ...c, step: c.step + 1 } : c));
+      openLoose(queue.loose);
+      return true;
+    }
+    setChain(null);
+    return false;
+  };
+
+  // The dialog was closed without queuing (fork). With jobs left, they are
+  // not dropped silently: true means the page asks first (`discardPending`).
+  const closeJob = (): boolean => {
+    if (remainingJobs > 0) {
+      setPrintOverride(null);
+      setDiscardPending(true);
+      return true;
+    }
+    reset();
+    return false;
+  };
+
+  // The answers to that question: skip just the closed job, or all the rest.
+  const nextJob = () => {
+    setDiscardPending(false);
+    openNext();
+  };
+  const discardRest = reset;
 
   // A job was queued. True when it was a group or a version, which leaves
   // only what was printed out of the selection and goes on with the next job
@@ -171,19 +222,7 @@ export function useBulkVariantPrint({
     setPrintOverride(null);
     if (!finished) return false;
     setSelectedFiles((prev) => prev.filter((id) => !finished.ids.includes(id)));
-    const queue = printQueue;
-    if (queue && queue.groups.length > 0) {
-      const [next, ...rest] = queue.groups;
-      setPrintQueue({ ...queue, groups: rest });
-      void printVariantGroup(next);
-      advanced.current = true;
-    } else if (queue) {
-      setPrintQueue(null);
-      if (queue.loose.length > 0) {
-        openLoose(queue.loose);
-        advanced.current = true;
-      }
-    }
+    if (printQueue && openNext()) advanced.current = true;
     return true;
   };
 
@@ -215,5 +254,11 @@ export function useBulkVariantPrint({
     consumeAdvance,
     reset,
     completeJob,
+    chain,
+    remainingJobs,
+    closeJob,
+    discardPending,
+    nextJob,
+    discardRest,
   };
 }

@@ -62,7 +62,7 @@ from backend.app.models.products import (
 )
 from backend.app.models.settings import Settings
 from backend.app.services import product_filament, product_planner as planner
-from backend.app.services.queue_reservations import model_key
+from backend.app.services.queue_reservations import YIELD_SETTING_KEY, model_key
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +114,11 @@ FORCE_COLOR_KEY = "product_force_color"
 HAND_PRINTS_KEY = "product_hand_prints_count"
 # Plates are planned with how long they really print and how often they fail
 # (services/plate_history.py). On unless set to "false": then the slicer's
-# times, and no plate counts as risky. No page sets it.
+# times, and no plate counts as risky.
 LEARN_HISTORY_KEY = "product_learn_history"
+# The planner's holds on printers yield when the printer cannot take the job
+# soon (services/queue_reservations.py); "false" makes them firm.
+RESERVATION_YIELD_KEY = YIELD_SETTING_KEY
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,7 @@ class PlanSettings:
     force_color: bool = True
     hand_prints_count: bool = False
     learn_history: bool = True
+    reservation_yield: bool = True
 
 
 def _bounded(raw: str | None, default: int, top: int) -> int:
@@ -148,6 +152,7 @@ async def read_plan_settings(db: AsyncSession) -> PlanSettings:
                             FORCE_COLOR_KEY,
                             HAND_PRINTS_KEY,
                             LEARN_HISTORY_KEY,
+                            RESERVATION_YIELD_KEY,
                         )
                     )
                 )
@@ -157,6 +162,7 @@ async def read_plan_settings(db: AsyncSession) -> PlanSettings:
     force = rows.get(FORCE_COLOR_KEY)
     hand = rows.get(HAND_PRINTS_KEY)
     learn = rows.get(LEARN_HISTORY_KEY)
+    yields = rows.get(RESERVATION_YIELD_KEY)
     return PlanSettings(
         prefer_minutes=_bounded(rows.get(PREFER_MINUTES_KEY), DEFAULT_PREFER_MINUTES, MAX_PREFER_MINUTES),
         prefer_pct=_bounded(rows.get(PREFER_PCT_KEY), DEFAULT_PREFER_PCT, 100),
@@ -164,6 +170,7 @@ async def read_plan_settings(db: AsyncSession) -> PlanSettings:
         force_color=True if force is None else force.strip().lower() == "true",
         hand_prints_count=hand is not None and hand.strip().lower() == "true",
         learn_history=learn is None or learn.strip().lower() != "false",
+        reservation_yield=yields is None or yields.strip().lower() != "false",
     )
 
 
@@ -175,6 +182,8 @@ async def write_plan_settings(
     swap_minutes: int | None = None,
     force_color: bool | None = None,
     hand_prints_count: bool | None = None,
+    learn_history: bool | None = None,
+    reservation_yield: bool | None = None,
 ) -> None:
     """Store the ones given. The caller commits."""
     if prefer_minutes is not None:
@@ -187,6 +196,10 @@ async def write_plan_settings(
         await upsert_setting(db, Settings, FORCE_COLOR_KEY, "true" if force_color else "false")
     if hand_prints_count is not None:
         await upsert_setting(db, Settings, HAND_PRINTS_KEY, "true" if hand_prints_count else "false")
+    if learn_history is not None:
+        await upsert_setting(db, Settings, LEARN_HISTORY_KEY, "true" if learn_history else "false")
+    if reservation_yield is not None:
+        await upsert_setting(db, Settings, RESERVATION_YIELD_KEY, "true" if reservation_yield else "false")
 
 
 # --- reading -----------------------------------------------------------------
@@ -670,7 +683,10 @@ async def _order_tag_lookup(db: AsyncSession, orders: list[ProductOrder]) -> dic
             )
         else:
             text = (order.notes or "").strip()
-            tags[order.id] = OrderTag(order.id, text[:24] or f"#{order.id}", text or f"#{order.id}", due=order.due_date)
+            label = text[:24] or f"#{order.id}"
+            # No title that only repeats the label (the chip would read "#1 · #1").
+            title = text if text and text != label else ""
+            tags[order.id] = OrderTag(order.id, label, title, due=order.due_date)
     return tags
 
 
@@ -1468,6 +1484,9 @@ async def _placed_on(db: AsyncSession, jobs: list[ProductJob], items: dict[int, 
     if ids:
         rows = (await db.execute(select(QueueReservation).where(QueueReservation.queue_item_id.in_(ids)))).scalars()
         for row in rows:
+            # A hold the user released stays only so the planner does not hold the job again: no hold.
+            if row.source == "released":
+                continue
             item = items.get(row.queue_item_id)
             if item is not None and _same_item(ProductJob(item_created_at=row.item_created_at), item):
                 reserved[row.queue_item_id] = row.printer_id
@@ -1946,6 +1965,49 @@ class PassOutcome:
     def of(self, product_id: int) -> PlanOutcome:
         return self.outcomes.get(product_id) or PlanOutcome(plan=None)
 
+    def displaced_changed(self) -> list[int]:
+        """The displaced products whose plan changed the queue (new jobs, or jobs taken out)."""
+        return [
+            product_id
+            for product_id in self.displaced
+            if (outcome := self.outcomes.get(product_id)) is not None and (outcome.item_ids or outcome.replaced)
+        ]
+
+    @property
+    def changed_ids(self) -> list[int]:
+        """Products other screens should read again: every one planned. The asked-for ones changed
+        (orders, stock), and a displaced one prints later even where it kept its jobs."""
+        return sorted(self.outcomes)
+
+
+@dataclass(frozen=True)
+class PassReport:
+    """What a pass did to products nobody asked about, for the answer to the request."""
+
+    # (product id, name, queue jobs made, queue jobs taken out)
+    also_replanned: list[tuple[int, str, int, int]]
+    # (product id, name): planned again behind a more urgent one, and that plan failed.
+    plan_failed: list[tuple[int, str]]
+
+
+async def pass_report(db: AsyncSession, done: PassOutcome | None) -> PassReport:
+    """The displaced products of ``done`` whose plan changed, and the ones whose plan failed."""
+    if done is None:
+        return PassReport([], [])
+    changed = done.displaced_changed()
+    displaced = set(done.displaced)
+    failed = [p for p in done.failed if p in displaced]
+    names: dict[int, str] = {}
+    if changed or failed:
+        rows = await db.execute(select(Product.id, Product.name).where(Product.id.in_([*changed, *failed])))
+        names = dict(rows.all())
+    return PassReport(
+        also_replanned=[
+            (p, names.get(p, f"#{p}"), len(done.outcomes[p].item_ids), done.outcomes[p].replaced) for p in changed
+        ],
+        plan_failed=[(p, names.get(p, f"#{p}")) for p in failed],
+    )
+
 
 async def replaceable_items(db: AsyncSession, product_ids: Iterable[int]) -> dict[int, frozenset[int]]:
     """Product id -> the queue jobs a replan of it is free to replace.
@@ -2092,6 +2154,23 @@ async def replan_pass(
     return result
 
 
+async def announce_replanned(product_ids: Iterable[int]) -> None:
+    """Tell every client which products were planned again, after the caller's commit.
+
+    One ``products_replanned`` message, so other screens read them again now
+    instead of at their next poll. Never raises: a request must not fail for it.
+    """
+    ids = sorted(set(product_ids))
+    if not ids:
+        return
+    try:
+        from backend.app.core.websocket import ws_manager
+
+        await ws_manager.broadcast({"type": "products_replanned", "product_ids": ids})
+    except Exception as e:
+        logger.warning("[PRODUCTS] Could not announce replanned products %s: %s", ids, e)
+
+
 async def announce_planned(item_ids: list[int]) -> None:
     """Tell the queue's listeners about the new jobs, after the caller's commit."""
     if not item_ids:
@@ -2215,6 +2294,37 @@ async def order_plates(db: AsyncSession, product_order_ids: set[int]) -> list[Or
     return result
 
 
+async def planned_times(db: AsyncSession, jobs: list[ProductJob]) -> dict[int, tuple[int | None, bool]]:
+    """Job id -> (the time the plan used for it, whether that time was learned).
+
+    The plan's time is its queue job's ``print_time_seconds``. Learned: it came
+    from the plate's history (the planner recorded the slicer's estimate with
+    the job, ``plan_info["estimate_s"]``) and differs from that estimate.
+    """
+    from backend.app.services.plate_history import recorded_estimate
+
+    ids = [job.queue_item_id for job in jobs if job.queue_item_id is not None]
+    times: dict[int, int | None] = {}
+    if ids:
+        rows = await db.execute(
+            select(PrintQueueItem.id, PrintQueueItem.print_time_seconds).where(PrintQueueItem.id.in_(ids))
+        )
+        times = dict(rows.all())
+    result = {}
+    for job in jobs:
+        planned = times.get(job.queue_item_id or -1)
+        estimate = recorded_estimate(job.plan_info)
+        learned = planned is not None and estimate is not None and not job.by_hand and planned != estimate
+        result[job.id] = (planned, learned)
+    return result
+
+
+# Why an open order has no estimate (see ``order_forecast``).
+NO_PRINTER = "no_printer"
+HELD = "held"
+NOTHING_QUEUED = "nothing_queued"
+
+
 async def order_estimates(
     db: AsyncSession, product: Product, pool: planner.Pool, orders: list[ProductOrder], forecast=None
 ) -> dict[int, datetime | None]:
@@ -2223,8 +2333,24 @@ async def order_estimates(
     The forecast as the planner sees it: a job held for filament prints once
     someone has loaded it (``QueueForecast.planning_placements``).
     """
+    return (await order_forecast(db, product, pool, orders, forecast))[0]
+
+
+async def order_forecast(
+    db: AsyncSession, product: Product, pool: planner.Pool, orders: list[ProductOrder], forecast=None
+) -> tuple[dict[int, datetime | None], dict[int, str | None]]:
+    """``order_estimates``, and for each open order why it has none (None when it has one).
+
+    ``nothing_queued``: no waiting or printing job serves it, or the ones that
+    do are all placed and it still lacks pieces; ``no_printer``: a waiting job
+    serving it is one the forecast places on no printer (none can take it
+    now); ``held``: a waiting job serving it is held for something else (its
+    waiting reason, not started yet, no model). Which jobs serve which order is
+    ``serve_in_order``'s answer, the jobs in the order they print. ``orders``
+    are in ``open_orders``' order.
+    """
     if not orders:
-        return {}
+        return {}, {}
     from backend.app.services.queue_forecast import build_queue_forecast
 
     if forecast is None:
@@ -2234,8 +2360,10 @@ async def order_estimates(
     placed = {p.item_id: p for p in forecast.planning_placements}
     free_at = {p.printer_id: _aware(p.free_at) or now for p in forecast.printers}
     part_ids = {p.id for p in product.parts}
+    specs = part_specs(product)
     arrivals = planner.stock_arrivals(pool, now)
-    for job in await active_jobs(db, product.id):
+    jobs = await active_jobs(db, product.id)
+    for job in jobs:
         pieces = counted_pieces(job, part_ids)
         if job.status == "printing":
             arrivals.append(
@@ -2245,7 +2373,42 @@ async def order_estimates(
             p = placed[job.queue_item_id]
             ready = ready_after(p.end) if ready_after is not None else p.end
             arrivals.append(planner.Arrival(max(ready, p.end), p.printer_id, pieces))
-    return planner.ready_times(part_specs(product), needs_of(orders), arrivals, now)
+    ready_at = planner.ready_times(specs, needs_of(orders), arrivals, now)
+    reasons: dict[int, str | None] = {order.id: None for order in orders}
+    if all(ready_at.get(order.id) is not None for order in orders):
+        return ready_at, reasons
+
+    # The jobs in the queue (printing, or a pending queue job the forecast read), in the order they print.
+    off = {entry.item_id: entry.reason for entry in forecast.off_timeline}
+    positions = {item_id: item.position or 0 for item_id, item in forecast.items.items()}
+    queued = sorted(
+        (
+            job
+            for job in jobs
+            if job.counted is not False and (job.status == "printing" or job.queue_item_id in forecast.items)
+        ),
+        key=lambda j: (
+            j.status != "printing",
+            positions.get(j.queue_item_id or -1, 0),
+            j.id,
+        ),
+    )
+    serving = serve_in_order(specs, pool, orders, [job_pieces(job, part_ids) for job in queued])
+    for order in orders:
+        if ready_at.get(order.id) is not None:
+            continue
+        unplaced = [
+            job
+            for job, served in zip(queued, serving, strict=True)
+            if order in served and job.status != "printing" and job.queue_item_id not in placed
+        ]
+        if not unplaced:
+            reasons[order.id] = NOTHING_QUEUED
+        elif any(off.get(job.queue_item_id or -1, "no_printer") == "no_printer" for job in unplaced):
+            reasons[order.id] = NO_PRINTER
+        else:
+            reasons[order.id] = HELD
+    return ready_at, reasons
 
 
 # --- the queue's hook -----------------------------------------------------------------
@@ -2346,6 +2509,7 @@ async def _replan_later(product_id: int, actor_id: int | None, manual_start: boo
             )
             await db.commit()
         await announce_planned(done.item_ids)
+        await announce_replanned(done.changed_ids)
         logger.info("[PRODUCTS] Replanned product %s after a print failed or was stopped", product_id)
     except Exception as e:
         logger.warning("[PRODUCTS] Could not replan product %s after a print failed or was stopped: %s", product_id, e)

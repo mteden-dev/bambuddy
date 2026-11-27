@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Link2Off, RefreshCw, Search, Settings2, ShoppingBag, X } from 'lucide-react';
 import { api } from '../../api/client';
-import type { BaseOrder, BaseSyncResult, Permission } from '../../api/client';
+import type { BaseOrder, BaseOrderAcceptProduct, BaseSyncResult, Permission } from '../../api/client';
 import { Card } from '../Card';
 import { Button } from '../Button';
 import { useToast } from '../../contexts/ToastContext';
@@ -11,15 +11,18 @@ import { useUiSettings } from '../../hooks/useUiSettings';
 import { formatDateTime } from '../../utils/date';
 import type { TimeFormat } from '../../utils/date';
 import { useUndoToast } from '../../hooks/useUndoToast';
-import { matchesSearch, SECTION_ORDER, sectionOf } from '../../utils/baseOrders';
+import { matchesSearch, ORDER_GRID, orderLate, SECTION_ORDER, sectionOf } from '../../utils/baseOrders';
+import { invalidatePlanQueries } from '../../utils/products';
 import type { OrderSection } from '../../utils/baseOrders';
 import { BaseSettingsModal } from './BaseSettingsModal';
 import { OrderPlatesModal } from './OrderPlatesModal';
 import { OrderRow } from './OrderRow';
 import { WithdrawOrderModal } from './WithdrawOrderModal';
+import { usePlanReport, withNote } from './usePlanReport';
+import { translateServerError } from '../../utils/serverMessages';
 
 // Bigger tap targets on a touch screen (an iPad at a printer), whatever its width.
-const TOUCH = 'pointer-coarse:min-h-11!';
+const TOUCH = 'any-pointer-coarse:min-h-[44px]!';
 
 type Filter = 'new' | 'accepted' | 'ready' | 'skipped' | 'cancelled' | 'all';
 type SourceFilter = 'all' | 'allegro' | 'shop';
@@ -76,6 +79,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const undoToast = useUndoToast();
+  const planNote = usePlanReport();
   const { data: ui } = useUiSettings();
   const timeFormat: TimeFormat = ui?.time_format || 'system';
   const canAct = hasPermission('queue:create' as Permission);
@@ -94,6 +98,21 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
   const [withdrawing, setWithdrawing] = useState<BaseOrder | null>(null);
   // The order whose planned plates are open (after sending it, or from its row).
   const [platesFor, setPlatesFor] = useState<BaseOrder | null>(null);
+  const withdrawingNow = useRef(withdrawing);
+  withdrawingNow.current = withdrawing;
+  // Orders with a request under way, each on its own: one order's answer leaves the others' buttons alone.
+  const [pendingIds, setPendingIds] = useState<Set<number>>(() => new Set());
+  const markPending = (orderId: number, busy: boolean) =>
+    setPendingIds((current) => {
+      const next = new Set(current);
+      if (busy) next.add(orderId);
+      else next.delete(orderId);
+      return next;
+    });
+  const tracked = {
+    onMutate: ({ order }: { order: BaseOrder }) => markPending(order.order_id, true),
+    onSettled: (_data: unknown, _error: unknown, { order }: { order: BaseOrder }) => markPending(order.order_id, false),
+  };
   const setFilter = (value: Filter) => {
     setFilterState(value);
     remember('baseOrders.filter', value);
@@ -132,12 +151,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
     document.getElementById(`order-${linked}`)?.scrollIntoView?.({ block: 'center' });
   }, [linked, ordersQuery.data]);
 
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['base-sync'] });
-    queryClient.invalidateQueries({ queryKey: ['products'] });
-    queryClient.invalidateQueries({ queryKey: ['product'] });
-    queryClient.invalidateQueries({ queryKey: ['queue'] });
-  };
+  const refresh = () => invalidatePlanQueries(queryClient);
 
   const syncMutation = useMutation({
     mutationFn: api.runBaseSync,
@@ -152,28 +166,34 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
   });
   const resetMutation = useMutation({
     mutationFn: ({ order }: { order: BaseOrder; restore: boolean }) => api.resetBaseOrder(order.order_id),
-    onSuccess: (_, { restore }) => {
+    ...tracked,
+    onSuccess: (sent, { restore }) => {
       refresh();
-      showToast(t(restore ? 'baseSync.toast.restored' : 'baseSync.toast.undone'), 'success');
+      showToast(withNote(t(restore ? 'baseSync.toast.restored' : 'baseSync.toast.undone'), planNote(sent)), 'success');
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
   const requeueMutation = useMutation({
     mutationFn: ({ order }: { order: BaseOrder }) => api.requeueBaseOrder(order.order_id),
+    ...tracked,
     onSuccess: (sent: BaseOrder) => {
       refresh();
       // Still missing after a fresh plan: no plate (or no printer) can make it.
       const short = sent.progress.some((p) => p.parts.some((part) => part.missing > 0));
-      showToast(t(short ? 'baseSync.toast.requeueShort' : 'baseSync.toast.requeued'), short ? 'warning' : 'success');
+      showToast(
+        withNote(t(short ? 'baseSync.toast.requeueShort' : 'baseSync.toast.requeued'), planNote(sent)),
+        short ? 'warning' : 'success',
+      );
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
   // Undo of a withdrawal: sent again, with what was held back and on hand as before.
   const undoWithdrawMutation = useMutation({
     mutationFn: ({ order }: { order: BaseOrder }) => api.acceptBaseOrder(order.order_id),
-    onSuccess: () => {
+    ...tracked,
+    onSuccess: (sent) => {
       refresh();
-      showToast(t('baseSync.toast.withdrawUndone'), 'success');
+      showToast(withNote(t('baseSync.toast.withdrawUndone'), planNote(sent)), 'success');
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
@@ -182,19 +202,23 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       order,
       action,
       returnDone,
+      body,
     }: {
       order: BaseOrder;
       action: 'accept' | 'skip' | 'withdraw';
       returnDone?: boolean;
+      body?: { products: BaseOrderAcceptProduct[] };
     }) =>
       action === 'accept'
-        ? api.acceptBaseOrder(order.order_id)
+        ? api.acceptBaseOrder(order.order_id, body)
         : api.skipBaseOrder(order.order_id, action === 'withdraw' ? { return_done: !!returnDone } : undefined),
+    ...tracked,
     onSuccess: (sent, { order, action }) => {
       refresh();
-      setWithdrawing(null);
-      if (expanded === order.order_id && action !== 'accept') setExpanded(null);
-      const message = t(
+      // Only this order's dialog closes; another order's stays as it is.
+      setWithdrawing((current) => (current?.order_id === order.order_id ? null : current));
+      if (action !== 'accept') setExpanded((current) => (current === order.order_id ? null : current));
+      const message = withNote(t(
         action === 'accept'
           ? sent.ready
             ? 'baseSync.toast.ready'
@@ -202,12 +226,14 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
           : action === 'withdraw'
             ? 'baseSync.toast.withdrawn'
             : 'baseSync.toast.skipped',
-      );
+      ), planNote(sent));
       // Sending, skipping or withdrawing an order can be taken back for a moment.
       if (action === 'withdraw') undoToast(message, () => undoWithdrawMutation.mutate({ order }));
       else undoToast(message, () => resetMutation.mutate({ order, restore: false }));
-      // Sent to print: the plates the plan chose, to prefer a printer for any.
-      if (action === 'accept' && sent.state === 'accepted' && !sent.ready) setPlatesFor(sent);
+      // Sent to print: the plates the plan chose, to prefer a printer for any; not over another dialog.
+      if (action === 'accept' && sent.state === 'accepted' && !sent.ready && !withdrawingNow.current) {
+        setPlatesFor((current) => current ?? sent);
+      }
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
@@ -244,15 +270,6 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
     if (!entry) return null;
     return kind === 'all' ? entry.allegro + entry.shop : entry[kind];
   };
-  const busyId = orderMutation.isPending
-    ? orderMutation.variables?.order.order_id
-    : resetMutation.isPending
-      ? resetMutation.variables?.order.order_id
-      : undoWithdrawMutation.isPending
-        ? undoWithdrawMutation.variables?.order.order_id
-        : requeueMutation.isPending
-        ? requeueMutation.variables?.order.order_id
-        : null;
 
   return (
     <div>
@@ -297,7 +314,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       {settings?.last_error && (
         <div className="flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 mb-4 text-sm text-red-600 dark:text-red-300">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>{t('baseSync.lastError', { error: settings.last_error })}</span>
+          <span>{t('baseSync.lastError', { error: translateServerError(settings.last_error) })}</span>
         </div>
       )}
 
@@ -421,15 +438,21 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
             />
           ) : (
             <div className="space-y-4">
-              {groups.map((group, groupIndex) => (
+              {groups.map((group, groupIndex) => {
+                const late = group.orders.filter(orderLate).length;
+                return (
                 <section key={group.section ?? 'all'}>
                   {group.section && (
-                    <h3 className="sticky top-0 z-10 bg-bambu-dark/95 backdrop-blur py-1.5 mb-1.5 text-xs font-semibold uppercase tracking-wide text-bambu-gray">
+                    // Sticks under the fixed compact header (--app-top), or at the top without one.
+                    <h3 className="sticky top-[var(--app-top,0px)] z-10 bg-bambu-dark/95 backdrop-blur py-1.5 mb-1.5 text-xs font-semibold uppercase tracking-wide text-bambu-gray">
                       {t(`baseSync.section.${group.section}`)} · {group.orders.length}
+                      {late > 0 && (
+                        <span className="text-red-600 dark:text-red-300"> · {t('baseSync.sectionLate', { n: late })}</span>
+                      )}
                     </h3>
                   )}
                   <div
-                    className={`${groupIndex === 0 ? 'hidden lg:grid' : 'hidden'} lg:grid-cols-[104px_200px_minmax(0,1fr)_230px_auto] gap-3 px-3 pb-1 text-xs text-bambu-gray`}
+                    className={`${groupIndex === 0 ? 'hidden xl:grid' : 'hidden'} ${ORDER_GRID} gap-3 px-3 pb-1 text-xs text-bambu-gray`}
                   >
                     <span>{t('baseSync.column.when')}</span>
                     <span>{t('baseSync.column.order')}</span>
@@ -447,8 +470,8 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                         canAct={canAct}
                         showState={filter === 'all' || !!search.trim()}
                         partNames={partNames}
-                        busy={busyId === order.order_id}
-                        onPrint={() => orderMutation.mutate({ order, action: 'accept' })}
+                        busy={pendingIds.has(order.order_id)}
+                        onPrint={(body) => orderMutation.mutate({ order, action: 'accept', body })}
                         onSkip={() => orderMutation.mutate({ order, action: 'skip' })}
                         onRestore={() => resetMutation.mutate({ order, restore: true })}
                         onWithdraw={() => setWithdrawing(order)}
@@ -458,7 +481,8 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                     ))}
                   </div>
                 </section>
-              ))}
+                );
+              })}
             </div>
           )}
         </>
@@ -469,7 +493,8 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       {withdrawing && (
         <WithdrawOrderModal
           order={withdrawing}
-          busy={orderMutation.isPending}
+          busy={pendingIds.has(withdrawing.order_id)}
+
           onConfirm={(returnDone) => orderMutation.mutate({ order: withdrawing, action: 'withdraw', returnDone })}
           onCancel={() => setWithdrawing(null)}
         />

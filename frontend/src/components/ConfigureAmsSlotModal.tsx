@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { X, Loader2, Settings2, ChevronDown, CheckCircle2, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import { api } from '../api/client';
-import type { AppSettings, KProfile } from '../api/client';
+import type { AppSettings, KProfile, RestorableSlotSpool } from '../api/client';
 import { matchesPrinterModelSuffix, presetCompatibility, buildCompatibilityIndex, extractPresetModel } from '../utils/slicerPrinterMatch';
 import { toFilamentId } from './spool-form/utils';
 import { cloudPresetFilamentId, cloudPresetFilamentIds, filamentIdToSettingId } from '../utils/filamentIds';
@@ -24,7 +24,8 @@ import {
   toggleHiddenFilamentPreset,
 } from '../utils/hiddenFilamentPresets';
 import { SlotSpoolAmountSection } from './slotSpool/SlotSpoolAmountSection';
-import { slotSpoolAmountRequest, slotSpoolAmountValid, type SlotSpoolAmount } from '../utils/slotSpools';
+import { FULL_ROLL_GRAMS, slotSpoolAmountRequest, slotSpoolAmountValid, type SlotSpoolAmount } from '../utils/slotSpools';
+import { useUndoToast } from '../hooks/useUndoToast';
 
 interface SlotInfo {
   amsId: number;
@@ -56,6 +57,8 @@ interface ConfigureAmsSlotModalProps {
   // Fork (slot spools): the dialog loads a roll. It asks how much is on it and,
   // once the slot is configured, starts counting on a slot spool.
   trackSlotSpool?: boolean;
+  // ...and the spool the slot holds now, which the new roll replaces.
+  replacesSpool?: { grams: number; slotSpool: boolean } | null;
 }
 
 // Known filament material types
@@ -247,6 +250,7 @@ export function ConfigureAmsSlotModal({
   fullScreen,
   printerState,
   trackSlotSpool,
+  replacesSpool,
 }: ConfigureAmsSlotModalProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
@@ -282,6 +286,10 @@ export function ConfigureAmsSlotModal({
   const [slotSpoolAmount, setSlotSpoolAmount] = useState<SlotSpoolAmount>({ kind: 'full' });
   const slotSpoolAmountRef = useRef<SlotSpoolAmount>(slotSpoolAmount);
   slotSpoolAmountRef.current = slotSpoolAmount;
+  // The roll picked to restore, as the dialog was set to it: the save renames
+  // the spool to the slot's preset and colour, so the dialog starts from the
+  // roll's own and says when they no longer match.
+  const [restoredFrom, setRestoredFrom] = useState<{ presetId: string; hex: string; caliIdx: number | null } | null>(null);
   const [colorHex, setColorHex] = useState<string>(''); // Just the 6-char hex, no alpha
   const [colorInput, setColorInput] = useState<string>(''); // User's text input (name or hex)
   const [searchQuery, setSearchQuery] = useState('');
@@ -319,12 +327,29 @@ export function ConfigureAmsSlotModal({
       }),
     onError: (error: Error) => showToast(error.message, 'error'),
   });
-  const toggleHiddenPreset = (presetId: string) => {
-    hiddenPresetsMutation.mutate({
-      hidden_filament_presets: serializeHiddenFilamentPresets(
-        toggleHiddenFilamentPreset(hiddenPresetIds, presetId),
-      ),
-    });
+  // Fork: hiding applies to the whole install, so a stray tap gets an "Undo".
+  const showUndoToast = useUndoToast();
+  const toggleHiddenPreset = (presetId: string, presetName?: string, hiding?: boolean) => {
+    hiddenPresetsMutation.mutate(
+      {
+        hidden_filament_presets: serializeHiddenFilamentPresets(
+          toggleHiddenFilamentPreset(hiddenPresetIds, presetId),
+        ),
+      },
+      {
+        onSuccess: (saved) => {
+          if (!hiding) return;
+          showUndoToast(t('configureAmsSlot.presetHidden', { name: presetName ?? presetId }), () => {
+            // From the list as saved, so the undo brings back only this preset.
+            const ids = parseHiddenFilamentPresets(saved.hidden_filament_presets);
+            if (!ids.has(presetId)) return;
+            hiddenPresetsMutation.mutate({
+              hidden_filament_presets: serializeHiddenFilamentPresets(toggleHiddenFilamentPreset(ids, presetId)),
+            });
+          });
+        },
+      },
+    );
   };
 
   // Fetch cloud settings (gracefully handle 401 when logged out)
@@ -724,6 +749,8 @@ export function ConfigureAmsSlotModal({
     onSuccess: () => {
       setShowSuccess(true);
       onSuccess?.();
+      // Fork (slot spools): the slot's rows and the restore list changed (see restorableQueryKey).
+      if (trackSlotSpool) queryClient.invalidateQueries({ queryKey: ['spool-assignments'] });
       // Close after showing success briefly
       scheduleClose(() => {
         setShowSuccess(false);
@@ -1240,6 +1267,7 @@ export function ConfigureAmsSlotModal({
       setSelectedPresetId('');
       setOpenedPresetId('');
       setSelectedKProfile(null);
+      setRestoredFrom(null);
       setColorHex('');
       setColorInput('');
       setSearchQuery('');
@@ -1262,6 +1290,14 @@ export function ConfigureAmsSlotModal({
       // The profile the spool is configured with for THIS hotend, if it still
       // exists on the printer. Ahead of the slot's live cali_idx, which is
       // whatever was selected last rather than what the spool is set to.
+      // Fork (slot spools): a roll picked to restore brings its own profile.
+      if (restoredFrom?.caliIdx != null && kprofilesData?.profiles) {
+        const restored = findProfileByCaliIdx(kprofilesData.profiles, restoredFrom.caliIdx, slotInfo.extruderId);
+        if (restored) {
+          setSelectedKProfile(restored);
+          return;
+        }
+      }
       if (slotSpoolDefaults?.cali_idx != null) {
         const configured = findProfileByCaliIdx(
           matchingKProfiles,
@@ -1292,6 +1328,8 @@ export function ConfigureAmsSlotModal({
   }, [
     selectedPresetId,
     matchingKProfiles,
+    restoredFrom?.caliIdx,
+    kprofilesData?.profiles,
     slotSpoolDefaults?.cali_idx,
     slotSpoolDefaults?.extruder,
     slotInfo.caliIdx,
@@ -1336,6 +1374,47 @@ export function ConfigureAmsSlotModal({
   const canSave = selectedPresetId && !configureMutation.isPending
     && (!trackSlotSpool || slotSpoolAmountValid(slotSpoolAmount));
 
+  // Fork (slot spools): set the slot to a roll picked to restore. The spool
+  // keeps its preset id as the inventory stores it, without the picker's
+  // local_/builtin_/orca_ prefix.
+  const restorePick = (roll: RestorableSlotSpool) => {
+    const raw = roll.slicer_filament || '';
+    const presetId = raw
+      ? [raw, `local_${raw}`, `builtin_${raw}`, `orca_${raw}`].find((id) => candidatePresets.some((p) => p.id === id)) ?? raw
+      : selectedPresetId;
+    const hex = (roll.rgba || '').slice(0, 6).toUpperCase() || colorHex;
+    const k = roll.k_profiles?.find(
+      (p) => p.extruder === (slotInfo.extruderId ?? 0) && p.nozzle_diameter === nozzleDiameter && (p.cali_idx ?? 0) > 0,
+    );
+    setRestoredFrom({ presetId, hex, caliIdx: k?.cali_idx ?? null });
+    if (presetId) setSelectedPresetId(presetId);
+    setColorHex(hex);
+    setColorInput(roll.color_name || '');
+  };
+  const restoreRenames = slotSpoolAmount.kind === 'restore' && restoredFrom != null
+    && (selectedPresetId !== restoredFrom.presetId || colorHex.toUpperCase() !== restoredFrom.hex);
+  const slotSpoolSection = trackSlotSpool ? (
+    <SlotSpoolAmountSection
+      value={slotSpoolAmount}
+      onChange={setSlotSpoolAmount}
+      rgba={colorHex || slotInfo.trayColor || undefined}
+      material={selectedPresetInfo?.material || slotInfo.trayType || undefined}
+      printerId={printerId}
+      onRestorePick={restorePick}
+      restoreRenames={restoreRenames}
+      replacesSpool={replacesSpool}
+    />
+  ) : null;
+  // The amount the save records, on the save button: a part roll must not go
+  // in as the preselected full kilogram unnoticed.
+  const slotSpoolSaveGrams = !trackSlotSpool
+    ? null
+    : slotSpoolAmount.kind === 'full'
+      ? FULL_ROLL_GRAMS
+      : slotSpoolAmount.kind === 'grams' && slotSpoolAmountValid(slotSpoolAmount)
+        ? slotSpoolAmount.grams
+        : null;
+
   // The preset list, shared by the kiosk and the regular layout. Each row is
   // the select button plus, for users who may change settings, a sibling
   // hide/unhide button (a button cannot sit inside another).
@@ -1353,7 +1432,7 @@ export function ConfigureAmsSlotModal({
             <button
               data-preset-id={preset.id}
               onClick={() => setSelectedPresetId(preset.id)}
-              className={`group w-full p-2 rounded-lg border text-left transition-colors ${canHidePresets ? 'pr-9' : ''} ${
+              className={`group w-full p-2 rounded-lg border text-left transition-colors ${canHidePresets ? 'pr-9 any-pointer-coarse:pr-12 any-pointer-coarse:min-h-[44px]' : ''} ${
                 selectedPresetId === preset.id
                   ? 'bg-bambu-green/20 border-bambu-green'
                   : 'bg-bambu-dark border-bambu-dark-tertiary hover:border-bambu-gray'
@@ -1388,7 +1467,7 @@ export function ConfigureAmsSlotModal({
             {canHidePresets && (
               <button
                 type="button"
-                onClick={() => toggleHiddenPreset(preset.id)}
+                onClick={() => toggleHiddenPreset(preset.id, preset.name, !preset.hidden)}
                 disabled={!presetHidingReady || hiddenPresetsMutation.isPending || (preset.source === 'builtin' && hideBuiltinPresets)}
                 title={
                   preset.source === 'builtin' && hideBuiltinPresets
@@ -1396,7 +1475,7 @@ export function ConfigureAmsSlotModal({
                     : preset.hidden ? t('configureAmsSlot.unhidePreset') : t('configureAmsSlot.hidePreset')
                 }
                 aria-label={`${preset.hidden ? t('configureAmsSlot.unhidePreset') : t('configureAmsSlot.hidePreset')}: ${preset.name}`}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-bambu-gray"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 any-pointer-coarse:min-w-[44px] any-pointer-coarse:min-h-[44px] any-pointer-coarse:right-0 inline-flex items-center justify-center rounded text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-bambu-gray"
               >
                 {preset.hidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
               </button>
@@ -1529,6 +1608,9 @@ export function ConfigureAmsSlotModal({
               </div>
             </div>
           )}
+
+          {/* Fork (slot spools): the amount first, not at the bottom of the scroll. */}
+          {!fullScreen && slotSpoolSection}
 
           {isLoading ? (
             <div className="flex justify-center py-8">
@@ -1873,13 +1955,7 @@ export function ConfigureAmsSlotModal({
               </div>
             </>
           )}
-          {trackSlotSpool && (
-            <SlotSpoolAmountSection
-              value={slotSpoolAmount}
-              onChange={setSlotSpoolAmount}
-              rgba={colorHex || slotInfo.trayColor || undefined}
-            />
-          )}
+          {fullScreen && slotSpoolSection}
         </div>
 
         {/* Footer */}
@@ -1921,7 +1997,11 @@ export function ConfigureAmsSlotModal({
               ) : (
                 <>
                   <Settings2 className="w-4 h-4" />
-                  {t('configureAmsSlot.configureSlot')}
+                  {slotSpoolSaveGrams != null
+                    ? `${t('configureAmsSlot.configureSlot')} · ${t('slotSpool.amountGrams', { grams: Math.round(slotSpoolSaveGrams) })}`
+                    : trackSlotSpool && slotSpoolAmount.kind === 'restore'
+                      ? t('slotSpool.saveWithRestore', { label: t('configureAmsSlot.configureSlot') })
+                      : t('configureAmsSlot.configureSlot')}
                 </>
               )}
             </Button>

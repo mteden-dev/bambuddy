@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { Boxes } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ProductsView } from '../components/products/ProductsView';
+import { useProductsReplanned } from '../components/products/useProductsReplanned';
 
 /**
  * Fork (products): products made of parts and their orders, on their own page.
@@ -12,6 +13,8 @@ import { ProductsView } from '../components/products/ProductsView';
 export function ProductsPage() {
   const { t } = useTranslation();
   const { hasPermission } = useAuth();
+  // A plan made elsewhere (another tab, the queue, a Base read) shows here too.
+  useProductsReplanned();
   const search = new URLSearchParams(window.location.search);
   const tab = search.get('tab');
   if (tab === 'base' || tab === 'qc') {

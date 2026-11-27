@@ -181,4 +181,44 @@ describe('AmsColorPalette', () => {
     expect(await screen.findByTitle('White')).toBeInTheDocument();
     expect(api.updateSettings).not.toHaveBeenCalled();
   });
+
+  it('names the selected colour without a hover, and how many are behind the + button', async () => {
+    // iOS neither hovers nor focuses a tapped button.
+    renderPalette({ selectedHex: 'FFA500' });
+    expect(await screen.findByTestId('ams-palette-shown')).toHaveTextContent('Selected: Orange #FFA500');
+    expect(screen.getByTitle('Show more colors')).toHaveTextContent('+24');
+  });
+
+  it('shows and picks the default colours in the UI language, keeping them stored in English', async () => {
+    const { default: i18n } = await import('../../i18n');
+    await i18n.changeLanguage('pl');
+    try {
+      const { onPick } = renderPalette();
+      fireEvent.click(await screen.findByTitle('Biały'));
+      // The picked name becomes the spool's colour name.
+      expect(onPick).toHaveBeenCalledWith('Biały', 'FFFFFF');
+
+      const edit = await screen.findByRole('button', { name: 'Edytuj kolory' });
+      await waitFor(() => expect(edit).not.toBeDisabled());
+      fireEvent.click(edit);
+      // The editor shows the names as the picker does.
+      expect(screen.getByDisplayValue('Biały')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Usuń kolor: Czarny' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Zapisz kolory' }));
+      await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
+      const saved = JSON.parse(mocked(api.updateSettings).mock.calls[0][0].ams_color_palette);
+      expect(saved[0]).toEqual({ name: 'White', hex: 'FFFFFF' });
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
+  it('gives a dragged row data, which WebKit wants before it starts a drag', async () => {
+    renderPalette();
+    await openEditor();
+    const grip = screen.getAllByTitle('Drag to reorder')[0];
+    const setData = vi.fn();
+    fireEvent.dragStart(grip, { dataTransfer: { setData, effectAllowed: '' } });
+    expect(setData).toHaveBeenCalledWith('text/plain', '0');
+  });
 });

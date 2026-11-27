@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSlicedForOtherPrinter, sortPickerFiles } from '../../utils/printPicker';
+import { isSlicedForOtherPrinter, slicedForRelatedModel, sortPickerFiles } from '../../utils/printPicker';
 import type { LibraryFileListItem } from '../../api/client';
 
 const f = (id: number, over: Partial<LibraryFileListItem>): LibraryFileListItem => ({
@@ -17,6 +17,19 @@ describe('isSlicedForOtherPrinter', () => {
   it('compares models case-insensitively', () => {
     expect(isSlicedForOtherPrinter({ sliced_for_model: 'x1c' }, 'X1C')).toBe(false);
     expect(isSlicedForOtherPrinter({ sliced_for_model: 'A1' }, 'X1C')).toBe(true);
+  });
+  it('lets a related model through, as the print dialog and the backend do (fork)', () => {
+    expect(isSlicedForOtherPrinter({ sliced_for_model: 'P1S' }, 'P1P')).toBe(false);
+    expect(isSlicedForOtherPrinter({ sliced_for_model: 'H2S' }, 'P1P')).toBe(true);
+  });
+});
+
+describe('slicedForRelatedModel', () => {
+  it('names the related model a file was sliced for, nothing for the same or an unrelated one', () => {
+    expect(slicedForRelatedModel({ sliced_for_model: 'P1S' }, 'P1P')).toBe('P1S');
+    expect(slicedForRelatedModel({ sliced_for_model: 'p1p' }, 'P1P')).toBeNull();
+    expect(slicedForRelatedModel({ sliced_for_model: 'A1' }, 'P1P')).toBeNull();
+    expect(slicedForRelatedModel({ sliced_for_model: null }, 'P1P')).toBeNull();
   });
 });
 

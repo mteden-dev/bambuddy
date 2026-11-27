@@ -28,10 +28,12 @@ from backend.app.services.printer_tags import (
     PRINTER_TAGS_KEY,
     PrinterTags,
     TagRouting,
+    printer_queue_filter,
     read_printer_tags,
     set_override,
     write_printer_tags,
 )
+from backend.app.services.queue_reservations import release, reserve
 
 TRAY, LEFT, TOY = 1, 2, 3
 
@@ -311,3 +313,51 @@ class TestQueuePass:
         item = await self._item(farm, item_id)
         assert item.waiting_reason is not None
         assert "printer tags" not in item.waiting_reason
+
+
+class TestPrinterCardWithAHold:
+    """The printer card's queue list and the queue timeline's holds (printer_queue_filter)."""
+
+    async def _shown_on(self, ctx, item_id, *, source, printing=None):
+        """The printers whose card lists the job held for printer 2. ``printing``: id -> minutes left."""
+        printing = printing or {}
+        async with ctx.session_maker() as db:
+            await reserve(db, await db.get(PrintQueueItem, item_id), 2, source=source)
+            await db.commit()
+        with (
+            patch("backend.app.services.printer_manager.printer_manager.is_connected", MagicMock(return_value=True)),
+            patch(
+                "backend.app.services.printer_manager.printer_manager.get_status",
+                lambda pid: SimpleNamespace(state="RUNNING", remaining_time=printing[pid]) if pid in printing else None,
+            ),
+        ):
+            async with ctx.session_maker() as db:
+                item = await _load(db, item_id)
+                allows = await printer_queue_filter(db, [item])
+                return {pid for pid in (1, 2, 3) if allows(item, pid)}
+
+    async def test_someones_hold_shows_only_on_its_printer(self, farm):
+        assert await self._shown_on(farm, await _add_job(farm, 11), source="user", printing={2: 9 * 60}) == {2}
+
+    async def test_the_planners_hold_shows_only_on_its_printer_while_that_is_nearly_done(self, farm):
+        # Done within the margin (30 minutes for an hour's print): the job waits for it.
+        item_id = await _add_job(farm, 11)
+        assert await self._shown_on(farm, item_id, source="plan", printing={2: 20}) == {2}
+
+    async def test_the_planners_hold_gives_way_while_its_printer_is_busy_for_long(self, farm):
+        assert await self._shown_on(farm, await _add_job(farm, 11), source="plan", printing={2: 9 * 60}) == {1, 2, 3}
+
+    async def test_giving_way_still_keeps_to_the_jobs_tags(self, farm):
+        await _tag_printers(farm, {1: ({TRAY}, False), 2: ({TRAY}, False)})
+        item_id = await _add_job(farm, 10)
+        assert await self._shown_on(farm, item_id, source="plan", printing={2: 9 * 60}) == {1, 2}
+
+    async def test_a_released_hold_holds_nothing(self, farm):
+        item_id = await _add_job(farm, 11)
+        async with farm.session_maker() as db:
+            await reserve(db, await db.get(PrintQueueItem, item_id), 2, source="plan")
+            await db.commit()
+            assert await release(db, item_id) is True
+            await db.commit()
+        # The planner holding it again (as _shown_on does) leaves the release be.
+        assert await self._shown_on(farm, item_id, source="plan", printing={2: 20}) == {1, 2, 3}

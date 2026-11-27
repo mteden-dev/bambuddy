@@ -98,6 +98,23 @@ describe('Button', () => {
       expect(button.className).toContain('px-6');
       expect(button.className).toContain('py-3');
     });
+
+    // Fork: the touch minimum is dropped only for a fine primary pointer from
+    // md up; any coarse pointer keeps it at every width (an iPad is touch).
+    it.each([
+      ['sm', '44px'],
+      ['md', '44px'],
+      ['lg', '48px'],
+    ] as const)('keeps the %s touch minimum for a coarse pointer at any width', (size, min) => {
+      render(<Button size={size}>Touch</Button>);
+
+      const classes = screen.getByRole('button').className.split(/\s+/);
+      expect(classes).toContain(`min-h-[${min}]`);
+      expect(classes).toContain('md:pointer-fine:min-h-0');
+      expect(classes).toContain(`any-pointer-coarse:min-h-[${min}]`);
+      // Width alone never shrinks it.
+      expect(classes).not.toContain('md:min-h-0');
+    });
   });
 
   // Accessibility tests

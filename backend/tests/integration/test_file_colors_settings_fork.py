@@ -30,3 +30,11 @@ async def test_a_null_does_not_switch_it_off(async_client: AsyncClient):
     response = await async_client.put("/api/v1/settings/", json={"require_file_colors": None})
     assert response.status_code in (200, 422)
     assert (await async_client.get("/api/v1/settings/")).json()["require_file_colors"] is True
+
+
+async def test_the_print_dialog_can_read_it(async_client: AsyncClient):
+    # Through ui-flags, which needs no settings:read: the dialog warns of a job
+    # that would wait for a colour no printer has.
+    assert (await async_client.get("/api/v1/settings/ui-flags")).json()["require_file_colors"] is False
+    await async_client.put("/api/v1/settings/", json={"require_file_colors": True})
+    assert (await async_client.get("/api/v1/settings/ui-flags")).json()["require_file_colors"] is True

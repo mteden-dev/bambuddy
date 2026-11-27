@@ -189,9 +189,9 @@ import { HeaterHistoryModal } from '../components/HeaterHistoryModal';
 import type { HeaterSensorKind, PrintQueueItem } from '../api/client';
 import { queueHold } from '../utils/queueHold';
 import { queueItemDisplayName } from '../utils/queueItemName';
-import { SlotSpoolActions, SlotSpoolAdjustModal, SlotSpoolBadge } from '../components/slotSpool/SlotSpoolSlotUi';
+import { SlotSpoolActions, SlotSpoolAdjustModal, SlotSpoolAsks, SlotSpoolBadge, SlotSpoolNote, type SlotSpoolAsk } from '../components/slotSpool/SlotSpoolSlotUi';
 import { useKeepSameRoll, useSlotSpoolPrompts } from '../hooks/useSlotSpools';
-import { SLOT_SPOOL_ORIGIN, canLoadSlotRoll, slotSpoolRingClass, slotSpoolState, spoolGramsLeft } from '../utils/slotSpools';
+import { SLOT_SPOOL_ORIGIN, canLoadSlotRoll, slotHasRoll, slotSpoolOutlineClass, slotSpoolRingClass, slotSpoolState, spoolGramsLeft } from '../utils/slotSpools';
 import { FilamentHoverCard, EmptySlotHoverCard } from '../components/FilamentHoverCard';
 import { AssignSpoolModal } from '../components/AssignSpoolModal';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
@@ -2122,6 +2122,7 @@ function PrinterCard({
   amsThresholds,
   spoolmanEnabled = false,
   spoolmanModeOn = false,
+  assignmentsKnown = false,
   linkedSpools,
   spoolmanUrl,
   onGetAssignment,
@@ -2164,6 +2165,11 @@ function PrinterCard({
   spoolmanEnabled?: boolean;
   /** Spoolman mode is on, connected or not: the built-in slot rows don't apply (#3430). */
   spoolmanModeOn?: boolean;
+  /**
+   * Fork (slot spools): the inventory mode and the slot rows have loaded. Until
+   * then a slot without a row may still hold a counted roll.
+   */
+  assignmentsKnown?: boolean;
   linkedSpools?: Record<string, LinkedSpoolInfo>;
   spoolmanUrl?: string | null;
   onGetAssignment?: (printerId: number, amsId: number, trayId: number) => SpoolAssignment | undefined;
@@ -2346,6 +2352,8 @@ function PrinterCard({
     label?: string;
     // Fork (slot spools): opened to load a roll, so it also asks how much is on it.
     trackSlotSpool?: boolean;
+    // ...and the spool the slot holds now, which the new roll replaces.
+    replacesSpool?: { grams: number; slotSpool: boolean } | null;
   } | null>(null);
   const [showFirmwareModal, setShowFirmwareModal] = useState(false);
   const [plateCheckResult, setPlateCheckResult] = useState<{
@@ -2554,11 +2562,15 @@ function PrinterCard({
 
   // Fork (slot spools): which slots light up ("new" roll, "same roll?") and what
   // their cards offer. Built-in inventory only; utils/slotSpools has the rules.
-  const slotSpoolsEnabled = !spoolmanModeOn && !spoolmanEnabled && hasPermission('inventory:update');
+  // Nothing lights before the slot rows and the inventory mode are known: a
+  // slot read as holding no spool would offer to replace a counted roll.
+  const slotSpoolMode = spoolmanModeOn || spoolmanEnabled ? 'spoolman' : 'builtin';
+  const slotSpoolsEnabled = slotSpoolMode === 'builtin' && assignmentsKnown && hasPermission('inventory:update');
   const hasSlotSpoolPrompt = useSlotSpoolPrompts(slotSpoolsEnabled);
   const keepSameRoll = useKeepSameRoll();
-  const [slotSpoolAdjust, setSlotSpoolAdjust] = useState<InventorySpool | null>(null);
-  const slotSpoolView = (amsId: number, slotId: number, tray: AMSTray | undefined, savedPresetId: string | undefined) => {
+  const [slotSpoolAdjust, setSlotSpoolAdjust] = useState<{ spool: InventorySpool; feedsPrint: boolean } | null>(null);
+  const slotSpoolPrinting = status?.state === 'RUNNING' || status?.state === 'PAUSE';
+  const slotSpoolInfo = (amsId: number, slotId: number, tray: AMSTray | undefined, globalId: number) => {
     const assignment = onGetAssignment?.(printer.id, amsId, slotId);
     const slotSpool = slotSpoolsEnabled && assignment?.spool?.data_origin === SLOT_SPOOL_ORIGIN ? assignment.spool : null;
     // Any spool in the slot can have its amount corrected, a Bambu RFID roll the
@@ -2569,34 +2581,59 @@ function PrinterCard({
     const state = slotSpoolState({
       enabled,
       tray,
-      hasAssignment: !!assignment,
+      hasAssignment: assignmentsKnown ? !!assignment : null,
       isBambuSpool,
       hasPrompt: hasSlotSpoolPrompt(printer.id, amsId, slotId),
       slotSpoolLeft: slotSpool ? spoolGramsLeft(slotSpool) : null,
     });
+    const openNewRoll = (savedPresetId?: string) => setConfigureSlotModal({
+      amsId,
+      trayId: slotId,
+      trayType: tray?.tray_type || undefined,
+      trayColor: tray?.tray_color || undefined,
+      traySubBrands: tray?.tray_sub_brands || undefined,
+      trayInfoIdx: tray?.tray_info_idx || undefined,
+      extruderId: resolveSlotExtruder(amsId, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
+      caliIdx: tray?.cali_idx,
+      savedPresetId,
+      trackSlotSpool: true,
+      replacesSpool: assignment?.spool
+        ? { grams: Math.max(0, spoolGramsLeft(assignment.spool)), slotSpool: assignment.spool.data_origin === SLOT_SPOOL_ORIGIN }
+        : null,
+    });
+    // The running print is charged in full at its end, so a correction made
+    // while it feeds from this slot would count its earlier part twice.
+    const feedsPrint = slotSpoolPrinting && (
+      effectiveTrayNow === globalId
+      || (Array.isArray(status?.ams_mapping) && status.ams_mapping.includes(globalId))
+      || (status?.tray_change_log ?? []).some(([trayId]) => trayId === globalId)
+    );
+    return { state, enabled, isBambuSpool, adjustSpool, openNewRoll, feedsPrint };
+  };
+  const slotSpoolView = (amsId: number, slotId: number, tray: AMSTray | undefined, savedPresetId: string | undefined, globalId: number) => {
+    const info = slotSpoolInfo(amsId, slotId, tray, globalId);
+    const hasRoll = slotHasRoll(tray);
+    const note = !hasRoll || !hasPermission('printers:control')
+      ? null
+      : slotSpoolMode === 'spoolman'
+        ? 'spoolman' as const
+        : info.isBambuSpool && slotSpoolsEnabled
+          ? 'rfid' as const
+          : null;
     return {
-      ring: slotSpoolRingClass(state),
-      badge: <SlotSpoolBadge state={state} />,
+      ring: slotSpoolRingClass(info.state),
+      outline: slotSpoolOutlineClass(info.state),
+      badge: <SlotSpoolBadge state={info.state} />,
       actions: (
         <SlotSpoolActions
-          state={state}
-          spool={adjustSpool}
-          canLoad={canLoadSlotRoll({ enabled, tray, isBambuSpool })}
+          state={info.state}
+          spool={info.adjustSpool}
+          canLoad={canLoadSlotRoll({ enabled: info.enabled, tray, isBambuSpool: info.isBambuSpool })}
+          note={note}
           busy={keepSameRoll.isPending}
           onSameRoll={() => keepSameRoll.mutate({ printerId: printer.id, amsId, trayId: slotId })}
-          onAdjust={setSlotSpoolAdjust}
-          onNewRoll={() => setConfigureSlotModal({
-            amsId,
-            trayId: slotId,
-            trayType: tray?.tray_type || undefined,
-            trayColor: tray?.tray_color || undefined,
-            traySubBrands: tray?.tray_sub_brands || undefined,
-            trayInfoIdx: tray?.tray_info_idx || undefined,
-            extruderId: resolveSlotExtruder(amsId, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
-            caliIdx: tray?.cali_idx,
-            savedPresetId,
-            trackSlotSpool: true,
-          })}
+          onAdjust={(spool) => setSlotSpoolAdjust({ spool, feedsPrint: info.feedsPrint })}
+          onNewRoll={() => info.openNewRoll(savedPresetId)}
         />
       ),
     };
@@ -2655,6 +2692,32 @@ function PrinterCard({
   const effectiveTrayNow = (currentTrayNow !== undefined && currentTrayNow !== 255)
     ? currentTrayNow
     : cachedTrayNow.current;
+
+  // Fork (slot spools): every slot that asks for something, for the line under
+  // the AMS row. After effectiveTrayNow, which slotSpoolInfo reads.
+  const slotSpoolAsks: SlotSpoolAsk[] = [];
+  if (slotSpoolsEnabled) {
+    for (const unit of amsData) {
+      for (const tray of unit.tray) {
+        const slotId = Number(tray.id);
+        if (!Number.isFinite(slotId)) continue;
+        const globalId = getGlobalTrayId(unit.id, slotId, false, unit.ams_type);
+        const info = slotSpoolInfo(unit.id, slotId, tray, globalId);
+        if (!info.state) continue;
+        const preset = slotPresets?.[globalId];
+        const savedPresetId = slotPresetDescribesTray(preset?.preset_id, tray.tray_info_idx, preset?.tray_info_idx)
+          ? preset?.preset_id
+          : undefined;
+        slotSpoolAsks.push({
+          key: `${unit.id}-${slotId}`,
+          label: formatSlotLabel(unit.id, slotId, isAmsHtUnit(unit.id), false, unit.ams_type),
+          state: info.state,
+          onNewRoll: () => info.openNewRoll(savedPresetId),
+          onSameRoll: () => keepSameRoll.mutateAsync({ printerId: printer.id, amsId: unit.id, trayId: slotId }),
+        });
+      }
+    }
+  }
 
   // Runout / filament-replacement guidance (#2587). The backend fills these only
   // while the print is PAUSED (global tray IDs, or null when idle/unresolvable):
@@ -2971,7 +3034,11 @@ function PrinterCard({
       // Fork: a next job waiting for Start does not start now the plate is
       // clear. Say so before anyone walks away expecting it to.
       const queued = queryClient.getQueryData<PrintQueueItem[]>(['queue', printer.id, 'pending', printer.model]);
-      const next = queued?.find((item) => item.status === 'pending');
+      // The job PrinterQueueWidget shows as next: the first one this printer's filaments fit.
+      const next = queued
+        ? filterCompatibleQueueItems(queued, loadedFilamentTypes, loadedFilaments, loadedVariants)
+          .find((item) => item.status === 'pending')
+        : undefined;
       const hold = next ? queueHold(next, t) : null;
       if (next && hold) {
         showToast(t('queue.hold.afterClear', { name: queueItemDisplayName(next), reason: hold.text }), 'warning');
@@ -3047,7 +3114,7 @@ function PrinterCard({
         type="button"
         onClick={() => plateQc.beforeClear(() => clearPlateMutation.mutate())}
         disabled={clearPlateMutation.isPending || plateQc.checking || !hasPermission('printers:clear_plate')}
-        className="mt-2 w-full inline-flex items-center justify-center gap-2 px-3 py-1.5 pointer-coarse:min-h-11 rounded-lg bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors text-xs font-medium disabled:opacity-50"
+        className="mt-2 w-full inline-flex items-center justify-center gap-2 px-3 py-1.5 pointer-coarse:min-h-[44px] rounded-lg bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-300 dark:border-yellow-400/40 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 transition-colors text-xs font-medium disabled:opacity-50"
         title={!hasPermission('printers:clear_plate') ? t('printers.permission.noControl') : t('printers.plateStatus.markCleared')}
       >
         {clearPlateMutation.isPending || plateQc.checking ? (
@@ -5821,7 +5888,7 @@ function PrinterCard({
                                 const slotPresetName = slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx)
                                   ? slotPreset?.preset_name
                                   : undefined;
-                                const slotSpoolUi = slotSpoolView(ams.id, slotIdx, tray, slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx) ? slotPreset?.preset_id : undefined);
+                                const slotSpoolUi = slotSpoolView(ams.id, slotIdx, tray, slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx) ? slotPreset?.preset_id : undefined, globalTrayId);
 
                                 // Fill level fallback chain: Spoolman → Inventory → AMS remain
                                 const trayTag = (tray?.tray_uuid || tray?.tag_uid || getFallbackSpoolTag(printer.serial_number, ams.id, slotIdx))?.toUpperCase();
@@ -5906,7 +5973,7 @@ function PrinterCard({
                                           : isActive
                                             ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark'
                                             : slotSpoolUi.ring
-                                    }`}
+                                    } ${slotSpoolUi.outline}`}
                                   >
                                     {isExpectedSlot && (
                                       <span
@@ -6140,7 +6207,7 @@ function PrinterCard({
                         ? slotPreset?.preset_name
                         : undefined;
                       const htSlotId = tray?.id ?? 0;
-                      const htSlotSpoolUi = slotSpoolView(ams.id, htSlotId, tray, slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx) ? slotPreset?.preset_id : undefined);
+                      const htSlotSpoolUi = slotSpoolView(ams.id, htSlotId, tray, slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx) ? slotPreset?.preset_id : undefined, globalTrayId);
 
                         // Fill level fallback chain: Spoolman → Inventory → AMS remain
                         const htTrayTag = (tray?.tray_uuid || tray?.tag_uid || getFallbackSpoolTag(printer.serial_number, ams.id, htSlotId))?.toUpperCase();
@@ -6215,7 +6282,7 @@ function PrinterCard({
                                   : isActive
                                     ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark'
                                     : htSlotSpoolUi.ring
-                            }`}
+                            } ${htSlotSpoolUi.outline}`}
                           >
                             {isExpectedSlot && (
                               <span
@@ -6614,6 +6681,10 @@ function PrinterCard({
                                 slotId: slotTrayId,
                                 loadTrayId: extTrayId,
                                 includeRfid: false,
+                                // Fork: say slot spools stop here rather than offer nothing.
+                                slotSpoolActions: slotSpoolMode === 'builtin' && slotHasRoll(extTray) && hasPermission('printers:control')
+                                  ? <SlotSpoolNote reason="external" />
+                                  : undefined,
                               });
                               const extCloudInfo = extTray.tray_info_idx ? filamentInfo?.[extTray.tray_info_idx] : null;
                               const extSlotPreset = slotPresets?.[255 * 4 + slotTrayId];
@@ -6851,6 +6922,8 @@ function PrinterCard({
                         );
                       })()}
                   </div>
+                  {/* Fork (slot spools): what the slots ask, in words */}
+                  <SlotSpoolAsks asks={slotSpoolAsks} busy={keepSameRoll.isPending} />
                 </div>
               );
             })()}
@@ -7619,6 +7692,7 @@ function PrinterCard({
           nozzleDiameter={resolveSlotNozzleDiameter(status, configureSlotModal.amsId)}
           printerState={status?.state}
           trackSlotSpool={configureSlotModal.trackSlotSpool}
+          replacesSpool={configureSlotModal.replacesSpool}
           onSuccess={() => {
             // Refresh slot presets to show updated profile name
             queryClient.invalidateQueries({ queryKey: ['slotPresets', printer.id] });
@@ -7630,7 +7704,11 @@ function PrinterCard({
 
       {/* Fork (slot spools): correct how much is left on a slot's roll */}
       {slotSpoolAdjust && (
-        <SlotSpoolAdjustModal spool={slotSpoolAdjust} onClose={() => setSlotSpoolAdjust(null)} />
+        <SlotSpoolAdjustModal
+          spool={slotSpoolAdjust.spool}
+          feedsPrint={slotSpoolAdjust.feedsPrint}
+          onClose={() => setSlotSpoolAdjust(null)}
+        />
       )}
 
       {/* Which hotend to feed — only asked on a printer with a Filament Track Switch */}
@@ -8869,6 +8947,8 @@ function EditPrinterModal({
     setSaveWarning(null);
   };
 
+  // Fork: whether this save has stored the tags already (see doSave).
+  const tagsSavedRef = useRef(false);
   const updateMutation = useMutation({
     mutationFn: (data: Partial<PrinterCreate>) => api.updatePrinter(printer.id, data),
     onSuccess: () => {
@@ -8876,7 +8956,14 @@ function EditPrinterModal({
       queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
       onClose();
     },
-    onError: (error: Error) => showToast(error.message || t('printers.toast.failedToUpdate'), 'error'),
+    // Fork: the tags are saved first; when they went through, say that only
+    // the printer's own fields failed.
+    onError: (error: Error) => showToast(
+      tagsSavedRef.current
+        ? t('printerTags.printerSaveFailed', { error: error.message || t('printers.toast.failedToUpdate') })
+        : error.message || t('printers.toast.failedToUpdate'),
+      'error',
+    ),
   });
 
   // Close on Escape key
@@ -8906,6 +8993,7 @@ function EditPrinterModal({
     if (form.access_code) {
       data.access_code = form.access_code;
     }
+    tagsSavedRef.current = false;
     if (tagIds === null && tagsExclusive === null) {
       updateMutation.mutate(data);
       return;
@@ -8917,9 +9005,10 @@ function EditPrinterModal({
         queryClient.invalidateQueries({ queryKey: printerTagsQueryKey });
         // Each card's queue list leaves out the jobs its tags refuse.
         queryClient.invalidateQueries({ queryKey: ['queue'] });
+        tagsSavedRef.current = true;
         updateMutation.mutate(data);
       },
-      (error: Error) => showToast(error.message || t('printerTags.saveFailed'), 'error'),
+      (error: Error) => showToast(t('printerTags.tagsSaveFailed', { error: error.message || t('printerTags.saveFailed') }), 'error'),
     );
   };
 
@@ -9515,12 +9604,14 @@ export function PrintersPage() {
   const linkedSpools = linkedSpoolsData?.linked;
 
   // Fetch spool assignments for inventory feature
-  const { data: spoolAssignments } = useQuery({
+  const { data: spoolAssignments, isSuccess: spoolAssignmentsLoaded } = useQuery({
     queryKey: ['spool-assignments'],
     queryFn: () => api.getAssignments(),
     enabled: hasPermission('inventory:view_assignments'),
     staleTime: 30 * 1000,
   });
+  // Fork (slot spools): a slot reads as "no spool" only once both are in.
+  const slotAssignmentsKnown = spoolmanStatus !== undefined && spoolAssignmentsLoaded;
 
   const unassignMutation = useMutation({
     mutationFn: ({ printerId, amsId, trayId }: { printerId: number; amsId: number; trayId: number }) =>
@@ -10467,6 +10558,7 @@ export function PrintersPage() {
                       } : undefined}
                       spoolmanEnabled={spoolmanEnabled}
                       spoolmanModeOn={!!spoolmanStatus?.enabled}
+                      assignmentsKnown={slotAssignmentsKnown}
                       linkedSpools={linkedSpools}
                       spoolmanUrl={spoolmanStatus?.url}
                       onGetAssignment={getAssignment}
@@ -10514,6 +10606,7 @@ export function PrintersPage() {
               cardSize={cardSize}
               spoolmanEnabled={spoolmanEnabled}
               spoolmanModeOn={!!spoolmanStatus?.enabled}
+              assignmentsKnown={slotAssignmentsKnown}
               linkedSpools={linkedSpools}
               spoolmanUrl={spoolmanStatus?.url}
               onGetAssignment={getAssignment}

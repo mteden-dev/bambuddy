@@ -4,6 +4,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import { Card, CardContent } from './Card';
 import { Button } from './Button';
 import { withColorSquares } from '../utils/colorSquares';
+import { useUpstreamModalLayer } from '../hooks/useModalBehavior';
 
 interface ConfirmModalProps {
   title: string;
@@ -58,6 +59,7 @@ export function ConfirmModal({
   const resolvedConfirmText = confirmText ?? t('common.confirm');
   const resolvedCancelText = cancelText ?? t('common.cancel');
   const resolvedLoadingText = loadingText ?? t('common.loading');
+  useUpstreamModalLayer(); // fork: a fork dialog under this one leaves Escape to it
   // Close on Escape key (but not while loading, nor when not dismissible)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

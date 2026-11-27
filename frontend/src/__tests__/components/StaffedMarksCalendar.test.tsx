@@ -16,7 +16,8 @@ const away = (start: string, end: string): QueueStaffedMark => ({
   kind: 'away',
 });
 
-function renderCalendar(marks: QueueStaffedMark[] = [], readOnly = false) {
+/** Fork: a finger paints only in edit mode, so the tests below turn it on unless told not to. */
+function renderCalendar(marks: QueueStaffedMark[] = [], readOnly = false, edit = true) {
   const onChange = vi.fn();
   render(
     <StaffedMarksCalendar
@@ -29,6 +30,7 @@ function renderCalendar(marks: QueueStaffedMark[] = [], readOnly = false) {
       t={t}
     />,
   );
+  if (edit && !readOnly) fireEvent.click(screen.getByTestId('staffed-calendar-edit'));
   return onChange;
 }
 
@@ -220,6 +222,36 @@ describe('StaffedMarksCalendar', () => {
     renderCalendar([away('24T00:00', '24T08:00'), away('24T10:00', '24T12:00')]);
 
     expect(screen.getAllByTestId('staffed-mark-row')).toHaveLength(1);
+  });
+
+  describe('a finger outside edit mode (fork)', () => {
+    it('lets a swipe scroll the sheet and paints nothing', () => {
+      const onChange = renderCalendar([], false, false);
+      const grid = screen.getByTestId('staffed-calendar-grid');
+
+      expect(grid.style.touchAction).toBe('pan-y');
+      drag([0, 2], [5, 2]);
+      expect(onChange).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('staffed-calendar-edit'));
+      expect(grid.style.touchAction).toBe('none');
+      drag([0, 0], [0, 8]);
+      expect(onChange).toHaveBeenCalledWith([away('24T00:00', '24T08:00')]);
+    });
+
+    it('picks a mark tapped, and a mouse paints without edit mode', () => {
+      const onChange = renderCalendar([away('24T10:00', '24T12:00'), away('26T10:00', '26T12:00')], false, false);
+      const grid = screen.getByTestId('staffed-calendar-grid');
+
+      drag([2, 11], [2, 11]);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(screen.getAllByTestId('staffed-mark-row')[1]).toHaveAttribute('data-picked', 'true');
+
+      fireEvent.pointerDown(grid, point([5, 0], 'mouse'));
+      fireEvent.pointerMove(grid, point([5, 4], 'mouse'));
+      fireEvent.pointerUp(grid, point([5, 4], 'mouse'));
+      expect(onChange).toHaveBeenCalledWith(expect.arrayContaining([away('29T00:00', '29T04:00')]));
+    });
   });
 
   it('changes nothing read-only', () => {

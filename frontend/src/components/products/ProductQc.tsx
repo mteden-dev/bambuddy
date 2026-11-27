@@ -14,6 +14,7 @@ import { useUndoToast } from '../../hooks/useUndoToast';
 import { useModalBehavior } from '../../hooks/useModalBehavior';
 import { formatDateTime, formatRelativeTime, parseUTCDate } from '../../utils/date';
 import type { TimeFormat } from '../../utils/date';
+import { usePlanReport, withNote } from './usePlanReport';
 
 // part id -> bad pieces
 type Bad = Record<number, number>;
@@ -21,7 +22,7 @@ type Bad = Record<number, number>;
 type Reprint = ProductQcReprint | null;
 
 // Bigger tap targets on a touch screen (an iPad at a printer), whatever its width.
-const TOUCH = 'pointer-coarse:min-h-11!';
+const TOUCH = 'any-pointer-coarse:min-h-[44px]!';
 // Finished prints wait this long on the list (the backend's QC window).
 const WINDOW_DAYS = 7;
 // A plate finished this recently is likely still too warm to judge.
@@ -61,11 +62,12 @@ function useCheckJob(job: ProductQcJob, source: 'dialog' | 'plate_clear' = 'dial
   const { showToast } = useToast();
   const undoToast = useUndoToast();
   const afterCheck = useAfterCheck();
+  const planNote = usePlanReport();
   const undo = useMutation({
     mutationFn: () => api.uncheckProductJob(job.id),
-    onSuccess: () => {
+    onSuccess: (result) => {
       afterCheck();
-      showToast(t('products.qc.undone'), 'success');
+      showToast(withNote(t('products.qc.undone'), planNote(result)), 'success');
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
@@ -81,7 +83,7 @@ function useCheckJob(job: ProductQcJob, source: 'dialog' | 'plate_clear' = 'dial
         : result.replanned
           ? 'products.qc.savedReplanned'
           : 'products.qc.saved';
-      undoToast(t(message), () => undo.mutate());
+      undoToast(withNote(t(message), planNote(result)), () => undo.mutate());
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
@@ -432,7 +434,7 @@ export function PlateQcModal({ job, olderCount, printerName, onClose, onDone }: 
   // Still warm: "later" is the main answer.
   const [fresh] = useState(() => Date.now() - (parseUTCDate(job.finished_at)?.getTime() ?? 0) < FRESH_MS);
   const check = useCheckJob(job, 'plate_clear');
-  useModalBehavior(onClose, dialogRef, check.isPending);
+  useModalBehavior(onClose, dialogRef, { busy: check.isPending, backCloses: 'narrow' });
 
   const checkButton = (
     <Button
@@ -459,9 +461,10 @@ export function PlateQcModal({ job, olderCount, printerName, onClose, onDone }: 
   );
 
   return createPortal(
-    // Clicks stay here: the printer card underneath reacts to clicks of its own.
+    // Clicks stay here: the printer card underneath reacts to clicks of its own. A bottom sheet
+    // on a phone, a centred dialog from sm (an iPad too), like the fork's other dialogs.
     <div
-      className="fixed inset-0 bg-black/50 flex items-center pointer-coarse:items-end justify-center z-50 p-4 pointer-coarse:px-2 pointer-coarse:pb-0"
+      className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 sm:p-4"
       onClick={(e) => e.stopPropagation()}
     >
       <div
@@ -470,7 +473,7 @@ export function PlateQcModal({ job, olderCount, printerName, onClose, onDone }: 
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="w-full max-w-lg max-h-[90dvh] flex flex-col bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl pointer-coarse:rounded-b-none shadow-xl"
+        className="w-full sm:max-w-lg max-h-[90dvh] flex flex-col bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl rounded-b-none sm:rounded-b-xl shadow-xl"
       >
         <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-bambu-dark-tertiary shrink-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -502,7 +505,7 @@ export function PlateQcModal({ job, olderCount, printerName, onClose, onDone }: 
           )}
         </div>
         {/* Touch: three full-width buttons, one under another; a mouse: one row. */}
-        <div className="flex flex-col pointer-fine:sm:flex-row-reverse gap-2 px-4 py-3 border-t border-bambu-dark-tertiary shrink-0">
+        <div className="flex flex-col pointer-fine:sm:flex-row-reverse gap-2 px-4 py-3 max-sm:any-pointer-coarse:pb-8 border-t border-bambu-dark-tertiary shrink-0">
           {fresh && !anyBad ? laterButton : checkButton}
           {fresh && !anyBad ? checkButton : laterButton}
           <Button variant="ghost" className={`${TOUCH} w-full pointer-fine:sm:w-auto pointer-fine:sm:mr-auto`} onClick={onClose} disabled={check.isPending}>
@@ -527,7 +530,7 @@ export function PrinterQcModal({ printerId, printerName, canAct, onClose }: Prin
   const { t } = useTranslation();
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
-  useModalBehavior(onClose, dialogRef);
+  useModalBehavior(onClose, dialogRef, { backCloses: 'narrow' });
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['products', 'qc', 'printer', printerId],
     queryFn: () => api.getProductsToCheck(printerId),
@@ -536,7 +539,7 @@ export function PrinterQcModal({ printerId, printerName, canAct, onClose }: Prin
 
   return createPortal(
     <div
-      className="fixed inset-0 bg-black/50 flex items-center pointer-coarse:items-end justify-center z-50 p-4 pointer-coarse:px-2 pointer-coarse:pb-0"
+      className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 sm:p-4"
       onClick={(e) => e.stopPropagation()}
     >
       <div
@@ -545,7 +548,7 @@ export function PrinterQcModal({ printerId, printerName, canAct, onClose }: Prin
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="w-full max-w-lg max-h-[90dvh] flex flex-col bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl pointer-coarse:rounded-b-none shadow-xl"
+        className="w-full sm:max-w-lg max-h-[90dvh] flex flex-col bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl rounded-b-none sm:rounded-b-xl shadow-xl"
       >
         <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-bambu-dark-tertiary shrink-0">
           <h2 id={titleId} className="text-lg font-semibold text-white truncate">
@@ -560,7 +563,7 @@ export function PrinterQcModal({ printerId, printerName, canAct, onClose }: Prin
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-4 space-y-2 overflow-y-auto min-h-0">
+        <div className="p-4 max-sm:any-pointer-coarse:pb-8 space-y-2 overflow-y-auto min-h-0">
           {isLoading ? (
             <div className="text-center py-8 text-bambu-gray">{t('common.loading')}</div>
           ) : isError ? (

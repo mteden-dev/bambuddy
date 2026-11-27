@@ -1,4 +1,5 @@
 import { Minus } from 'lucide-react';
+import { TOUCH_HIT_AREA } from '../../pages/fileManager/useCoarsePointer';
 
 // The tick box of a variant group: checked when every version in the folder is
 // selected, indeterminate when only some are (#3628). A real button, so it can
@@ -35,9 +36,11 @@ export function VariantSelectionBox({
         onToggle();
       }}
       onDoubleClick={(e) => e.stopPropagation()}
+      // Fork: a 44px hit area on a touch device; the hit area needs a
+      // positioned box, and one placed absolutely already is.
       className={`${size} rounded border-2 flex-shrink-0 flex items-center justify-center p-0 transition-all ${
         all || some ? 'bg-bambu-green border-bambu-green' : 'border-bambu-gray/50'
-      } ${className}`}
+      } ${/\babsolute\b/.test(className) ? '' : 'relative'} ${TOUCH_HIT_AREA} ${className}`}
     >
       {all && <div className="w-2 h-2 bg-white rounded-sm" />}
       {some && <Minus className="w-3 h-3 text-white" strokeWidth={3} />}

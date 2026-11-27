@@ -181,8 +181,8 @@ w SimplyPrint. Flaga `print` zmienia tylko domyślnie zaznaczony przycisk
 |---|---|---|
 | **Drukuj** | Okno druku: wybór drukarki, mapowanie AMS, start „Jak najszybciej”, płyta zaznaczona z `plateindex` | `PrintModal` z `cleanupLibraryAfterDispatch` ([types.ts:49](frontend/src/components/PrintModal/types.ts:49)), jak wysyłka z karty drukarki ([PrintersPage.tsx:6973](frontend/src/pages/PrintersPage.tsx:6973)) |
 | **Dodaj do kolejki** | Jedno kliknięcie, szczegóły niżej | `POST /queue/` ([print_queue.py:85](backend/app/schemas/print_queue.py:85)) |
-| **Zapisz w plikach** | Przeniesienie ze skrzynki do wybranego folderu, opcjonalnie zmiana nazwy | `POST /library/files/move` |
-| **Odrzuć** | Plik do kosza biblioteki | kosz biblioteki |
+| **Zapisz w plikach** | Przeniesienie ze skrzynki do wybranego folderu, opcjonalnie zmiana nazwy | `POST /library/files/move`, potem `POST /api/v1/slicer-inbox/{id}/kept` |
+| **Odrzuć** | Plik do kosza biblioteki, w toaście „Cofnij” | `POST /api/v1/slicer-inbox/{id}/discard` (cofnięcie: `/restore`) |
 
 Po „Drukuj” plik znika z biblioteki po wysłaniu na drukarkę. Kopia zostaje
 w archiwum, więc można drukować ponownie.
@@ -204,6 +204,29 @@ w archiwum, więc można drukować ponownie.
   - plik nie ma zapisanego modelu drukarki (np. ogólny profil),
   - żadna aktywna drukarka nie ma tego modelu,
   - użytkownik nie ma uprawnienia do kolejki „dowolna drukarka modelu”.
+
+### Jedna decyzja na przesłanie (kilka urządzeń)
+
+Okno pyta w każdej otwartej sesji wysyłającego (telefon, iPad, zakładka Device), więc:
+
+- Każda decyzja ma swój identyfikator (`slicer_inbox_claim`: id karty przeglądarki + licznik).
+  Zadania kolejki z tej decyzji wysyłają go w `POST /queue/`; pierwsze zapisuje go przy pliku, a
+  kolejne zadanie dla tego samego przesłania przechodzi tylko z tym samym identyfikatorem (druk
+  jednej decyzji na kilku drukarkach). Inny identyfikator albo brak dostaje 409 („This OrcaSlicer
+  upload is already in the queue”). Dotyczy to też druku czekającego przesłania z Menedżera plików
+  na drugiej drukarce: przejdzie dopiero, gdy plik zostanie zapisany w innym folderze.
+- Przed każdą akcją okno sprawdza, czy plik dalej czeka. Po decyzji (dodanie do kolejki, zapis w
+  plikach, odrzucenie, cofnięte odrzucenie) backend wysyła komunikat WebSocket
+  `slicer_upload_decided` (`file_id`, `decision`: `queued` / `kept` / `discarded` / `restored`,
+  `claim`) do sesji właściciela i decydującego; inne urządzenia pokazują przez chwilę „Obsłużone
+  na innym urządzeniu: …” zamiast pytać dalej.
+- „Odrzuć” (`POST /api/v1/slicer-inbox/{id}/discard`) przenosi plik do kosza, z „Cofnij” w toaście
+  (`/restore` przywraca go do skrzynki, plik znowu czeka). Odrzucenie pliku, którego zadanie jest
+  już w kolejce (dodane na innym urządzeniu), dostaje 409; tak samo `DELETE /library/files/{id}`
+  z Menedżera plików dla czekającego przesłania z oczekującym zadaniem w kolejce (409 „waits in the
+  queue”), żeby zadanie nie zostało bez pliku.
+- „Zdecyduj później” (albo zamknięcie) odkłada plik, a mały przycisk „Z OrcaSlicer czeka: N”
+  przywraca okno, więc stale otwarty telefon nie gubi plików do następnego przeładowania.
 
 ---
 
@@ -305,6 +328,11 @@ podpięty na końcu listy routerów w [main.py](backend/app/main.py):
   czyli wciąż w folderze, do którego trafiły, nie w koszu i bez wpisu w
   kolejce. Zwykłe pliki wrzucone ręcznie do skrzynki się nie liczą.
 - Middleware dla zakładki Device (patrz uwaga w sekcji 3).
+- Jedna decyzja na przesłanie (sekcja 4): `slicer_inbox_claim` w `POST /queue/`
+  (`claim_slicer_upload`, pod blokadą wstawiania kolejki), `POST /api/v1/slicer-inbox/{id}/discard`,
+  `/restore` i `/kept`, komunikat `slicer_upload_decided`; usuwanie z Menedżera plików odmawia
+  czekającego przesłania z oczekującym zadaniem (`refuse_trashing_queued_upload`, wpięte w
+  `DELETE /library/files/{id}`).
 - Ustawienia: `slicer_inbox_folder_id`, `slicer_inbox_manual_start` (ten drugi
   też w `/settings/ui-flags`).
 
@@ -318,8 +346,9 @@ podpięty na końcu listy routerów w [main.py](backend/app/main.py):
   „dowolna drukarka modelu”; po odmowie toast z powodem i `PrintModal` na
   „Kolejka” (nowy prop `initialScheduleOptions`). *Zapisz w plikach*: zmiana
   nazwy + przeniesienie (skrzynka nie jest oferowana jako cel, ostatni folder
-  jest zapamiętywany). *Odrzuć*: kosz biblioteki. Zamknięcie odkłada plik do
-  następnego otwarcia bambuddy.
+  jest zapamiętywany; foldery mają pełną ścieżkę, np. „H2S / Boxes”). *Odrzuć*: kosz biblioteki
+  z „Cofnij”. Zamknięcie odkłada plik, a przycisk „Z OrcaSlicer czeka: N” przywraca okno.
+  Decyzja z innego urządzenia: „Obsłużone na innym urządzeniu”.
 - Karta [SlicerUploadSettings.tsx](frontend/src/components/SlicerUploadSettings.tsx)
   w *Ustawienia → Wirtualna drukarka*: instrukcja dla Orca z adresem do
   skopiowania, wybór skrzynki, ręczny start.

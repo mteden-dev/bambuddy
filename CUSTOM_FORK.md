@@ -8,30 +8,51 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
   - ukrywanie presetów filamentu i wbudowanych nazw w oknie *Configure AMS Slot*,
   - edytowalna paleta szybkich kolorów (podgląd hexa po najechaniu, dodawanie, ukrywanie, kolejność),
   - przycisk *Drukuj* na karcie drukarki otwiera wybór pliku z biblioteki (foldery, szukanie, sortowanie,
-    tylko pliki pocięte dla tej drukarki); wysyłanie nowego pliku to opcja w tym samym oknie,
+    tylko pliki pocięte dla tej drukarki; plik dla P1S jest też na P1P, z plakietką „pocięty dla
+    P1S”); wysyłanie nowego pliku to opcja w tym samym oknie,
   - drukowanie kilku plików jako osobne zadania na jednej drukarce: każdy plik ma własny panel
     mapowania filamentów; plik zmieniony w panelu dostaje to mapowanie, pozostałe jak dotąd
-    dobiera scheduler przy starcie wydruku,
+    dobiera scheduler przy starcie wydruku. Tray wybrany ręcznie w panelu idzie jako wymuszone
+    nadpisanie filamentu („ten slot drukuje filament z tamtego traya”, typ i kolor), a nie jako
+    sztywny tray z pominiętą kontrolą: zadanie może ruszyć po godzinach, gdy w trayu jest już inna
+    szpula. Plik, którego filamentów nie udało się odczytać, dostaje linię o tym zamiast panelu,
   - wysyłanie z OrcaSlicer jak do SimplyPrint: bambuddy udaje hosta OctoPrint
     (`/api/version`, `/api/files/local`), plik czeka w folderze-skrzynce
     „OrcaSlicer”, a aplikacja pyta wysyłającego: drukuj / dodaj do kolejki /
-    zapisz w plikach / odrzuć (szczegóły i ustawienia Orca w
+    zapisz w plikach / odrzuć; jedno przesłanie dostaje jedną decyzję na wszystkich
+    urządzeniach (inne pokazują „Obsłużone na innym urządzeniu”), odrzucenie ma „Cofnij”, a
+    zamknięte okno zostawia przycisk „Z OrcaSlicer czeka: N” (szczegóły i ustawienia Orca w
     [ORCA_SLICER_UPLOAD.md](ORCA_SLICER_UPLOAD.md)),
   - w plikach (widok siatki i listy) podfoldery otwartego folderu są nad jego plikami, jak w
     SimplyPrint: klik otwiera folder, można na nie upuścić inny folder, mają to samo menu co w
-    drzewku; folder z samymi podfolderami nie pokazuje już „Folder jest pusty”,
+    drzewku; folder z samymi podfolderami nie pokazuje już „Folder jest pusty”. Otwarty folder
+    jest w adresie (`?folder=`): Wstecz wraca folder wyżej, a powrót do Plików z innej strony
+    otwiera ostatni folder tej karty przeglądarki. Na ekranie dotykowym zaznaczenie ma dolny pasek
+    akcji (reszta pod „Więcej”), chipy tagów tylko pokazują tagi, a folderów nie przeciąga się
+    (służy do tego „Przenieś”); poniżej 480 px podfoldery chowają się pod przełącznikiem
+    „Foldery (N)”,
   - **przeniesiony z upstream PR [#3643](https://github.com/maziggy/bambuddy/pull/3643)**
     (jeszcze niezmergowany, stan `f579f75b`): grupa wersji („Grupuj jako wersje”) to jedna
     karta / wiersz w siatce, liście i kolumnach; wersje otwierają się w miejscu (lista, kolumny)
     albo w popoverze pod kartą (siatka, na telefonie dolny panel). Backend: lista plików ma
     `?with_variant_members=true`, a endpointy grup pokazują tylko wersje, które użytkownik
     może czytać, i zmianę grupy pozwalają tylko właścicielowi **wszystkich** jej aktywnych
-    plików (albo z uprawnieniem update-all). Bez migracji bazy; wpis w CHANGELOG pominięty,
+    plików (albo z uprawnieniem update-all). Bez migracji bazy; wpis w CHANGELOG pominięty.
+    Na wierzchu forka: do istniejącej grupy dodaje się wersję z menu grupy („Dodaj wersję…”:
+    pocięte pliki z folderu, poza grupą, na drukarkę, dla której grupa nie ma jeszcze wersji) albo
+    z paska zaznaczenia („Dodaj do grupy”: zaznaczone luźne pliki do zaznaczonej grupy); „Usuń z
+    grupy” ma „Cofnij”, a na telefonie Wstecz zamyka dolny panel wersji. Masowy druk kilku grup
+    pokazuje „Zadanie x z y” i przed pominięciem reszty pyta „Pominąć pozostałe zadania?”,
   - druk grupy wersji (na wierzchu #3643): okno druku ma przełącznik **Pierwsza wolna drukarka**
     (alternatywy jak dotąd, ale wersję można odznaczyć) / **Wybrane drukarki** (lista tylko
     drukarek, do których pasuje któraś wersja; każda zaznaczona dostaje osobne zadanie z wersją
     dla swojego modelu, dla P1P wersję P1S z ostrzeżeniem). W menu karty grupy jest
     **Drukuj na…**, a druk grupy z karty drukarki od razu bierze wersję dla tej drukarki.
+    Gdy część drukarek odmówi, okno zostaje otwarte z podsumowaniem (w kolejce / nie dodano z
+    powodem / jeszcze nie próbowano) i **„Ponów pozostałe”**; zaznaczone zostają tylko drukarki,
+    które odmówiły. Okno otwarte ponownie dla tej samej grupy zaczyna od drukarek już dodanych
+    (pokazane jako zrobione, „Zacznij od nowa” to kasuje), więc żadna para plik–drukarka nie
+    trafia do kolejki dwa razy; stan trzyma przeglądarka przez 6 h w ramach sesji (sessionStorage).
     Tylko frontend, backend dostaje zwykłe zadania lub alternatywy,
   - **tagi drukarek**: drukarka dostaje tagi z tego samego katalogu co pliki (Pliki → Tagi,
     masowo przez „Taguj” na pasku zaznaczenia) w oknie edycji drukarki, opcjonalnie z
@@ -39,7 +60,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     wszystkie jego tagi; drukarka „tylko z tagami” bierze wyłącznie zadania z którymś z jej tagów.
     Tagi zadania to tagi jego pliku, które ma jakaś drukarka (czytane przy każdym przebiegu
     kolejki, więc otagowanie plików kieruje też czekające zadania), chyba że w oknie druku
-    zmieniono je dla tego zadania. Plik z takim tagiem otwiera okno druku na „Dowolna <model>”.
+    zmieniono je dla tego zadania. Plik z takim tagiem otwiera okno druku na „Dowolna <model>”,
+    ale tylko zamiast domyślnego wyboru: drukarki, z którą okno otwarto, ani wybranej przez
+    użytkownika, zanim tagi doszły, tagi już nie podmieniają (linia w oknie mówi, gdy podmieniły).
+    Tagi, których nie ma żadna aktywna drukarka modelu, dałyby zadanie czekające w nieskończoność:
+    Drukuj czeka wtedy na „Zmień tagi” albo świadome „Dodaj mimo to”.
     Tagi widać na karcie drukarki, w kolejce i na miniaturze pliku pod etykietą typu (tagi
     drukarek wypełnione, z ikoną drukarki). Reguła: `services/printer_tags.py`, API
     `/printer-tags`, scheduler zawęża nią drukarki twórcy (dopasowanie, wybudzanie gniazdkiem,
@@ -47,12 +72,25 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
   - oś czasu kolejki jest pierwszą i domyślną zakładką kolejki (wybrana zakładka jest
     zapamiętywana); jej tory wypełniają wolną wysokość ekranu (po równo na drukarkę, 40–160 px
     na kafelek), a kafelek pokazuje tyle, ile się zmieści: od 48 px nazwa w dwóch liniach, od
-    64 px osobno zamówienia i godziny druku z czasem, od 92 px linia z filamentem (kolor, typ,
-    gramy), „Dowolna <model>”, ręcznym startem i grupą (wąski kafelek oddaje ją nazwie), od
-    108 px trzy linie nazwy, od 136 px większa miniatura i tekst. Tekst ma pierwszeństwo:
-    miniatura zajmuje najwyżej ćwierć szerokości kafelka, a na wąskim znika; nazwa jest bez
-    „.gcode.3mf”. Na wąskim ekranie (iPad pionowo) oś domyślnie pokazuje 12 h, a zoom
-    zapamiętuje się dopiero po zmianie,
+    64 px osobno powód wstrzymania, zamówienia i godziny druku z czasem, od 92 px linia z
+    filamentem (kolor, typ, gramy), „Dowolna <model>”, ręcznym startem i grupą (wąski kafelek
+    oddaje ją nazwie), od 108 px trzy linie nazwy, godziny i czas druku w osobnych liniach (nic
+    nie jest ucięte), a linia szczegółów może zająć dwie, od 136 px cztery linie nazwy, większa
+    miniatura i tekst. Przed nazwą ikony mówią, dlaczego zadanie czeka (problem, ręczny start) i
+    jak jest związane z drukarką, więc nic nie jest rozróżniane samym kolorem. Tekst ma
+    pierwszeństwo: miniatura zajmuje najwyżej ćwierć szerokości kafelka, a na wąskim znika;
+    nazwa jest bez „.gcode.3mf”. Dopóki nikt nie zmieni zoomu, oś pokazuje najwięcej godzin
+    (do 24 h), przy których godzina ma co najmniej ok. 50 px zmierzonej szerokości toru (iPad
+    w poziomie 12 h, nie 24 h); zoom zapamiętuje się dopiero po zmianie. Pasek narzędzi to jeden
+    rząd, podsumowanie jest zwięzłe, a legenda i wskazówki są schowane pod „?” (otwarte tylko na
+    dużym oknie, stan zapamiętany). To, co na Macu mówi dymek po najechaniu, na dotyku mówi
+    stuknięcie: czekanie płyty, zaznaczenie obecności/nieobecności i „chyba nikogo nie ma”
+    pokazują dymek z godziną i powodem; kafelek otwiera szczegóły także po przytrzymaniu (palec
+    trzymany chwilę zaczyna przeciąganie, ale przeciągnięcie, które prawie się nie ruszyło, jest
+    stuknięciem). Szczypanie na touchpadzie działa też w Safari (zdarzenia gesture), a przesunięcie
+    dwoma palcami w bok przewija tor, a na jego końcu przesuwa okno osi o całe kroki, zamiast
+    cofać stronę. Link `/queue?tab=timeline&item=<id>` (np. z Produktów) otwiera szczegóły tego
+    zadania, raz; nieistniejące niczego nie otwiera,
   - oś czasu kolejki pokazuje całą kolejkę: zadania „Dowolna <model>” stoją na drukarce, którą
     według prognozy dostaną (przerywana ramka; przypięte do drukarki mają pełną ramkę i pinezkę).
     Prognozę liczy backend (`GET /queue/forecast`, `services/queue_forecast.py`): drukarka, która
@@ -66,25 +104,41 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     **Tryb planu**: przeciąganie nierozpoczętego zadania niczego nie zapisuje, tylko układa plan
     (znacznik pokazuje szczelinę; zadanie wchodzi przed kafelek po prawej, na swoim pasie albo
     innej drukarki, kolejne na tym pasie się przesuwają, reszta stoi). Pasek planu: liczba zmian,
-    „wszystko gotowe” przed/po, Cofnij / Odrzuć / Zastosuj. **Zastosuj** (`POST /queue/plan`,
-    `services/queue_plan.py`) rezerwuje każde przesunięte zadanie „Dowolna” na drukarce, na
-    której stoi (i każde, które inaczej wzięłaby inna drukarka, bo jej pas skończy się
-    wcześniej), oraz układa kolejkę według startów z planu, więc prognoza i scheduler biorą
-    zadania tak, jak je ułożono. **Rezerwacja** (`services/queue_reservations.py`, tabela
-    `custom_queue_reservations`) to miękkie przypięcie: scheduler daje zadaniu tylko tę drukarkę
-    (czeka na nią jak przypięte, np. aż ktoś zdejmie płytę), zadanie dalej jest „Dowolna”;
-    rezerwacja kończy się startem zadania, przypięciem, zmianą modelu/lokalizacji albo
-    „Zwolnij” w szczegółach, i nie obowiązuje, gdy drukarka nie może drukować (wyłączona,
+    „wszystko gotowe” przed/po, Cofnij / Odrzuć / Zastosuj; przesunięte zadanie ma białą
+    przerywaną obwódkę. **Zastosuj** (`POST /queue/plan`, `services/queue_plan.py`) rezerwuje
+    każde przesunięte zadanie „Dowolna” na drukarce, na której stoi (i każde, które inaczej
+    wzięłaby inna drukarka, bo jej pas skończy się wcześniej), oraz układa kolejkę według startów
+    z planu, więc prognoza i scheduler biorą zadania tak, jak je ułożono. Wysyła tylko pasy, które
+    użytkownik zmienił (zadania z pozostałych zostają na swoich miejscach), a toast wymienia
+    zadania, które zarezerwował. Plan ułożony na starych danych (zadanie, którego nikt nie
+    ruszał, zmieniło pas lub miejsce, doszło albo zniknęło) jest oznaczony **„Plan nieaktualny”**
+    i zanim da się go zastosować, trzeba go odświeżyć („Odśwież plan” nakłada przesunięcia na
+    kolejkę taką, jaka jest teraz) albo odrzucić. **Rezerwacja** (`services/queue_reservations.py`,
+    tabela `custom_queue_reservations`) to miękkie przypięcie: scheduler daje zadaniu tylko tę
+    drukarkę (czeka na nią jak przypięte, np. aż ktoś zdejmie płytę), zadanie dalej jest
+    „Dowolna”; rezerwacja kończy się startem zadania, przypięciem, zmianą modelu/lokalizacji
+    albo „Zwolnij” w szczegółach, i nie obowiązuje, gdy drukarka nie może drukować (wyłączona,
     offline bez gniazdka Auto On, inny model, poza lokalizacją, drukarki twórcy, tagi).
-    Rezerwacje zakłada też planer produktów (kolumna `source`: „plan” albo „user”), a jego
-    rezerwacja **ustępuje**: gdy w przebiegu kolejki jego drukarka nie może wziąć zadania i nie
-    kończy wydruku w ciągu marginesu preferowanej drukarki (większe z 30 min i 25% czasu druku
-    zadania, z Planowania), scheduler w tym samym przebiegu daje je innej pasującej drukarce,
-    a prognoza na osi pokazuje to samo. Rezerwacja z osi czasu nie ustępuje nigdy; „Zastosuj”
-    robi z rezerwacji planera na tej samej drukarce rezerwację użytkownika, a plan potem jej nie
-    odbiera. Wiersz ustawień `product_reservation_yield` = `false` wyłącza ustępowanie. Kafelki
-    zarezerwowane są bursztynowe z kłódką, a karta drukarki pokazuje zarezerwowane zadanie tylko
-    na swojej drukarce. Przypięte zostaje na swoim pasie, a drukarki, na które nie wolno, są
+    Rezerwacje zakłada też planer produktów (kolumna `source`: „plan”, „user” albo „released”),
+    a jego rezerwacja **ustępuje**: gdy w przebiegu kolejki jego drukarka nie może wziąć zadania
+    i nie kończy wydruku w ciągu marginesu preferowanej drukarki (większe z 30 min i 25% czasu
+    druku zadania, z Planowania), scheduler w tym samym przebiegu daje je innej pasującej
+    drukarce, a prognoza na osi pokazuje to samo. Rezerwacja z osi czasu nie ustępuje nigdy.
+    „Zastosuj” zastępuje rezerwację planera tylko na zadaniach, które użytkownik przesunął;
+    rezerwacji planera na zadaniach nieruszanych nie robi twardymi, więc dalej mogą ustąpić.
+    „Zwolnij” na zadaniu planera jest trwałe: wiersz zostaje jako „released”, który niczego nie
+    rezerwuje, a kolejne przeliczenia planu nie rezerwują tego zadania ponownie; zastępuje go
+    dopiero rezerwacja zrobiona na osi czasu. Ustępowanie wyłącza przełącznik „Rezerwacje planera
+    ustępują” w Planowanie → Zaawansowane (wiersz `product_reservation_yield`). Prognoza podaje
+    przy każdej rezerwacji `source`, `soft` (rezerwacja planera, która może ustąpić) i `placed`
+    (prognoza stawia zadanie na tej drukarce), a oś pokazuje trzy stany: **twarda** rezerwacja
+    (z osi albo planera, który nie ustępuje) to bursztynowy kafelek z pełną ramką i kłódką na
+    jej drukarce; **miękka** rezerwacja planera, którą prognoza trzyma, to przerywana bursztynowa
+    ramka z zakładką („Planista produktów woli …”); rezerwacja, która **ustąpiła**, to kafelek
+    tam, gdzie postawiła go prognoza, z przekreśloną zakładką, a szczegóły mówią, którą drukarkę
+    wybrał planista i dlaczego ustąpił. Karta drukarki pokazuje zadanie zarezerwowane na niej, a
+    zadanie z miękką rezerwacją planera także na innych drukarkach, gdy jego drukarka jest zajęta
+    dłużej niż margines (wtedy i tak by ustąpiło). Przypięte zostaje na swoim pasie, a drukarki, na które nie wolno, są
     wyszarzone z powodem. Klik w kafelek otwiera szczegóły zadania (duża miniatura, gdzie i kiedy,
     czas, waga, filament, tagi, rezerwacja) z przypinaniem do wybranej drukarki, odpinaniem,
     zwalnianiem rezerwacji, edycją i usuwaniem lub zatrzymaniem. Przy „najkrótsze najpierw”
@@ -111,20 +165,39 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     nikogo nie ma, więc wszystkie płyty czekają do przewidywanego powrotu (napis „Chyba nikogo
     nie ma” na osi); płyta zdjęta przed chwilą znaczy, że ktoś jest, więc wydruk kończący się w
     ciągu 30 min dostaje tylko czas zdjęcia. W oknie godzin obsady jest mapa typowych czasów
-    7 × 24. Na telefonie oś przewija się w poziomie. Bez zmian w bazie poza jednym wierszem
+    7 × 24 (stuknięcie w godzinę mówi pod mapą, ile zwykle wtedy czeka płyta). W kalendarzu
+    tego okna palec maluje zaznaczenia (tu jestem / mnie nie ma) tylko po „Edytuj zaznaczenia”,
+    inaczej przesunięcie przewija okno, a stuknięcie wybiera zaznaczenie; myszą maluje się zawsze.
+    Zamknięcie ze zmianami (Anuluj, tło, Escape) pyta „Odrzucić zmiany?”, a na telefonie okno jest
+    dolnym panelem, który zamyka też systemowe Wstecz, przez to samo pytanie. Na telefonie oś
+    przewija się w poziomie. Bez zmian w bazie poza jednym wierszem
     ustawień (`queue_staffed_hours`) i tabelą `custom_plate_clears`,
   - **szpule slotów** (licznik filamentu bez numerów, tagów i QR): rolka w slocie AMS bez
-    przypisanej szpuli świeci się na karcie drukarki („NOWY”). „Nowa szpula…” w karcie slotu
-    otwiera okno konfiguracji slotu (preset, profil K, kolor) z wyborem ilości: **pełna 1 kg**,
-    inna ilość w gramach albo **przywrócenie** wcześniej wyjętej szpuli z jej resztą. Po zapisie
+    przypisanej szpuli świeci się na karcie drukarki (niebieski pierścień i plakietka „NOWA”);
+    nic nie świeci, dopóki karta nie zna trybu magazynu i przypisań slotów. Pod rzędem AMS jedna
+    linia wypisuje, o co pytają sloty („A2: nowa szpula · A4: ta sama?”), bo pierścień i plakietkę
+    potrafi zasłonić pierścień aktywnego slotu albo są za małe na telefonie; stuknięcie w pozycję
+    otwiera odpowiedź. „Nowa szpula…” w karcie slotu otwiera okno konfiguracji slotu (preset,
+    profil K, kolor) z wyborem ilości: **pełna 1 kg**, inna ilość w gramach (1–5000 g, backend też
+    odrzuca więcej niż 5000) albo **przywrócenie** wcześniej wyjętej szpuli z jej resztą. Lista do
+    przywrócenia pokazuje najpierw szpule typu slotu, a pozostałe pod „Inne” („Pokaż wszystkie”);
+    wybrana szpula ustawia slot na swój preset, kolor i profil K, a gdy preset lub kolor
+    zmieniono potem w oknie, okno ostrzega, że zapis przemianuje szpulę. Szpuli, która w tym
+    czasie liczy się w innym slocie, przywrócić się nie da (409 „This roll is in another slot
+    now”), zamiast po cichu wyjąć ją z tamtego slotu. Karta slotu zamyka się, gdy akcja otwiera
+    okno, a tam, gdzie szpule slotów nie działają, mówi dlaczego (tryb Spoolman, szpula
+    zewnętrzna, szpula Bambu z RFID). Po zapisie
     slot dostaje zwykłą szpulę magazynu z `data_origin = "slot_quick"`, więc zużycie liczy
     istniejący tracker (gramy z 3MF, przerwany wydruk do warstwy), a braki sprawdza istniejąca
     kontrola przed drukiem. Szpula slotu odpięta od slotu (slot pusty 2 min poza drukiem, slot
     przestawiony na inny filament, ręczne odpięcie) trafia do archiwum z resztą gramów. Slot
     opróżniony i napełniony, zanim szpula się odpięła (szybka podmiana, dołożenie po runoucie w
-    trakcie druku), pyta „Ta sama szpula?” (pomarańczowa ramka, „?”): „Ta sama szpula” liczy dalej,
-    „Nowa szpula…” zakłada nową. Śledzona szpula slotu ma w karcie „Popraw pozostałą ilość”.
-    Zużyta szpula slotu (≤ 5 g) z rolką w slocie też świeci jako „NOWY”, a „Nowa szpula…” jest
+    trakcie druku), pyta „Ta sama szpula?” (fioletowa przerywana obwódka i plakietka „?”; obwódkę
+    widać obok każdego innego pierścienia, także na aktywnym slocie, a bursztyn zostaje dla slotu,
+    na który czeka wstrzymany wydruk): „Ta sama szpula” liczy dalej, „Nowa szpula…” zakłada nową.
+    Śledzona szpula slotu ma w karcie „Popraw pozostałą ilość”; gdy slot zasila trwający wydruk,
+    okno ostrzega, że po jego końcu odejmie się całe zużycie, także sprzed poprawki.
+    Zużyta szpula slotu (≤ 5 g) z rolką w slocie też świeci jako „NOWA”, a „Nowa szpula…” jest
     w karcie każdego slotu z rolką (poza RFID Bambu), świecącego czy nie: podmiany w czasie
     restartu backendu (Redeploy) albo zbyt szybkiej, by AMS zgłosił pusty slot, serwer nie widzi.
     „Popraw pozostałą ilość” jest przy każdej szpuli magazynu przypisanej do slotu, także rolce
@@ -135,14 +208,17 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     ślad na wydruku; sam backup na drukarce zostaje) i **zapas** w procentach ponad gramy z pliku
     (domyślnie 5 %). Obie działają w schedulerze, przy Start w kolejce i w oknie druku; okno druku
     pyta też o slot AMS, którego ilości nikt nie liczy. Dwa filamenty pliku zmapowane na jeden slot
-    są ważone razem. Tylko wbudowany magazyn (nie Spoolman). Logika: `services/slot_spools.py`,
+    są ważone razem. Tylko wbudowany magazyn (nie Spoolman; karta ustawień to mówi). Ukrycie
+    presetu w oknie konfiguracji slotu ma „Cofnij” w toaście. Logika: `services/slot_spools.py`,
     API `/slot-spools`,
   - **te same kolory i profile** (Ustawienia → Filament, jak scalanie w SimplyPrint): grupy
     kolorów (np. stary i nowy FDE) i profili filamentu (`tray_info_idx`, np. GFG99 i własny
     preset tego samego PETG), które dopasowanie w kolejce traktuje jak jedno. Zadanie
     z wymuszonym kolorem bierze wtedy szpulę w dowolnym kolorze lub profilu z grupy; dotyczy też
     planera produktów, filtra kolejki na karcie drukarki i oceny koloru w oknie druku. To, co
-    raportują pliki i drukarki, się nie zmienia. Logika: `services/filament_aliases.py`
+    raportują pliki i drukarki, się nie zmienia. Karta zapisuje się sama po każdej zmianie
+    („Zapisywanie…”, a po błędzie „Nie zapisano”), a wpisany kolor musi mieć 3 albo 6 cyfr
+    szesnastkowych. Logika: `services/filament_aliases.py`
     (wpięta w `_normalize_color_for_compare` i porównania presetu w `print_scheduler.py`),
     API `/filament-aliases`, jeden wiersz ustawień `filament_aliases`.
     **Drukuj mimo to** nie przechodzi już przez slot z wymuszonym kolorem bez szpuli ani przez
@@ -160,7 +236,9 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     kolory ze swojego pliku. Plik czyta się ponownie tylko po zmianie zadania, a zapis ma warunek
     na stare nadpisania, więc edycja z tej samej chwili nie ginie. Logika: `services/file_colors.py`
     i `print_scheduler._force_file_colors` (na początku każdego przebiegu kolejki), ustawienie
-    `require_file_colors`,
+    `require_file_colors` (też w `/settings/ui-flags`). Okno druku ostrzega przed dodaniem, gdy
+    przy tym ustawieniu wiersz zmapowany na tray innego koloru kazałby zadaniu czekać na tej
+    drukarce, i podsuwa „Dowolna <model>”, która trafi na drukarkę z tym kolorem,
   - **kwadracik z kolorem przy każdym hexie**: powody oczekiwania w kolejce („Needs PETG
     #408002”), szczegóły zadania, „Następny w kolejce” na karcie drukarki, oś czasu, notki
     o innym kolorze szpuli, toasty i okna potwierdzeń pokazują przed kodem koloru kwadrat w tym
@@ -207,7 +285,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     planera, żeby kolejne wydruki dalej się liczyły. Ryzyko nieudanego wydruku, (nieudane + 0,5) /
     (wydruki + 25), najwyżej 50% (zatrzymany w trakcie też jest nieudany), liczy czas i koszt
     płyty 1 + ryzyko razy, więc płyta, która często się nie udaje, przegrywa z pewniejszymi.
-    Wiersz ustawień `product_learn_history` = `false` wraca do czasów slicera bez ryzyka. **Przelicz kolejkę** na osi czasu (z potwierdzeniem) liczy od nowa plan wszystkich
+    Przełącznik „Czasy i ryzyko z historii wydruków” w Planowanie → Zaawansowane (wiersz
+    `product_learn_history`) wyłączony wraca do czasów slicera bez ryzyka. Karta produktu i okno
+    „Zaplanowane płyty” pokazują przy płycie czas, którego użył plan, a gdy pochodzi z historii,
+    obok szacunek slicera („2h 40m z historii · slicer 2h 10m”; w API `planned_seconds` i
+    `learned`). **Przelicz kolejkę** na osi czasu (z potwierdzeniem) liczy od nowa plan wszystkich
     produktów z otwartymi zamówieniami, najpilniejsze pierwsze (`POST /products/replan`). Zadania planera to zwykłe zadania kolejki:
     części parowane są przypięte do drukarki, pozostałe to „Dowolna <model>” z rezerwacją na
     drukarce z planu; obowiązują tagi drukarek, drukarki użytkownika i ręczny start. Plan liczy
@@ -220,6 +302,11 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     zadania). Planer liczy w osobnym wątku, żeby MQTT i scheduler nie stały; gdy w tym czasie
     ruszy czekające zadanie produktu, plan liczy się jeszcze raz (do 3 razy). Przy ręcznym starcie
     nowe płyty nie zaczynają się w planie, zanim ktoś będzie na miejscu, tak jak w prognozie.
+    Odpowiedź na zmianę mówi też, co przebieg zrobił z produktami, o które nikt nie pytał
+    (`also_replanned`: plan zmienił kolejkę, `plan_failed`: plan się nie udał i produkt został
+    jak był), a toast to wymienia („Przeliczono też: …”, „Nie udało się zaplanować: …”). Po każdym
+    przebiegu backend wysyła komunikat WebSocket `products_replanned` z id produktów, więc inne
+    ekrany i urządzenia czytają je od razu, a nie przy następnym odpytaniu.
     Anulowanie czekającego wydruku zamówienia w kolejce lub na osi czasu pyta, co z jego
     częściami: „Wydrukuj ponownie” (plan od razu), „Mam te części” (na stan) albo „Wycofaj
     zamówienie” (wybrane zamówienia, dla których drukuje); potwierdzenie Stop mówi, że plan
@@ -267,16 +354,25 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     jednym tapnięciem, „Sprawdzę później”, gdy płyta jeszcze stygnie, co przy świeżej płycie jest
     główną odpowiedzią, albo „Anuluj”, który płyty nie zdejmuje); karta drukarki i menu mają
     licznik „do sprawdzenia”, zakładka „Do sprawdzenia” na stronie Zamówienia zbiera wszystko (filtr po drukarce,
-    sprawdzone z 7 dni do poprawienia, „Cofnij” po zapisie). Niesprawdzone liczą się jako dobre;
+    sprawdzone z 7 dni do poprawienia, „Cofnij” po zapisie; gdy pasek boczny jest wysuwany
+    (poniżej 1144 px), licznik jest też na przycisku menu). Niesprawdzone liczą się jako dobre;
     wadliwe wypadają ze stanu i planer dodrukowuje je od razu, a zamówienie zamknięte z taką
     sztuką otwiera się znowu. Płyta wydrukowana ręcznie (bez zamówienia, które by ją dodrukowało)
     ma przy wadliwych wybór „Wydrukować płytę ponownie?”: nie / na koniec kolejki / jak
     najszybciej (pierwsza w kolejce, tam gdzie szła wtedy); „Cofnij” albo poprawka na „wszystko
     OK” zdejmuje z kolejki taki dodruk, który jeszcze nie ruszył. Ocena trafia też jako werdykt do archiwum (upstreamowe pytanie o
     wynik jest dla zadań planera wyłączone). Na ekranach dotykowych przyciski mają 44 px, liczby
-    wybiera się segmentami 0–3 albo − n +, a okna wysuwają się od dołu. Widok pokazuje zamówienia z postępem i prognozą gotowości, zadania w
-    kolejce, stan części z korektą i braki, których nie ma w kolejce (np. ręcznie usunięte
-    zadanie). Zamówienia mają pola `external_source`/`external_ref` na przyszłe zamówienia ze
+    wybiera się segmentami 0–3 albo − n +, a okna (także kontroli jakości) są na telefonie dolnymi
+    panelami, od 640 px oknami na środku. Widok pokazuje zamówienia z postępem i prognozą
+    gotowości (zamówienie bez prognozy mówi dlaczego: żadna drukarka nie może teraz wziąć jego
+    płyt, jego płyty są wstrzymane w kolejce albo nic z niego nie czeka; w API
+    `no_estimate_reason` = `no_printer` / `held` / `nothing_queued`), plakietkę „po terminie”,
+    zadania w kolejce (identyczne płyty zgrupowane, „2 płyty · 1× Dół”, a wiersz prowadzi do
+    zadania na osi czasu), stan części z korektą i braki, których nie ma w kolejce (np. ręcznie
+    usunięte zadanie). Zamówienie z Base jest na stronie Produktów tylko do odczytu i prowadzi do
+    swojego zamówienia: ilości i anulowania API odmawia (409), termin i notatki można zmienić.
+    Produkt może mieć kilka płyt z jednego wieloplatowego pliku (każda płyta osobno). Zamówienie
+    wpisane ręcznie ma etykietę bez tytułu, gdy tytuł powtarzałby etykietę. Zamówienia mają pola `external_source`/`external_ref` na przyszłe zamówienia ze
     sklepu. **Zamówienia z Base** (base.com, osobna strona „Zamówienia” w pasku bocznym, zaraz
     po Produktach, z zakładkami „Zamówienia z Base” i „Do sprawdzenia”; licznik do sprawdzenia
     jest przy niej, a stare linki `/products?tab=base|qc` prowadzą tam,
@@ -289,12 +385,16 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     idzie do produkcji, jeśli tak ustawiono). Lista jest w kolejności realizacji, w sekcjach:
     Allegro po terminie wysyłki (dziś, jutro, pojutrze, za 3+ dni), potem sklep od najstarszego;
     filtr stanu i źródła (Allegro / Sklep) z licznikami i wyszukiwarka (nick, numer, SKU).
-    Wiersz (na Macu tabela, na iPadzie karta) ma termin, znak źródła, nick kupującego z Allegro
+    Wiersz (od 1280 px tabela, węziej karta) ma termin, znak źródła, nick kupującego z Allegro
     albo numer ze sklepu (numer z Base obok), pozycje z miniaturami i postęp części w produkcji.
     „Drukuj” wysyła od razu (z „Cofnij”); „Części” rozwija panel: ile sztuk drukować (reszta
     zostaje niedrukowana też przy zmianach w Base) i co jest z półki. Na zamówieniu czekającym
-    to szkic („mam już dół”) zapisany od razu, a „Drukuj resztę” wysyła go; w produkcji zmiana
-    działa od razu (z „Cofnij”), a „Wycofaj z produkcji” najpierw mówi, co się stanie (które
+    to szkic („mam już dół”) zapisywany sam, po jednym zapisie naraz, a „Drukuj” i „Drukuj
+    resztę” wysyłają to, co widać na ekranie (także niezapisaną zmianę); w produkcji każda zmiana
+    przelicza plan, więc czeka na „Zastosuj”, a „Cofnij” działa przez API także po zamknięciu
+    panelu. Gdy zamówienie zmieni się w Base pod niezapisaną zmianą, panel mówi to („Wczytaj
+    ponownie”) zamiast ją nadpisać. Zapisy jednego zamówienia z Base serwer wykonuje po kolei
+    (`base_sync.order_lock`), więc dwa nie wstawią części dwa razy. „Wycofaj z produkcji” najpierw mówi, co się stanie (które
     wydruki znikną z kolejki, co wejdzie w zamian dla zamówień ze wspólnej płyty, co się dokończy,
     co zostanie na stanie), przy gotowym pyta, czy pudełka wracają na stan, a po wycofaniu ma
     „Cofnij”. Zamówienie anulowane w Base, zanim wyszło, oddaje gotowe pudełka na stan. Zamówienie w
@@ -305,11 +405,29 @@ Prywatne poprawki nałożone na oficjalne wydania [maziggy/bambuddy](https://git
     zamówienia produktów i przelicza plan;
     póki jest w tych statusach, zmiany pozycji w Base idą za nim; wyjęte z tych statusów
     (spakowane: „do wysłania”, „wysłane”) nic więcej nie drukuje, bierze, co jest dla niego na
-    stanie, i idzie do „Gotowe” pod „Spakowane”, a anulowane anuluje otwarte. Termin to termin wysyłki z platformy (Allegro), czytany z
+    stanie, i idzie do „Gotowe” pod „Spakowane”, a anulowane anuluje otwarte. Nagłówek sekcji
+    podaje, ile zamówień jest po terminie, a wiersz ma plakietkę „po terminie”. Termin to termin wysyłki z platformy (Allegro), czytany z
     danych transakcji w Base raz na zamówienie; bez niego dni robocze od potwierdzenia. Token Base jest zapisywany tylko do zapisu. Całość jest dostępna przez API, także zdjęcie i płyty hurtem z folderu (zgadywane z
     nazw plików, z dodatkowymi słowami na część): [PRODUCTS_API.md](PRODUCTS_API.md). Logika:
     `services/products.py`, API `/products`; zadania śledzi odświeżanie batchy w
     `services/print_batch.py`,
+  - **okna dialogowe forka**: jeden stos okien (`utils/modalStack.ts`,
+    `hooks/useModalBehavior.ts`): Escape zamyka tylko okno na wierzchu, a Escape w otwartym
+    wyborze daty lub godziny zostawia temu wyborowi. Okno z niezapisanymi zmianami pyta przed
+    ich odrzuceniem („Odrzucić zmiany?”), okna z trwającym zapytaniem nie da się zamknąć, żeby
+    wynik nie przepadł; fokus wchodzi do okna, Tab zostaje w nim, a po zamknięciu fokus wraca
+    tam, skąd okno otwarto. Na telefonie (poniżej 640 px) okna forka są dolnymi panelami, które
+    zamyka też systemowe Wstecz; od 640 px to okna na środku,
+  - **dotyk i układ**: przycisk ma co najmniej 44 px na każdym urządzeniu dotykowym przy
+    każdej szerokości (rozpoznawanym po wskaźniku, `any-pointer-coarse`, a nie po szerokości;
+    w `px`, bo główny rozmiar czcionki 14,4 px zrobiłby z `2.75rem` 40 px). Przyklejone paski
+    przyklejają się do okna, pod stałym nagłówkiem (`--app-top`),
+  - **język**: polskie (i rosyjskie, ukraińskie) formy liczby mnogiej są kompletne (1 płyta,
+    2 płyty, 5 płyt), a `npm run check:i18n` tego pilnuje. Błędy endpointów forka i powody
+    oczekiwania w kolejce przychodzą z API po angielsku, a frontend tłumaczy je przez
+    `frontend/src/api/serverMessages.json` (tekst albo wzorzec → klucz) i
+    `frontend/src/i18n/serverMessages/` (pl, en); nowy lub zmieniony błąd forka potrzebuje wpisu w
+    tabeli i tekstu pl i en, inaczej nie przejdzie test backendu `test_server_messages_table.py`,
   - workflowy forka i ten plik.
 - **Obraz Dockera**: `ghcr.io/mteden-dev/bambuddy`, tylko `linux/arm64` (Raspberry Pi):
   - `:custom` – zawsze najnowszy build,
@@ -323,7 +441,8 @@ bazy wiersze w tabeli ustawień (`hidden_filament_presets`,
 `hide_builtin_filament_presets`, `ams_color_palette`, `slicer_inbox_folder_id`,
 `slicer_inbox_manual_start`, `printer_tags`, `filament_check_per_slot`,
 `filament_check_margin_pct`, `queue_staffed_hours`, `product_plate_cost_minutes`, `base_sync`,
-`base_api_token`, `product_reservation_yield`, `product_learn_history`), które
+`base_api_token`, `product_reservation_yield`, `product_learn_history`, `require_file_colors`,
+`filament_aliases`), które
 oficjalna wersja po prostu pomija, i własne tabele zakładane przez `create_all` bez migracji:
 `custom_queue_item_tags` (tagi ustawione zadaniu w oknie druku), `custom_queue_reservations`
 (rezerwacje z planu osi czasu i planera produktów), `custom_slot_reload_prompts` (sloty pytające „Ta sama szpula?”),
@@ -332,9 +451,10 @@ oficjalna wersja po prostu pomija, i własne tabele zakładane przez `create_all
 `custom_product_orders`, `custom_product_jobs`, `custom_product_stock`, `custom_product_skus` i
 `custom_base_orders` (kolumny dodane później, np. `custom_base_orders.ship_by` i
 `custom_queue_reservations.source`, mają swoje `ALTER TABLE` na końcu migracji w
-`core/database.py`). Oficjalny obraz ich nie
-zna i nie czyta, więc powrót działa jak dotąd (zarezerwowane zadania wracają do „Dowolna”, zadania
-planera zostają zwykłymi zadaniami kolejki); wiersz zadania usuniętego w tym czasie jest pomijany. Dwa ustawienia kontroli filamentu fork zapisuje
+`core/database.py`; `source` ma wartości „plan”, „user” i „released”, ta ostatnia to zwolniona
+rezerwacja planera, która niczego nie rezerwuje, i nie potrzebuje zmiany schematu). Oficjalny
+obraz ich nie zna i nie czyta, więc powrót działa jak dotąd (zarezerwowane zadania wracają do
+„Dowolna”, zadania planera zostają zwykłymi zadaniami kolejki); wiersz zadania usuniętego w tym czasie jest pomijany. Dwa ustawienia kontroli filamentu fork zapisuje
 przy starcie, jeśli ich nie ma (każdy slot osobno, 5 %); bez nich kontrola działa jak w
 upstream. Szpule slotów to zwykłe szpule magazynu i po powrocie zostają w nim (aktywne i
 zarchiwizowane). Pliki

@@ -229,6 +229,10 @@ class ProductSettings(IgnoresNullForRequiredColumns):
     force_color: bool | None = None
     # Plates printed by hand count (stock, orders) from now on. Left out: unchanged.
     hand_prints_count: bool | None = None
+    # The planner's holds on printers give way when the printer cannot take the job soon.
+    reservation_yield: bool | None = None
+    # Plates are planned with the time their history says they print, not the slicer's.
+    learn_history: bool | None = None
 
 
 # --- responses -------------------------------------------------------------------
@@ -249,6 +253,8 @@ class ProductSettingsOut(BaseModel):
     # "Shortest first" is on: the scheduler takes jobs by print time, not in
     # the order the plan put them (pinned and reserved jobs keep their printer).
     sjf_enabled: bool = False
+    reservation_yield: bool = True
+    learn_history: bool = True
 
 
 class PlateSuggestion(BaseModel):
@@ -334,8 +340,13 @@ class OrderOut(BaseModel):
     parts: list[OrderPart] = Field(default_factory=list)
     # From the queue forecast; None when nothing planned finishes it.
     estimated_ready_at: UTCDatetime = None
+    # Why an open order has no estimate: "no_printer", "held" or "nothing_queued"
+    # (services/products.order_forecast); None with an estimate.
+    no_estimate_reason: str | None = None
     external_source: str | None = None
     external_ref: str | None = None
+    # The Base order it came from: change it on the Orders page, not here.
+    base_order_id: int | None = None
 
 
 class JobOut(BaseModel):
@@ -348,7 +359,11 @@ class JobOut(BaseModel):
     pieces: list[PartPieces]
     product_plate_id: int | None
     filename: str | None
+    # The slicer's estimate.
     print_time_seconds: int | None
+    # The time the plan used (its queue job's); learned: from the plate's history, not the slicer's.
+    planned_seconds: int | None = None
+    learned: bool = False
     # The user's, kept as it is by a plan: queued by hand (a plate's file
     # printed outside the planner), or moved by hand to another printer.
     by_hand: bool = False
@@ -366,7 +381,39 @@ class ProductDetail(ProductOut):
     unplanned: list[PartPieces] = Field(default_factory=list)
 
 
-class PlanOut(BaseModel):
+class ReplannedProduct(BaseModel):
+    # A product planned again behind a more urgent one, whose plan changed the queue.
+    product_id: int
+    name: str
+    created: int
+    replaced: int
+
+
+class FailedProduct(BaseModel):
+    # A product planned again behind a more urgent one whose plan failed: left as it was.
+    product_id: int
+    name: str
+
+
+class AlsoReplanned(BaseModel):
+    # What the pass did to products nobody asked about (services/products.replan_pass).
+    also_replanned: list[ReplannedProduct] = Field(default_factory=list)
+    plan_failed: list[FailedProduct] = Field(default_factory=list)
+
+
+async def also_replanned(db: AsyncSession, done: svc.PassOutcome | None) -> dict:
+    """The ``AlsoReplanned`` fields for a pass."""
+    report = await svc.pass_report(db, done)
+    return {
+        "also_replanned": [
+            ReplannedProduct(product_id=p, name=name, created=created, replaced=replaced)
+            for p, name, created, replaced in report.also_replanned
+        ],
+        "plan_failed": [FailedProduct(product_id=p, name=name) for p, name in report.plan_failed],
+    }
+
+
+class PlanOut(AlsoReplanned):
     product: ProductDetail
     # Plates in the queue for the plan: new jobs, waiting jobs it kept and ones kept as moved or queued by hand.
     planned_jobs: int
@@ -470,8 +517,15 @@ def _order_out(order: ProductOrder, **extra) -> OrderOut:
         completed_at=order.completed_at,
         external_source=order.external_source,
         external_ref=order.external_ref,
+        base_order_id=_base_order_id(order),
         **extra,
     )
+
+
+def _base_order_id(order: ProductOrder) -> int | None:
+    from backend.app.services.base_sync import base_id_of
+
+    return base_id_of(order)
 
 
 async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True) -> ProductDetail:
@@ -490,7 +544,7 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
     open_rows = await svc.open_orders(db, product.id)
     needs = svc.needs_of(open_rows)
     allocation = planner.allocate(specs, pool, needs)
-    ready_at = await svc.order_estimates(db, product, pool, open_rows) if estimates else {}
+    ready_at, no_estimate = await svc.order_forecast(db, product, pool, open_rows) if estimates else ({}, {})
     orders = [
         _order_out(
             order,
@@ -504,6 +558,7 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
                 for p in specs
             ],
             estimated_ready_at=_utc(ready_at.get(order.id)),
+            no_estimate_reason=no_estimate.get(order.id),
         )
         for order in open_rows
     ]
@@ -519,6 +574,7 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
 
     jobs_rows = await svc.active_jobs(db, product.id)
     placed_on, moved = await svc.placed_by_hand(db, jobs_rows)
+    times = await svc.planned_times(db, jobs_rows)
     plates = {plate.id: plate for plate in product.plates}
     jobs = []
     coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
@@ -542,6 +598,8 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
                 product_plate_id=job.product_plate_id,
                 filename=plate.library_file.filename if plate is not None and plate.library_file else None,
                 print_time_seconds=svc.plate_duration(plate) if plate is not None else None,
+                planned_seconds=times.get(job.id, (None, False))[0],
+                learned=times.get(job.id, (None, False))[1],
             )
         )
     with_jobs = planner.allocate(specs, coming, needs)
@@ -694,15 +752,16 @@ async def _write_product(db: AsyncSession, product: Product, data: ProductIn, ac
     await db.flush()
 
 
-async def _follow_base_orders(db: AsyncSession, data: ProductIn) -> None:
+async def _follow_base_orders(db: AsyncSession, data: ProductIn) -> svc.PassOutcome | None:
     """New or changed SKUs: accepted Base orders still waiting get their product orders, then replan."""
     if not data.skus:
-        return
+        return None
     from backend.app.services import base_sync
 
     changed = await base_sync.refresh_accepted(db)
-    if changed:
-        await base_sync.replan_products(db, changed, await base_sync.read_config(db))
+    if not changed:
+        return None
+    return await base_sync.replan_products(db, changed, await base_sync.read_config(db))
 
 
 async def _plan_response(
@@ -720,6 +779,7 @@ async def _plan_response(
     outcome = done.of(product_id)
     await db.commit()
     await svc.announce_planned(done.item_ids)
+    await svc.announce_replanned(done.changed_ids)
     product = await _get_product(db, product_id)
     plan = outcome.plan
     plates = plan.plates if plan is not None else []
@@ -742,6 +802,7 @@ async def _plan_response(
         short=[PartPieces(part_id=k, pieces=v) for k, v in sorted((plan.short if plan else {}).items())],
         extra=[PartPieces(part_id=k, pieces=v) for k, v in sorted((plan.extra if plan else {}).items())],
         skipped_plates=[{"plate_id": pid, "reason": why} for pid, why in outcome.skipped_plates],
+        **await also_replanned(db, done),
     )
 
 
@@ -774,6 +835,8 @@ async def _settings_out(db: AsyncSession) -> ProductSettingsOut:
         force_color=plan.force_color,
         hand_prints_count=plan.hand_prints_count,
         sjf_enabled=sjf,
+        reservation_yield=plan.reservation_yield,
+        learn_history=plan.learn_history,
     )
 
 
@@ -796,6 +859,8 @@ async def put_product_settings(
         swap_minutes=data.filament_swap_minutes,
         force_color=data.force_color,
         hand_prints_count=data.hand_prints_count,
+        reservation_yield=data.reservation_yield,
+        learn_history=data.learn_history,
     )
     await db.commit()
     return await _settings_out(db)
@@ -884,7 +949,7 @@ class QueueJobCancelIn(BaseModel):
     orders: list[int] = Field(default_factory=list, max_length=100)
 
 
-class QueueJobCancelOut(BaseModel):
+class QueueJobCancelOut(AlsoReplanned):
     # Products planned again, and the queue jobs the plans made and kept.
     replanned: list[int]
     created: int = 0
@@ -983,9 +1048,12 @@ async def cancel_queue_job(
         out.replanned.append(product_id)
     await db.commit()
     await svc.announce_planned(done.item_ids)
+    await svc.announce_replanned(done.changed_ids)
     scheduler.notify_dispatch_cancelled(item_id)
     out.created = len(created)
     out.short = [PartPieces(part_id=k, pieces=n) for k, n in sorted(short.items()) if n > 0]
+    report = await also_replanned(db, done)
+    out.also_replanned, out.plan_failed = report["also_replanned"], report["plan_failed"]
     logger.info(
         "[PRODUCTS] Cancelled queue job %s (%s): replanned %s, %s new, %s kept",
         item_id,
@@ -1035,7 +1103,7 @@ class QcCheckIn(BaseModel):
     reprint: Literal["end", "asap"] | None = None
 
 
-class QcCheckOut(BaseModel):
+class QcCheckOut(AlsoReplanned):
     job: QcJobOut
     # Bad pieces or a reopened order: the product was planned again.
     replanned: bool
@@ -1147,6 +1215,7 @@ async def check_job(
         raise HTTPException(400, str(exc)) from exc
     replan = bool(reopened) or bad or bool(removed)
     item_ids: list[int] = [reprint_item_id] if reprint_item_id is not None else []
+    done = None
     if replan:
         done = await svc.replan_pass(
             db,
@@ -1159,13 +1228,19 @@ async def check_job(
     await db.commit()
     if item_ids:
         await svc.announce_planned(item_ids)
+    if done is not None:
+        await svc.announce_replanned(done.changed_ids)
     # Read again after the commit; gone only if deleted meanwhile.
     fresh = await db.get(ProductJob, job_id)
     if fresh is None:
         raise HTTPException(404, "Job not found")
     [out] = await _qc_out(db, [fresh])
     return QcCheckOut(
-        job=out, replanned=replan, reopened_orders=[o.id for o in reopened], reprint_item_id=reprint_item_id
+        job=out,
+        replanned=replan,
+        reopened_orders=[o.id for o in reopened],
+        reprint_item_id=reprint_item_id,
+        **await also_replanned(db, done),
     )
 
 
@@ -1187,6 +1262,7 @@ async def uncheck_job(
         raise HTTPException(404, "Job not found")
     had_bad = await svc.uncheck_job(db, job)
     item_ids: list[int] = []
+    done = None
     if had_bad:
         done = await svc.replan_pass(
             db,
@@ -1199,12 +1275,14 @@ async def uncheck_job(
     await db.commit()
     if item_ids:
         await svc.announce_planned(item_ids)
+    if done is not None:
+        await svc.announce_replanned(done.changed_ids)
     # Read again after the commit; gone only if deleted meanwhile.
     fresh = await db.get(ProductJob, job_id)
     if fresh is None:
         raise HTTPException(404, "Job not found")
     [out] = await _qc_out(db, [fresh])
-    return QcCheckOut(job=out, replanned=had_bad)
+    return QcCheckOut(job=out, replanned=had_bad, **await also_replanned(db, done))
 
 
 class PreferenceIn(BaseModel):
@@ -1276,8 +1354,10 @@ async def create_product(
     product = await svc.load_product(db, product.id)
     assert product is not None
     await _write_product(db, product, data, actor)
-    await _follow_base_orders(db, data)
+    done = await _follow_base_orders(db, data)
     await db.commit()
+    if done is not None:
+        await svc.announce_replanned(done.changed_ids)
     return await _detail(db, await _get_product(db, product.id), estimates=False)
 
 
@@ -1300,8 +1380,10 @@ async def update_product(
 ):
     product = await _get_product(db, product_id)
     await _write_product(db, product, data, actor)
-    await _follow_base_orders(db, data)
+    done = await _follow_base_orders(db, data)
     await db.commit()
+    if done is not None:
+        await svc.announce_replanned(done.changed_ids)
     return await _detail(db, await _get_product(db, product_id), estimates=False)
 
 
@@ -1365,6 +1447,19 @@ async def _get_order(db: AsyncSession, order_id: int) -> ProductOrder:
     return order
 
 
+def _not_from_base(order: ProductOrder) -> None:
+    """A Base order's product orders follow the Base order: the next sync would undo a change made here.
+
+    Its quantity follows the order's lines and a cancelled one opens again
+    (base_sync.reconcile); its due date and notes are left alone by the sync,
+    so those may still be set here.
+    """
+    from backend.app.services.base_sync import EXTERNAL_SOURCE
+
+    if order.external_source == EXTERNAL_SOURCE:
+        raise HTTPException(409, "This order comes from Base: change it on the Orders page")
+
+
 @router.patch("/orders/{order_id}", response_model=PlanOut)
 async def update_order(
     order_id: int,
@@ -1376,6 +1471,8 @@ async def update_order(
     printer_scope: PrinterScope = RequestPrinterScope,
 ):
     order = await _get_order(db, order_id)
+    if data.quantity is not None and data.quantity != order.quantity:
+        _not_from_base(order)
     if order.status != "open":
         raise HTTPException(409, "Only an open order can be changed")
     fields = data.model_fields_set
@@ -1402,6 +1499,7 @@ async def cancel_order(
 ):
     """Cancel an open order; the plan drops what only it needed (printed parts stay in stock)."""
     order = await _get_order(db, order_id)
+    _not_from_base(order)
     if order.status != "open":
         raise HTTPException(409, "Only an open order can be cancelled")
     order.status = "cancelled"
@@ -1453,6 +1551,7 @@ async def replan_all(
         out.replaced += outcome.replaced
         out.held += outcome.held
     await svc.announce_planned(done.item_ids)
+    await svc.announce_replanned(done.changed_ids)
     logger.info(
         "[PRODUCTS] Replanned the queue: %s products, %s new jobs, %s kept, %s replaced, failed %s",
         out.products,

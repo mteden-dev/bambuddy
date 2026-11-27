@@ -16,8 +16,9 @@ export interface SeparateJobsResult {
   queuedItemIds: number[];
   /** Batches this call's POSTs created (quantity > 1). */
   queuedBatchIds: number[];
-  /** The refused file and the server's message, null when everything went through. */
-  failure: { file: VariantCandidate; message: string } | null;
+  /** The refused file, the printer it was for and the server's message, null
+   *  when everything went through. */
+  failure: { file: VariantCandidate; printerId: number | null; message: string } | null;
 }
 
 /**
@@ -103,6 +104,28 @@ export function fileHasQueuedPair(pairs: Iterable<string>, fileId: number): bool
 }
 
 /**
+ * The file and printer pairs a separate-jobs submit would queue, in queue
+ * order: every pair `includes` allows that `alreadyQueued` does not hold.
+ * Shared by the loop below and the dialog's count ("Creates N queue items").
+ */
+export function wantedPairs(
+  files: VariantCandidate[],
+  printerIds: (number | null)[],
+  includes: (file: VariantCandidate, printerId: number | null) => boolean = () => true,
+  alreadyQueued: ReadonlySet<string> = new Set(),
+): { file: VariantCandidate; printerId: number | null }[] {
+  const out: { file: VariantCandidate; printerId: number | null }[] = [];
+  for (const file of files) {
+    for (const printerId of printerIds) {
+      if (includes(file, printerId) && !alreadyQueued.has(queuedPairKey(file.id, printerId))) {
+        out.push({ file, printerId });
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Queue loop for "Separate jobs" when several sliced files are selected
  * (#3462): one queue item per file (per selected printer), in list order.
  *
@@ -142,10 +165,7 @@ export async function queueSeparateJobs(args: {
   const includes = args.includes ?? (() => true);
   const isWanted = (file: VariantCandidate, printerId: number | null) =>
     includes(file, printerId) && !isDone(file.id, printerId);
-  const total = files.reduce(
-    (sum, file) => sum + printerIds.filter((printerId) => isWanted(file, printerId)).length,
-    0,
-  );
+  const total = wantedPairs(files, printerIds, includes, alreadyQueued).length;
   const queuedFileIds: number[] = [];
   const queuedPairs: string[] = [];
   const queuedItemIds: number[] = [];
@@ -179,7 +199,11 @@ export async function queueSeparateJobs(args: {
           queuedPairs,
           queuedItemIds,
           queuedBatchIds,
-          failure: { file, message: error instanceof Error ? error.message : String(error) },
+          failure: {
+            file,
+            printerId: printerIds[printerIndex],
+            message: error instanceof Error ? error.message : String(error),
+          },
         };
       }
       if (asap) asapInserted += quantity;
@@ -193,4 +217,71 @@ export async function queueSeparateJobs(args: {
     queuedFileIds.push(file.id);
   }
   return { itemsCreated, asapInserted, queuedFileIds, queuedPairs, queuedItemIds, queuedBatchIds, failure: null };
+}
+
+/**
+ * What the last submit got into the queue and what it did not (fork), kept in
+ * the dialog after a partial failure: labels like "Box.gcode.3mf → P1S-2".
+ */
+export interface RunReport {
+  queued: string[];
+  /** "label: the server's reason". */
+  failed: string[];
+  /** Pairs not tried because the run stopped at the refusal. */
+  notTried: string[];
+}
+
+/**
+ * A version group's run on chosen printers that stopped at a refusal (fork).
+ * Kept in this tab's sessionStorage for a few hours, so the group reopened
+ * after the dialog was closed does not queue the printers that already have
+ * their version a second time. Cleared once the run is complete, or by the
+ * user ("start over") to print the group again on purpose.
+ */
+export interface GroupRun {
+  queuedPairs: string[];
+  asapInserted: number;
+  queuedItemIds: number[];
+  queuedBatchIds: number[];
+  printerIds: number[];
+  at: number;
+}
+
+const GROUP_RUN_PREFIX = 'bambuddy.groupRun.';
+// Long enough to come back to after a break, short enough not to skip a
+// printer when the same group is printed again another day.
+const GROUP_RUN_TTL_MS = 6 * 60 * 60 * 1000;
+
+const groupRunKey = (files: ReadonlyArray<{ id: number }>) =>
+  GROUP_RUN_PREFIX + [...files.map((f) => f.id)].sort((a, b) => a - b).join(',');
+
+export function readGroupRun(files: ReadonlyArray<{ id: number }>, now = Date.now()): GroupRun | null {
+  try {
+    const raw = sessionStorage.getItem(groupRunKey(files));
+    if (!raw) return null;
+    const run = JSON.parse(raw) as GroupRun;
+    if (!Array.isArray(run?.queuedPairs) || run.queuedPairs.length === 0 || now - run.at > GROUP_RUN_TTL_MS) {
+      sessionStorage.removeItem(groupRunKey(files));
+      return null;
+    }
+    return run;
+  } catch {
+    return null;
+  }
+}
+
+export function storeGroupRun(files: ReadonlyArray<{ id: number }>, run: Omit<GroupRun, 'at'>, now = Date.now()) {
+  try {
+    sessionStorage.setItem(groupRunKey(files), JSON.stringify({ ...run, at: now }));
+  } catch {
+    // Private window: the run is then only remembered while the dialog is open.
+  }
+}
+
+export function clearGroupRun(files: ReadonlyArray<{ id: number }>) {
+  try {
+    sessionStorage.removeItem(groupRunKey(files));
+  } catch {
+    // Nothing stored, nothing to clear.
+  }
 }

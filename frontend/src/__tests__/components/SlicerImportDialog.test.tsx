@@ -9,7 +9,7 @@ import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
 import { server } from '../mocks/server';
 import { SlicerImportDialog } from '../../components/SlicerImportDialog';
-import { SLICER_UPLOAD_EVENT } from '../../utils/slicerInbox';
+import { SLICER_DECIDED_EVENT, SLICER_UPLOAD_EVENT } from '../../utils/slicerInbox';
 
 vi.mock('../../components/PrintModal', () => ({
   PrintModal: (props: {
@@ -17,10 +17,12 @@ vi.mock('../../components/PrintModal', () => ({
     preselectPlateId?: number | null;
     cleanupLibraryAfterDispatch?: boolean;
     initialScheduleOptions?: { scheduleType?: string; requireManualStart?: boolean };
+    slicerInboxClaim?: string;
     onClose: () => void;
     onSuccess?: () => void;
   }) => (
     <div data-testid="print-modal">
+      <span>claim:{props.slicerInboxClaim ? 'yes' : 'no'}</span>
       <span>file:{props.libraryFileId}</span>
       <span>plate:{String(props.preselectPlateId ?? 'none')}</span>
       <span>cleanup:{String(!!props.cleanupLibraryAfterDispatch)}</span>
@@ -66,6 +68,9 @@ const queued: Record<string, unknown>[] = [];
 const moves: { file_ids: number[]; folder_id: number | null }[] = [];
 const renames: { id: number; filename: string }[] = [];
 const deletes: number[] = [];
+const restores: number[] = [];
+const kept: number[] = [];
+let discardReply: () => Response = () => HttpResponse.json({ status: 'success', id: 10 });
 
 const drop = (id: number) => {
   pending = pending.filter((u) => u.id !== id);
@@ -79,6 +84,9 @@ beforeEach(() => {
   moves.length = 0;
   renames.length = 0;
   deletes.length = 0;
+  restores.length = 0;
+  kept.length = 0;
+  discardReply = () => HttpResponse.json({ status: 'success', id: 10 });
   vi.mocked(localStorage.setItem).mockClear();
   server.use(
     http.get('/api/v1/slicer-inbox/pending', () => HttpResponse.json(pending)),
@@ -118,10 +126,22 @@ beforeEach(() => {
       renames.push({ id: Number(params.id), filename: body.filename });
       return HttpResponse.json({ id: Number(params.id), filename: body.filename });
     }),
-    http.delete('/api/v1/library/files/:id', ({ params }) => {
-      deletes.push(Number(params.id));
-      drop(Number(params.id));
-      return HttpResponse.json({ status: 'success', message: 'File moved to trash', trashed: true });
+    http.post('/api/v1/slicer-inbox/:id/discard', ({ params }) => {
+      const reply = discardReply();
+      if (reply.status < 300) {
+        deletes.push(Number(params.id));
+        drop(Number(params.id));
+      }
+      return reply;
+    }),
+    http.post('/api/v1/slicer-inbox/:id/restore', ({ params }) => {
+      restores.push(Number(params.id));
+      pending = [upload(Number(params.id), 'Cube.gcode.3mf'), ...pending];
+      return HttpResponse.json({ status: 'success', id: Number(params.id) });
+    }),
+    http.post('/api/v1/slicer-inbox/:id/kept', ({ params }) => {
+      kept.push(Number(params.id));
+      return HttpResponse.json({ status: 'success', id: Number(params.id) });
     }),
   );
 });
@@ -160,6 +180,7 @@ describe('SlicerImportDialog', () => {
     expect(await screen.findByText('Cube.gcode.3mf')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Print/ }));
+    expect(await screen.findByTestId('print-modal')).toHaveTextContent('claim:yes');
     drop(10);
     fireEvent.click(await screen.findByText('print-done'));
     expect(await screen.findByText('Clip.gcode.3mf')).toBeInTheDocument();
@@ -178,6 +199,7 @@ describe('SlicerImportDialog', () => {
       plate_id: 2,
       cleanup_library_after_dispatch: true,
       manual_start: true,
+      slicer_inbox_claim: expect.any(String),
     });
     expect(await screen.findByText('Clip.gcode.3mf')).toBeInTheDocument();
     expect(screen.queryByTestId('print-modal')).not.toBeInTheDocument();
@@ -214,6 +236,8 @@ describe('SlicerImportDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(moves).toEqual([{ file_ids: [10], folder_id: 9 }]));
+    // The other sessions are told it was kept.
+    await waitFor(() => expect(kept).toEqual([10]));
     expect(renames).toEqual([{ id: 10, filename: 'Cube v2.gcode.3mf' }]);
     expect(await screen.findByText('Clip.gcode.3mf')).toBeInTheDocument();
     expect(localStorage.setItem).toHaveBeenCalledWith('slicerInbox.lastFolder', '9');
@@ -239,5 +263,73 @@ describe('SlicerImportDialog', () => {
     });
     expect(await screen.findByText('Fresh.gcode.3mf')).toBeInTheDocument();
     expect(screen.queryByText('Cube.gcode.3mf')).not.toBeInTheDocument();
+  });
+
+  // Fork: every open session of the uploader asks, so one file can be
+  // decided twice -- the costliest mistake is printing it twice.
+  describe('decided on another device', () => {
+    it('says so instead of letting the dialog vanish', async () => {
+      render(<SlicerImportDialog />);
+      await screen.findByText('Cube.gcode.3mf');
+      drop(10);
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent(SLICER_DECIDED_EVENT, { detail: { file_id: 10, decision: 'queued', claim: 'other-tab:1' } }),
+        );
+      });
+      expect(await screen.findByText('Handled on another device: added to the queue')).toBeInTheDocument();
+      expect(screen.getByText('Cube.gcode.3mf')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Add to queue/ })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+      expect(await screen.findByText('Clip.gcode.3mf')).toBeInTheDocument();
+    });
+
+    it('checks the file still waits right before an action', async () => {
+      render(<SlicerImportDialog />);
+      await screen.findByText('PLA');
+      drop(10); // decided elsewhere, the message not here yet
+      fireEvent.click(screen.getByRole('button', { name: /^Add to queue/ }));
+      expect(await screen.findByText('Handled on another device')).toBeInTheDocument();
+      expect(queued).toHaveLength(0);
+    });
+
+    it('a queue refused with 409 is another device’s decision, not a reason to open the print dialog', async () => {
+      queueReply = () => HttpResponse.json({ detail: 'already in the queue' }, { status: 409 });
+      render(<SlicerImportDialog />);
+      await screen.findByText('PLA');
+      fireEvent.click(screen.getByRole('button', { name: /^Add to queue/ }));
+      expect(await screen.findByText('Handled on another device: added to the queue')).toBeInTheDocument();
+      expect(screen.queryByTestId('print-modal')).not.toBeInTheDocument();
+    });
+
+    it('a discard refused because a queue job uses the file says so', async () => {
+      discardReply = () => HttpResponse.json({ detail: 'in the queue' }, { status: 409 });
+      render(<SlicerImportDialog />);
+      fireEvent.click(await screen.findByRole('button', { name: /^Discard/ }));
+      expect(await screen.findByText('Handled on another device: added to the queue')).toBeInTheDocument();
+      expect(deletes).toEqual([]);
+    });
+  });
+
+  it('Discard offers Undo, which brings the file back', async () => {
+    pending = [upload(10, 'Cube.gcode.3mf')];
+    render(<SlicerImportDialog />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Discard/ }));
+    await waitFor(() => expect(deletes).toEqual([10]));
+    await waitFor(() => expect(screen.queryByText('Cube.gcode.3mf')).not.toBeInTheDocument());
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(restores).toEqual([10]));
+    expect(await screen.findByText('Cube.gcode.3mf')).toBeInTheDocument();
+  });
+
+  it('files put off with Later come back from a small button', async () => {
+    pending = [upload(10, 'Cube.gcode.3mf')];
+    render(<SlicerImportDialog />);
+    await screen.findByText('Cube.gcode.3mf');
+    fireEvent.click(screen.getByRole('button', { name: 'Decide later' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'From OrcaSlicer: 1 waiting' }));
+    expect(await screen.findByText('Cube.gcode.3mf')).toBeInTheDocument();
   });
 });

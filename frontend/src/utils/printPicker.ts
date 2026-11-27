@@ -1,4 +1,5 @@
 import type { LibraryFileListItem } from '../api/client';
+import { isGcodeCompatible } from './printer';
 
 export type PrintPickerSort = 'name' | 'newest' | 'printed';
 
@@ -23,20 +24,36 @@ export function storeSort(sort: PrintPickerSort) {
 }
 
 /**
- * Is a library file sliced for some other printer model than `printerModel`?
+ * Is a library file sliced for a printer model whose G-code `printerModel`
+ * cannot run?
  *
- * Unknown on either side is not a mismatch: a file without `sliced_for_model`
+ * The same rule as the print dialog and the backend (`isGcodeCompatible`):
+ * a P1S slice runs on a P1P (CUSTOM_FORK.md), so it is not "other". Unknown
+ * on either side is not a mismatch either: a file without `sliced_for_model`
  * (older upload, plain G-code) or a printer without a model is offered, and
- * the print dialog's own checks have the last word — the same rule the card's
- * upload-for-print flow applied.
+ * the print dialog's own checks have the last word.
  */
 export function isSlicedForOtherPrinter(
   file: Pick<LibraryFileListItem, 'sliced_for_model'>,
   printerModel: string,
 ): boolean {
+  return !isGcodeCompatible(file.sliced_for_model, printerModel);
+}
+
+/**
+ * The model a file was sliced for when that is another model whose G-code
+ * `printerModel` may still run (a P1S slice on a P1P), else null. The picker
+ * offers such a file with a warning badge instead of hiding it.
+ */
+export function slicedForRelatedModel(
+  file: Pick<LibraryFileListItem, 'sliced_for_model'>,
+  printerModel: string,
+): string | null {
   const slicedFor = file.sliced_for_model;
-  if (!slicedFor || !printerModel) return false;
-  return slicedFor.toLowerCase() !== printerModel.toLowerCase();
+  if (!slicedFor || !printerModel) return null;
+  const key = (m: string) => m.trim().toUpperCase().replace(/[\s-]/g, '');
+  if (key(slicedFor) === key(printerModel)) return null;
+  return isGcodeCompatible(slicedFor, printerModel) ? slicedFor : null;
 }
 
 export function sortPickerFiles(files: LibraryFileListItem[], sort: PrintPickerSort): LibraryFileListItem[] {

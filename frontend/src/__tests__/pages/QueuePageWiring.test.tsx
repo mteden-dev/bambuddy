@@ -190,6 +190,31 @@ describe('QueuePage tabs (fork)', () => {
     expect(tabs[0].className).toContain('border-bambu-green');
     expect(screen.queryByText('Pending A')).toBeNull();
   });
+
+  it('opens a job linked to (?item=<id>) on the timeline, then drops the parameter', async () => {
+    vi.mocked(localStorage.getItem).mockImplementation((key: string) => (key === 'queue.tab' ? 'queue' : null));
+    server.use(http.get('*/api/v1/queue/forecast', () => HttpResponse.json({ error: 'not in this test' }, { status: 500 })));
+    window.history.pushState({}, '', '/queue?tab=timeline&item=11');
+    try {
+      render(<QueuePage />);
+      const details = await screen.findByTestId('queue-job-details');
+      expect(within(details).getByRole('heading')).toHaveTextContent('Pending A');
+      expect(window.location.search).toBe('?tab=timeline');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('keeps the summary to one line on the timeline, so its lanes start on the first screen', async () => {
+    vi.mocked(localStorage.getItem).mockImplementation(() => null);
+    server.use(http.get('*/api/v1/queue/forecast', () => HttpResponse.json({ error: 'not in this test' }, { status: 500 })));
+    render(<QueuePage />);
+    const compact = await screen.findByTestId('queue-stats-compact');
+    expect(compact).toHaveTextContent('Printing');
+    expect(compact).toHaveTextContent('Queued');
+    // The summary card and the history count are for the list tabs.
+    expect(screen.queryByText('History', { selector: 'span' })).toBeNull();
+  });
 });
 
 describe('QueuePage wiring: replan the queue (fork)', () => {

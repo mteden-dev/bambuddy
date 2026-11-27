@@ -109,6 +109,33 @@ export function serializeAmsColorPalette(colors: readonly PaletteColor[]): strin
   );
 }
 
+/**
+ * The i18n key (under configureAmsSlot.palette.colors) of a default palette
+ * colour, matched by its stored English name and hex; null for a colour the
+ * user named or recoloured. The names are stored in English so the palette
+ * still reads as the default, and translated where they are shown or picked:
+ * the picked name becomes the spool's colour name.
+ */
+export function defaultColorKey(color: { name: string; hex: string }): string | null {
+  const match = DEFAULT_AMS_COLOR_PALETTE.find((d) => d.hex === color.hex && d.name === color.name);
+  return match ? match.name.toLowerCase() : null;
+}
+
+/** A palette colour's name to show, the defaults through ``translate`` (given the key). */
+export function paletteColorLabel(color: { name: string; hex: string }, translate: (key: string) => string): string {
+  const key = defaultColorKey(color);
+  return key ? translate(key) : color.name;
+}
+
+/**
+ * The name to store for a colour edited under its shown name: a default
+ * colour's translated name goes back to the stored English one.
+ */
+export function storedColorName(name: string, hex: string, translate: (key: string) => string): string {
+  const match = DEFAULT_AMS_COLOR_PALETTE.find((d) => d.hex === hex && translate(d.name.toLowerCase()) === name);
+  return match ? match.name : name;
+}
+
 /** ``items`` with the entry at ``from`` moved to ``to`` (both clamped), as a new array. */
 export function moveItem<T>(items: readonly T[], from: number, to: number): T[] {
   const next = [...items];

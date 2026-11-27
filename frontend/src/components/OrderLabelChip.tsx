@@ -78,6 +78,8 @@ export function OrderLabelChip({ itemId, printerId, variant = 'chip' }: OrderLab
     if (tag.base_order_id != null) openOrder(tag.base_order_id);
   };
 
+  // On touch both are 44 px to tap: list rows by their height (no fill, so they look the same),
+  // the filled chip by an invisible area around it.
   if (variant === 'list') {
     if (!lines.length) return <div className="text-xs text-bambu-gray">{text}</div>;
     return (
@@ -90,7 +92,7 @@ export function OrderLabelChip({ itemId, printerId, variant = 'chip' }: OrderLab
                 type="button"
                 disabled={tag.base_order_id == null}
                 onClick={() => goTo(tag)}
-                className="flex items-center gap-1.5 text-left text-white hover:underline disabled:no-underline disabled:cursor-default"
+                className="flex items-center gap-1.5 any-pointer-coarse:min-h-[44px] text-left text-white hover:underline disabled:no-underline disabled:cursor-default"
               >
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[tag.source_kind ?? ''] ?? 'bg-bambu-gray'}`} />
                 <span className={urgency(tag)}>{line}</span>
@@ -113,7 +115,7 @@ export function OrderLabelChip({ itemId, printerId, variant = 'chip' }: OrderLab
           if (lines.length) setOpen((v) => !v);
         }}
         onPointerDown={(e) => e.stopPropagation()}
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-bambu-dark-tertiary max-w-[160px] min-w-0 pointer-coarse:py-2 ${
+        className={`relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-bambu-dark-tertiary max-w-[160px] min-w-0 pointer-coarse:py-2 any-pointer-coarse:before:absolute any-pointer-coarse:before:inset-x-0 any-pointer-coarse:before:-inset-y-1.5 ${
           lines.length ? urgency(main) : 'text-bambu-gray'
         }`}
       >
@@ -135,7 +137,7 @@ export function OrderLabelChip({ itemId, printerId, variant = 'chip' }: OrderLab
               type="button"
               disabled={tag.base_order_id == null}
               onClick={() => goTo(tag)}
-              className="w-full flex items-center gap-2 px-2 min-h-11 text-left text-xs rounded hover:bg-bambu-dark-tertiary disabled:hover:bg-transparent"
+              className="w-full flex items-center gap-2 px-2 min-h-[44px] text-left text-xs rounded hover:bg-bambu-dark-tertiary disabled:hover:bg-transparent"
             >
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[tag.source_kind ?? ''] ?? 'bg-bambu-gray'}`} />
               <span className={`flex-1 min-w-0 ${urgency(tag)}`}>{line}</span>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Eraser, Trash2, UserCheck, UserX } from 'lucide-react';
+import { Check, Eraser, Pencil, Trash2, UserCheck, UserX } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { QueueStaffedHours, QueueStaffedMark, QueueStaffedMarkKind } from '../api/client';
@@ -137,6 +137,10 @@ export function StaffedMarksCalendar({
   // The mark tapped: its row in the list is brought into view.
   const [picked, setPicked] = useState<number | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  // Fork: a finger paints only in edit mode; otherwise a swipe over the grid
+  // scrolls the sheet (pan-y) and a tap picks a mark. A mouse always paints.
+  const [editing, setEditing] = useState(false);
+  const tapStart = useRef<{ x: number; y: number } | null>(null);
 
   const dayLabel = (min: number, options: Intl.DateTimeFormatOptions) =>
     new Date(min * 60_000).toLocaleDateString(i18n.language, { timeZone: 'UTC', ...options });
@@ -181,6 +185,11 @@ export function StaffedMarksCalendar({
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (readOnly || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    if (e.pointerType !== 'mouse' && !editing) {
+      // Not painting: the browser scrolls; a tap that stays put picks a mark.
+      tapStart.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
     e.preventDefault();
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const { at, row, width } = pointAt(e.clientX, e.clientY);
@@ -200,6 +209,9 @@ export function StaffedMarksCalendar({
     });
   };
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (tapStart.current && Math.hypot(e.clientX - tapStart.current.x, e.clientY - tapStart.current.y) > DRAG_PX) {
+      tapStart.current = null;
+    }
     const { at, row, width } = pointAt(e.clientX, e.clientY);
     if (!drag) {
       if (readOnly || e.pointerType === 'touch') return;
@@ -210,7 +222,14 @@ export function StaffedMarksCalendar({
     const moved = drag.moved || Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > DRAG_PX;
     setDrag({ ...drag, current: at, row, moved });
   };
-  const onPointerUp = () => {
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (tapStart.current) {
+      tapStart.current = null;
+      const { at, row, width } = pointAt(e.clientX, e.clientY);
+      const held = grab(at, row, edgeMinutes(e.pointerType, width));
+      if (held) setPicked(held.index);
+      return;
+    }
     if (!drag) return;
     setDrag(null);
     if (drag.mode === 'paint') {
@@ -311,6 +330,27 @@ export function StaffedMarksCalendar({
 
       {!readOnly && <p className="text-[11px] text-bambu-gray">{t('queue.timeline.staffed.dragHint')}</p>}
 
+      {/* A finger paints only once this is on, so a swipe scrolls the sheet (fork). */}
+      {!readOnly && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setEditing((v) => !v)}
+            aria-pressed={editing}
+            data-testid="staffed-calendar-edit"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs border any-pointer-coarse:min-h-[44px] ${
+              editing ? 'border-bambu-green bg-bambu-green/20 text-bambu-green' : 'border-bambu-dark-tertiary text-white hover:bg-bambu-dark-tertiary'
+            }`}
+          >
+            {editing ? <Check className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
+            {editing ? t('queue.timeline.staffed.editDone') : t('queue.timeline.staffed.editMarks')}
+          </button>
+          <span className="text-[11px] text-bambu-gray">
+            {editing ? t('queue.timeline.staffed.editOnHint') : t('queue.timeline.staffed.editOffHint')}
+          </span>
+        </div>
+      )}
+
       {/* What a drag covers, or where a moved mark goes. One line, so nothing shifts under the finger. */}
       <div className="h-4 text-[11px] flex items-center gap-1.5 min-w-0" aria-live="polite" data-testid="staffed-calendar-status">
         {status && (
@@ -367,11 +407,15 @@ export function StaffedMarksCalendar({
           <div
             ref={gridRef}
             className={`relative flex-1 ${cursor}`}
-            style={{ touchAction: readOnly ? undefined : 'none' }}
+            style={{ touchAction: !readOnly && editing ? 'none' : 'pan-y' }}
+            data-editing={editing ? 'true' : undefined}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
-            onPointerCancel={() => setDrag(null)}
+            onPointerCancel={() => {
+              tapStart.current = null;
+              setDrag(null);
+            }}
             onPointerLeave={() => setHover(null)}
             data-testid="staffed-calendar-grid"
           >

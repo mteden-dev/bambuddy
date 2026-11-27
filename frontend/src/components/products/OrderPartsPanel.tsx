@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MutableRefObject, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ImageOff, Info, Loader2, PackageCheck } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, Check, ImageOff, Info, Loader2, PackageCheck } from 'lucide-react';
 import { api } from '../../api/client';
 import type { BaseOrder, BaseOrderAcceptProduct, ProductDetail } from '../../api/client';
 import { Button } from '../Button';
@@ -10,9 +10,10 @@ import { PieceStepper } from './PieceStepper';
 import { useToast } from '../../contexts/ToastContext';
 import { useUndoToast } from '../../hooks/useUndoToast';
 import { sendLabel, wantedUnits } from '../../utils/baseOrders';
+import { invalidatePlanQueries } from '../../utils/products';
 
-const TOUCH = 'pointer-coarse:min-h-11!';
-// A change is saved this long after the last tap.
+const TOUCH = 'any-pointer-coarse:min-h-[44px]!';
+// A draft's change is saved this long after the last tap.
 const SAVE_AFTER_MS = 400;
 // What the operator already has: the opposite of printing, so never green.
 const HAVE_TEXT = 'text-sky-700 dark:text-sky-300';
@@ -24,14 +25,28 @@ interface Choice {
   have: Record<number, number>;
 }
 
+/** What the row's Print asks of an open panel: the choices on screen, unsaved ones too. */
+export interface OrderPartsControls {
+  /** Stops a pending save, waits for one under way and gives every product's choice (null: not all known). */
+  flush: () => Promise<{ products: BaseOrderAcceptProduct[] } | null>;
+}
+
+interface ProductHandle {
+  flush: () => Promise<BaseOrderAcceptProduct | null>;
+}
+
 interface OrderPartsPanelProps {
   order: BaseOrder;
   canAct: boolean;
-  /** Send the order to production (a waiting one): its saved choice is printed. */
+  /** Send the order to production (a waiting one): the choices on screen are printed. */
   onPrint: () => void;
   printing: boolean;
   /** Take an accepted order out of production (asks first). */
   onWithdraw: () => void;
+  /** Filled by the panel: the row's own Print sends what is on screen too. */
+  controls?: MutableRefObject<OrderPartsControls | null>;
+  /** A choice is being saved (Print waits for it). */
+  onSavingChange?: (saving: boolean) => void;
 }
 
 function asNumbers(record: Record<string, number> | undefined | null): Record<number, number> {
@@ -41,38 +56,84 @@ function asNumbers(record: Record<string, number> | undefined | null): Record<nu
 /**
  * Fork (Base sync): an order's parts, opened under its row. Per product the
  * operator marks what is there already (whole products, loose parts); what is
- * left to print is only read. On a waiting order
- * this is saved at once as a draft (nothing goes to stock or the queue until
- * it is sent); on one in production it is applied at once and replans, with
- * "Undo".
+ * left to print is only read. On a waiting order this is saved by itself as a
+ * draft (nothing goes to stock or the queue until it is sent); on one in
+ * production each change replans, so it waits for "Apply", with "Undo".
  */
-export function OrderPartsPanel({ order, canAct, onPrint, printing, onWithdraw }: OrderPartsPanelProps) {
+export function OrderPartsPanel({
+  order,
+  canAct,
+  onPrint,
+  printing,
+  onWithdraw,
+  controls,
+  onSavingChange,
+}: OrderPartsPanelProps) {
   const { t } = useTranslation();
   const [showInfo, setShowInfo] = useState(false);
+  const [savingIds, setSavingIds] = useState<Set<number>>(() => new Set());
+  const handles = useRef(new Map<number, ProductHandle>());
   const accepted = order.state === 'accepted';
   const waiting = order.state === 'new' || order.state === 'skipped';
   const wanted = wantedUnits(order);
+  const productIds = [...wanted.keys()];
   const nameOf = new Map(
     order.lines.filter((l) => l.product_id != null).map((l) => [l.product_id as number, l]),
   );
+  const saving = savingIds.size > 0;
+
+  const register = useCallback((productId: number, handle: ProductHandle | null) => {
+    if (handle) handles.current.set(productId, handle);
+    else handles.current.delete(productId);
+  }, []);
+  const onSaving = useCallback((productId: number, busy: boolean) => {
+    setSavingIds((current) => {
+      if (current.has(productId) === busy) return current;
+      const next = new Set(current);
+      if (busy) next.add(productId);
+      else next.delete(productId);
+      return next;
+    });
+  }, []);
+
+  const idsKey = productIds.join(',');
+  useEffect(() => {
+    if (!controls) return;
+    controls.current = {
+      flush: async () => {
+        const ids = idsKey ? idsKey.split(',').map(Number) : [];
+        const products = await Promise.all(ids.map((id) => handles.current.get(id)?.flush() ?? Promise.resolve(null)));
+        return products.every((p): p is BaseOrderAcceptProduct => p != null) ? { products } : null;
+      },
+    };
+    return () => {
+      controls.current = null;
+    };
+  }, [controls, idsKey]);
+
+  useEffect(() => {
+    onSavingChange?.(saving);
+  }, [saving, onSavingChange]);
+  // Closed while saving: the row's Print does not wait for a panel that is gone.
+  useEffect(() => () => onSavingChange?.(false), [onSavingChange]);
 
   return (
     <div className="mt-3 border-t border-bambu-dark-tertiary pt-3 space-y-3" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-start gap-1 text-xs text-bambu-gray">
-        <span className="flex-1">{t(waiting ? 'baseSync.parts.hintWaiting' : 'baseSync.parts.hintAccepted')}</span>
+        <span className="flex-1 py-1">{t(waiting ? 'baseSync.parts.hintWaiting' : 'baseSync.partsHintAccepted')}</span>
         <button
           type="button"
           onClick={() => setShowInfo((v) => !v)}
           aria-expanded={showInfo}
           aria-label={t('baseSync.acceptModal.more')}
-          className="p-2 -m-1.5 text-bambu-gray hover:text-white"
+          className="p-2 -m-1.5 any-pointer-coarse:min-h-[44px] any-pointer-coarse:min-w-[44px] flex items-center justify-center text-bambu-gray hover:text-white"
         >
           <Info className="w-4 h-4" />
         </button>
       </div>
       {showInfo && <p className="text-xs text-bambu-gray-light">{t('baseSync.parts.info')}</p>}
       <div className="grid gap-3 xl:grid-cols-2 items-start">
-        {[...wanted].map(([productId, units]) => (
+        {productIds.map((productId) => (
           <ProductParts
             key={productId}
             order={order}
@@ -83,8 +144,10 @@ export function OrderPartsPanel({ order, canAct, onPrint, printing, onWithdraw }
                 ? api.getProductThumbnailUrl(productId, nameOf.get(productId)?.thumbnail_version ?? null)
                 : null
             }
-            wanted={units}
+            wanted={wanted.get(productId) ?? 0}
             canAct={canAct && (waiting || accepted)}
+            register={register}
+            onSaving={onSaving}
           />
         ))}
       </div>
@@ -102,8 +165,8 @@ export function OrderPartsPanel({ order, canAct, onPrint, printing, onWithdraw }
             </Button>
           )}
           {waiting && (
-            <Button className={TOUCH} onClick={onPrint} disabled={printing}>
-              {printing ? (
+            <Button className={TOUCH} onClick={onPrint} disabled={printing || saving}>
+              {printing || saving ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 order.draft?.nothing_to_print && <PackageCheck className="w-4 h-4" />
@@ -124,20 +187,33 @@ interface ProductPartsProps {
   thumbnail: string | null;
   wanted: number;
   canAct: boolean;
+  register: (productId: number, handle: ProductHandle | null) => void;
+  onSaving: (productId: number, saving: boolean) => void;
 }
 
-function initialChoice(order: BaseOrder, productId: number, wanted: number, product: ProductDetail | undefined): Choice {
+/** The choice the server holds for one product: the draft of a waiting order, what an accepted one applies. */
+function serverChoice(order: BaseOrder, productId: number, wanted: number, product: ProductDetail): Choice {
   const waiting = order.state !== 'accepted';
   const held = waiting ? asNumbers(order.draft?.held) : asNumbers(order.held);
   const onHand = waiting ? asNumbers(order.draft?.on_hand) : asNumbers(order.on_hand);
-  const parts = new Set((product?.parts ?? []).map((p) => p.id));
+  const parts = new Set(product.parts.map((p) => p.id));
   return {
     units: Math.max(0, wanted - (held[productId] ?? 0)),
     have: Object.fromEntries(Object.entries(onHand).filter(([partId]) => parts.has(Number(partId)))),
   };
 }
 
-function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: ProductPartsProps) {
+/** Comparable form of a choice: no zero counts, parts in order. */
+function keyOf(c: Choice | null): string | null {
+  if (!c) return null;
+  const have = Object.entries(c.have)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => [Number(k), n])
+    .sort((a, b) => a[0] - b[0]);
+  return JSON.stringify([c.units, have]);
+}
+
+function ProductParts({ order, productId, name, thumbnail, wanted, canAct, register, onSaving }: ProductPartsProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -148,68 +224,147 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
     queryFn: () => api.getProduct(productId),
   });
   const [choice, setChoice] = useState<Choice | null>(null);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const dirty = useRef(false);
-  const lastSaved = useRef<Choice | null>(null);
+  // The order changed in Base under a choice not saved yet.
+  const [stale, setStale] = useState(false);
 
-  useEffect(() => {
-    if (product && choice === null) {
-      const start = initialChoice(order, productId, wanted, product);
-      setChoice(start);
-      lastSaved.current = start;
-    }
-  }, [product, choice, order, productId, wanted]);
+  const choiceRef = useRef<Choice | null>(null);
+  choiceRef.current = choice;
+  // The server's choice the one on screen started from, and the choices sent since (their echo is ours).
+  const baseline = useRef<Choice | null>(null);
+  const sent = useRef(new Set<string>());
+  // One save at a time: a change made meanwhile waits here, only the latest.
+  const inFlight = useRef<Promise<void> | null>(null);
+  const queued = useRef<{ choice: Choice; undo: boolean } | null>(null);
+  const timer = useRef<number | null>(null);
+  const latest = useRef({ accepted, orderId: order.order_id });
+  latest.current = { accepted, orderId: order.order_id };
 
-  const toBody = (c: Choice): { products: BaseOrderAcceptProduct[] } => ({
-    products: [
-      {
-        product_id: productId,
-        units: c.units,
-        have: Object.entries(c.have)
-          .filter(([, pieces]) => pieces > 0)
-          .map(([partId, pieces]) => ({ part_id: Number(partId), pieces })),
-      },
-    ],
-  });
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['base-sync'] });
-    queryClient.invalidateQueries({ queryKey: ['products'] });
-    queryClient.invalidateQueries({ queryKey: ['product'] });
-    queryClient.invalidateQueries({ queryKey: ['queue'] });
+  const server = product ? serverChoice(order, productId, wanted, product) : null;
+  const serverKey = keyOf(server);
+
+  const toBody = useCallback(
+    (c: Choice): BaseOrderAcceptProduct => ({
+      product_id: productId,
+      units: c.units,
+      have: Object.entries(c.have)
+        .filter(([, pieces]) => pieces > 0)
+        .map(([partId, pieces]) => ({ part_id: Number(partId), pieces })),
+    }),
+    [productId],
+  );
+
+  const start = (c: Choice, undo: boolean) => {
+    const { accepted: applying, orderId } = latest.current;
+    const before = baseline.current;
+    sent.current.add(keyOf(c) as string);
+    setSaving(true);
+    const body = { products: [toBody(c)] };
+    inFlight.current = (applying ? api.acceptBaseOrder(orderId, body) : api.saveBaseOrderDraft(orderId, body))
+      .then(() => {
+        setSaved(true);
+        invalidatePlanQueries(queryClient);
+        // Undo goes through the API: it works when the row has left the list or the panel is closed.
+        if (applying && !undo && before) undoToast(t('baseSync.parts.changed'), () => undoTo(before));
+      })
+      .catch((e: Error) => {
+        sent.current.delete(keyOf(c) as string);
+        showToast(e.message, 'error');
+      })
+      .finally(() => {
+        inFlight.current = null;
+        const next = queued.current;
+        queued.current = null;
+        if (next) start(next.choice, next.undo);
+        else setSaving(false);
+      });
   };
-  const save = useMutation({
-    mutationFn: (c: Choice) =>
-      accepted ? api.acceptBaseOrder(order.order_id, toBody(c)) : api.saveBaseOrderDraft(order.order_id, toBody(c)),
-    onSuccess: (_, c) => {
-      const before = lastSaved.current;
-      lastSaved.current = c;
-      setSaved(true);
-      refresh();
-      if (accepted && before) {
-        undoToast(t('baseSync.parts.changed'), () => {
-          setChoice(before);
-          dirty.current = true;
-        });
-      }
-    },
-    onError: (e: Error) => showToast(e.message, 'error'),
-  });
+  const enqueue = (c: Choice, undo = false) => {
+    if (inFlight.current) queued.current = { choice: c, undo };
+    else start(c, undo);
+  };
+  const cancelTimer = () => {
+    if (timer.current != null) window.clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const undoTo = (before: Choice) => {
+    cancelTimer();
+    setChoice(before);
+    setStale(false);
+    enqueue(before, true);
+  };
+
+  // Follows the server: a fresh choice when it changed and nothing here is unsaved;
+  // a note instead of overwriting what the operator is changing.
+  useEffect(() => {
+    if (!server) return;
+    const mine = keyOf(choiceRef.current);
+    if (baseline.current === null) {
+      baseline.current = server;
+      setChoice(server);
+      return;
+    }
+    if (serverKey === keyOf(baseline.current)) return;
+    if (sent.current.has(serverKey as string) || serverKey === mine) {
+      // Our own save came back.
+      baseline.current = server;
+      setStale(false);
+      return;
+    }
+    const unsaved = mine !== keyOf(baseline.current) || timer.current != null || queued.current != null || inFlight.current != null;
+    if (!unsaved) {
+      baseline.current = server;
+      sent.current.clear();
+      setChoice(server);
+      return;
+    }
+    setStale(true);
+    // Only the server's answer matters here; `server` is rebuilt every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverKey]);
+
+  const reload = () => {
+    if (!server) return;
+    cancelTimer();
+    queued.current = null;
+    baseline.current = server;
+    sent.current.clear();
+    setChoice(server);
+    setStale(false);
+  };
 
   useEffect(() => {
-    if (!choice || !dirty.current) return;
-    setSaved(false);
-    const timer = window.setTimeout(() => {
-      dirty.current = false;
-      save.mutate(choice);
-    }, SAVE_AFTER_MS);
-    return () => window.clearTimeout(timer);
-    // Saved after the taps stop; the mutation object is stable enough for this.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [choice]);
+    onSaving(productId, saving);
+  }, [productId, saving, onSaving]);
+
+  useEffect(() => {
+    register(productId, {
+      flush: async () => {
+        // Print sends the choice itself: a draft save not yet sent is dropped, one under way is waited for.
+        cancelTimer();
+        queued.current = null;
+        while (inFlight.current) await inFlight.current;
+        const c = choiceRef.current;
+        if (!c) return null;
+        sent.current.add(keyOf(c) as string);
+        return toBody(c);
+      },
+    });
+    return () => register(productId, null);
+  }, [productId, register, toBody]);
+
+  useEffect(() => () => cancelTimer(), []);
 
   const change = (next: Choice) => {
-    dirty.current = true;
     setChoice(next);
+    setSaved(false);
+    if (accepted) return; // applied with "Apply": each change replans
+    cancelTimer();
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      enqueue(next);
+    }, SAVE_AFTER_MS);
   };
   const inStock = (partId: number) =>
     (product?.stock ?? []).filter((s) => s.part_id === partId && s.pieces > 0).reduce((sum, s) => sum + s.pieces, 0);
@@ -226,6 +381,8 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
   });
   const nothingLeft = choice != null && (choice.units === 0 || (rows.length > 0 && rows.every((r) => r.toPrint === 0)));
   const touched = choice != null && (held > 0 || Object.values(choice.have).some((n) => n > 0));
+  // An order in production: a change not applied yet.
+  const unapplied = accepted && choice != null && keyOf(choice) !== keyOf(baseline.current);
   const setHeld = (n: number) => {
     if (!choice) return;
     const units = wanted - n;
@@ -265,6 +422,15 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
           {t('baseSync.acceptModal.loadFailed')}
           <Button size="sm" variant="secondary" className={TOUCH} onClick={() => refetch()}>
             {t('products.qc.retry')}
+          </Button>
+        </div>
+      )}
+      {stale && (
+        <div role="alert" className="mt-3 flex flex-wrap items-center gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:text-amber-300">
+          <AlertTriangle aria-hidden="true" className="w-4 h-4 shrink-0" />
+          <span className="flex-1 min-w-0">{t('baseSync.partsBaseChanged')}</span>
+          <Button size="sm" variant="secondary" className={TOUCH} onClick={reload}>
+            {t('baseSync.partsReload')}
           </Button>
         </div>
       )}
@@ -345,12 +511,13 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
               {t(choice.units === 0 ? 'baseSync.parts.haveWhole' : 'baseSync.parts.haveAllParts')}
             </p>
           )}
-          {(save.isPending || saved || (canAct && touched)) && (
+          {(saving || saved || unapplied || (canAct && touched)) && (
             <div className="mt-1 flex flex-wrap items-center justify-end gap-2 text-xs">
-              {save.isPending ? (
+              {saving ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-bambu-gray" />
               ) : (
-                saved && (
+                saved &&
+                !unapplied && (
                   <span className="flex items-center gap-1 text-bambu-gray-light">
                     <Check className="w-3.5 h-3.5" />
                     {t('baseSync.parts.saved')}
@@ -360,11 +527,17 @@ function ProductParts({ order, productId, name, thumbnail, wanted, canAct }: Pro
               {canAct && touched && (
                 <button
                   type="button"
-                  className="text-bambu-gray hover:text-white underline px-1 py-2 pointer-coarse:min-h-11"
+                  className="text-bambu-gray hover:text-white underline px-1 py-2 any-pointer-coarse:min-h-[44px]"
                   onClick={() => change({ units: wanted, have: {} })}
                 >
                   {t('baseSync.parts.clear')}
                 </button>
+              )}
+              {canAct && unapplied && (
+                <Button size="sm" className={TOUCH} disabled={saving} onClick={() => choice && enqueue(choice)}>
+                  {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {t('baseSync.partsApply')}
+                </Button>
               )}
             </div>
           )}
@@ -429,7 +602,7 @@ function AllButton({ disabled, onClick }: { disabled: boolean; onClick: () => vo
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`px-2 min-h-9 pointer-coarse:min-h-11 text-xs underline ${HAVE_TEXT} disabled:opacity-40 disabled:no-underline`}
+      className={`px-2 min-h-9 any-pointer-coarse:min-h-[44px] text-xs underline ${HAVE_TEXT} disabled:opacity-40 disabled:no-underline`}
     >
       {t('baseSync.parts.all')}
     </button>

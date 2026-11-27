@@ -26,13 +26,18 @@ print runs long, so its holds yield: when the printer cannot start the job in a
 queue pass and is not about to finish a print (within the margin a preferred
 printer gets), the job is offered to the other printers it may run on in the
 same pass. Someone's hold never yields.
+
+Releasing the planner's hold keeps its row as "released": the planner re-holds
+every job it keeps at each replan and would undo the release otherwise. A
+released row holds nothing anywhere (``QueueReservations.load`` skips it);
+the planner leaves it alone, and only someone's hold replaces it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar, cast
+from typing import Generic, Literal, TypeVar, cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.engine import CursorResult
@@ -49,6 +54,8 @@ from backend.app.utils.printer_models import normalize_printer_model
 # column, NULL, counts as someone's).
 SOURCE_PLAN = "plan"
 SOURCE_USER = "user"
+# The planner's hold, released by someone: no hold, and the planner keeps off.
+SOURCE_RELEASED = "released"
 # Settings row; "false" makes the planner's reservations as firm as anyone's.
 YIELD_SETTING_KEY = "product_reservation_yield"
 
@@ -175,6 +182,8 @@ class QueueReservations:
             created_at = _created_at(by_id[row.queue_item_id])
             if row.item_created_at is not None and created_at is not None and row.item_created_at != created_at:
                 continue  # left by a deleted job whose id this one was given
+            if row.source == SOURCE_RELEASED:
+                continue
             rows[row.queue_item_id] = row.printer_id
             sources[row.queue_item_id] = row.source
         if not rows:
@@ -229,6 +238,16 @@ class QueueReservations:
             and self.rule.enabled
         )
 
+    def source(self, item: PrintQueueItem) -> Literal["plan", "user"]:
+        """Who holds ``item``: SOURCE_PLAN, else SOURCE_USER (a legacy NULL row too)."""
+        return "plan" if self.sources.get(item.id) == SOURCE_PLAN else "user"
+
+    def gives_way(self, item: PrintQueueItem, scope: PrinterScope = ALL_PRINTERS) -> bool:
+        """Whether ``item``'s soft hold lets it go elsewhere now: its printer cannot
+        take it soon by ``may_yield``'s rule. False for a firm hold or none."""
+        printer_id = self.active_printer(item, scope)
+        return printer_id is not None and self.is_soft(item) and self.may_yield(item, printer_id)
+
     def yield_margin_s(self, item: PrintQueueItem) -> float:
         """How soon a soft hold's printer must be done for the job to keep waiting for it."""
         return self.rule.margin_s(item.print_time_seconds) if self.rule is not None else 0.0
@@ -252,7 +271,8 @@ async def reserve(db: AsyncSession, item: PrintQueueItem, printer_id: int, *, so
     """Hold ``item`` for ``printer_id``. ``item`` must be flushed; the caller commits.
 
     ``source`` says who: the planner (SOURCE_PLAN) does not take over someone's
-    hold on the same printer, which stays theirs.
+    hold on the same printer, which stays theirs, nor touch a hold someone
+    released (SOURCE_RELEASED).
     """
     if _created_at(item) is None:
         await db.refresh(item, ["created_at"])
@@ -264,11 +284,11 @@ async def reserve(db: AsyncSession, item: PrintQueueItem, printer_id: int, *, so
             )
         )
     else:
+        same_job = existing.item_created_at in (None, item.created_at)
+        if source == SOURCE_PLAN and same_job and existing.source == SOURCE_RELEASED:
+            return
         someones = (
-            source == SOURCE_PLAN
-            and existing.source == SOURCE_USER
-            and existing.printer_id == printer_id
-            and existing.item_created_at in (None, item.created_at)
+            source == SOURCE_PLAN and existing.source == SOURCE_USER and existing.printer_id == printer_id and same_job
         )
         existing.printer_id = printer_id
         existing.item_created_at = item.created_at
@@ -277,7 +297,16 @@ async def reserve(db: AsyncSession, item: PrintQueueItem, printer_id: int, *, so
 
 
 async def release(db: AsyncSession, item_id: int) -> bool:
-    """End ``item_id``'s reservation, if it has one. The caller commits."""
+    """End ``item_id``'s reservation, if it has one. The caller commits.
+
+    The planner's hold is kept as released, so its next replan does not hold
+    the job again; someone's is deleted.
+    """
+    existing = await db.get(QueueReservation, item_id)
+    if existing is not None and existing.source in (SOURCE_PLAN, SOURCE_RELEASED):
+        released = existing.source == SOURCE_PLAN
+        existing.source = SOURCE_RELEASED
+        return released
     # A DELETE returns a CursorResult (rowcount), which execute() is not typed to say.
     result = cast(
         CursorResult, await db.execute(delete(QueueReservation).where(QueueReservation.queue_item_id == item_id))

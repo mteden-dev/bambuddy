@@ -141,6 +141,27 @@ na stan i do zamówień tylko przy włączonym `hand_prints_count` w ustawieniac
 inaczej `counted: false`: zadanie widać i można je sprawdzić, ale zamówienia drukują się w całości,
 jakby go nie było. `moved` oznacza zadanie planera przesunięte ręcznie na inną drukarkę.
 
+Zadanie w `jobs` produktu ma `print_time_seconds` (szacunek slicera), `planned_seconds` (czas, którego
+użył plan, czyli czas zadania w kolejce) i `learned` (`true`, gdy ten czas pochodzi z historii
+wydruków i różni się od szacunku). Otwarte zamówienie bez prognozy (`estimated_ready_at: null`) ma
+`no_estimate_reason`: `no_printer` (czekająca płyta, której prognoza nie stawia na żadnej drukarce),
+`held` (czekająca płyta wstrzymana z innego powodu: powód oczekiwania, jeszcze nie ruszyła, brak
+modelu) albo `nothing_queued` (nic czekającego ani drukowanego go nie obsługuje albo wszystko jest
+rozstawione, a części dalej brakuje); z prognozą `null`. Zamówienie z Base ma `base_order_id` i
+idzie za zamówieniem w Base: `PATCH` z inną `quantity` i `cancel` odpowiadają 409 („This order comes
+from Base: change it on the Orders page”), bo kolejny odczyt by to cofnął; `due_date` i `notes`
+można zmienić.
+
+Odpowiedzi, po których plan liczy się od nowa (zamówienie, `PATCH`, `cancel`, `replan` jednego
+produktu, korekta i przeniesienie stanu, preferencja płyty, anulowanie w kolejce, kontrola jakości,
+`accept` / `reset` / `skip` / `requeue` w Base; nie `POST /products/replan` całej kolejki), mają
+też `also_replanned` (produkty mniej pilne, przeliczone w tym samym przebiegu, których plan zmienił
+kolejkę: `product_id`, `name`, `created`, `replaced`) i `plan_failed` (`product_id`, `name`:
+przeliczone w tym przebiegu, plan się nie udał, zostały jak były). Po zatwierdzeniu przebiegu
+backend wysyła do wszystkich klientów komunikat WebSocket
+`{"type": "products_replanned", "product_ids": [...]}` (każdy przeliczony produkt), także po
+przebiegu z odczytu Base.
+
 ### Preferowana drukarka płyty
 
 ```bash
@@ -161,7 +182,8 @@ Tylko czekająca płyta planera (nie dodana ani przesunięta ręcznie, 409) i dr
 plik płyty (400). W `plates`: `overruled` to `earlier` (`overruled_by_s` sekund wcześniej),
 `filament`, `unavailable` albo `pieces` (reszta kompletu już z innej drukarki); `filament[]` ma
 `type`, `color`, `grams`, `left` (ile zostanie na szpuli po płycie, `null` gdy nieznane) i `swap`
-(`load` — trzeba założyć, `change` — szpula się skończy).
+(`load` — trzeba założyć, `change` — szpula się skończy). Płyta ma też `planned_seconds` i `learned`
+jak zadanie produktu.
 
 ### Wydruk zamówienia anulowany w kolejce
 
@@ -182,7 +204,7 @@ curl -s -X POST "$BB/products/queue-items/321/cancel" -H "X-API-Key: $KEY" -H 'C
 
 Tylko czekające zadanie planera (inne: 409, bez `orders` przy `withdraw`: 400). Odpowiedź:
 `replanned` (produkty), `created`, `kept`, `stocked`, `withdrawn` (zamówienia produktu),
-`withdrawn_base_orders`, `short`. Wydruk zatrzymany w trakcie (Stop w kolejce albo przerwany na
+`withdrawn_base_orders`, `short`, `also_replanned`, `plan_failed`. Wydruk zatrzymany w trakcie (Stop w kolejce albo przerwany na
 drukarce) przelicza plan sam, jak nieudany.
 
 ## Stan części
@@ -274,17 +296,21 @@ i pozycje (SKU, nazwa, ilość). Imienia, adresu, telefonu ani maila nie zapisuj
   zamówienie ma `label` (nick z Allegro albo krótki numer ze sklepu), `source_kind` (`allegro`
   albo `shop`), a pozycje miniaturę produktu (`has_thumbnail`, `thumbnail_version`). Zamówienie w
   produkcji ma `progress`: części produktu gotowe z potrzebnych (z tego `on_hand` z półki) i
-  `estimated_ready_at`; `missing` przy części to sztuki, których nie ma ani na stanie, ani w kolejce
+  `estimated_ready_at` (bez prognozy `no_estimate_reason`, jak przy zamówieniu produktu); `missing` przy części to sztuki, których nie ma ani na stanie, ani w kolejce
   (wydruk usunięty, anulowany albo drukarka go nie przyjęła). `POST /base-sync/orders/{order_id}/requeue`
   wysyła takie zamówienie ponownie: przelicza plan jego produktów (409, gdy nie jest w produkcji).
   `GET /base-sync/orders/counts` zwraca liczby zamówień w każdym stanie, osobno z Allegro i ze sklepu.
 - **Szkic** na zamówieniu czekającym: `POST /base-sync/orders/{order_id}/draft` z tym samym ciałem
   co `accept` zapisuje wybór („mam już dół”) bez wysyłania do druku: nic nie trafia do stanu ani
   do kolejki. Zamówienie pokazuje go jako `draft`, a `accept` bez treści wysyła go i czyści.
+  Zapisy jednego zamówienia (`accept`, `draft`, `reset`, `skip`) serwer wykonuje po kolei
+  (`base_sync.order_lock`, jeden proces backendu): każdy czyta to, co zatwierdził poprzedni, więc
+  dwa równoczesne `accept` nie wstawią części „mam” dwa razy. Strona Zamówienia zapisuje szkic po
+  jednym zapisie naraz, a „Drukuj” wysyła w `accept` wybór widoczny na ekranie.
 - **Dla kogo drukujemy**: `GET /products/order-tags` mówi, dla których zamówień są czekające i
   drukowane zadania planera (`items`: id zadania kolejki → `{orders, for_stock}`, `printers`: id
-  drukarki → to samo dla tego, co drukuje teraz), z etykietą, tytułem na najechanie (numer z Base),
-  źródłem i terminem; `for_stock`, gdy płyta nie jest dla żadnego zamówienia. Stan idzie
+  drukarki → to samo dla tego, co drukuje teraz), z etykietą, tytułem na najechanie (numer z Base;
+  pusty, gdy powtarzałby etykietę, np. `#15` zamówienia wpisanego ręcznie), źródłem i terminem; `for_stock`, gdy płyta nie jest dla żadnego zamówienia. Stan idzie
   do zamówień najpierw, potem zadania w kolejności druku, najbliższy termin pierwszy; jedna płyta
   bywa dla kilku zamówień. Dopóki zamówienie jest w którymś z tych statusów, zmiany pozycji w Base (ilość,
   nowa pozycja, dopisane SKU) idą za nim. Zamówienie, które wyszło z tych statusów i nie jest
@@ -345,6 +371,9 @@ uprawnienia do ustawień, więc tylko z konta, nie z klucza API.
 
 Margines preferowanej drukarki decyduje też, kiedy rezerwacja planera ustępuje: zadanie „Dowolna”
 idzie na inną drukarkę, gdy jego drukarka nie może go wziąć i nie skończy wydruku w ciągu tego
-marginesu. Dwa wiersze ustawień nie mają API ani pola na stronie: `product_reservation_yield`
-(`false`: rezerwacje planera nie ustępują) i `product_learn_history` (`false`: czasy slicera,
-bez ryzyka).
+marginesu. W tym samym `GET/PUT /products/settings` są też `reservation_yield` (wiersz
+`product_reservation_yield`; `false`: rezerwacje planera nie ustępują) i `learn_history` (wiersz
+`product_learn_history`; `false`: czasy slicera, bez ryzyka), oba domyślnie `true`, na stronie w
+Planowanie → Zaawansowane. Zwolnienie rezerwacji planera (`DELETE /queue/{id}/reservation`
+albo „Zwolnij” w szczegółach zadania) jest trwałe: kolejne plany nie rezerwują tego zadania
+ponownie, dopóki ktoś nie zarezerwuje go na osi czasu.

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, type ReactNode } from 're
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { SlotCardDismissContext } from './slotSpool/slotCardDismiss';
 import { Droplets, Copy, Check, Settings2, Package, Unlink } from 'lucide-react';
 import { isLightColor, resolveSpoolColorName } from '../utils/colors';
 import { buildFilamentBackground, parseStops } from './filamentSwatchHelpers';
@@ -266,7 +267,10 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
         spaceAbove < cardHeight + 12 && spaceBelow > spaceAbove ? 'bottom' : 'top';
       const centerX = triggerRect.left + triggerRect.width / 2;
       const left = Math.max(8, Math.min(centerX - cardWidth / 2, window.innerWidth - cardWidth - 8));
-      const top = placement === 'top' ? triggerRect.top - cardHeight - 8 : triggerRect.bottom + 8;
+      const wanted = placement === 'top' ? triggerRect.top - cardHeight - 8 : triggerRect.bottom + 8;
+      // Fork: kept on screen even where it fits on neither side (the card is
+      // capped at the screen's height and scrolls inside).
+      const top = Math.max(8, Math.min(wanted, window.innerHeight - cardHeight - 8));
       setPosition(placement);
       setCoords({ top, left });
     };
@@ -394,9 +398,12 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
           {...hoverProps}
         >
           {/* Card container */}
+          {/* Fork: no taller than the screen, scrolling inside: a fixed card
+              cannot be scrolled into view on a 375x667 phone. */}
           <div className="
             w-52 bg-bambu-dark-secondary border border-bambu-dark-tertiary
-            rounded-lg shadow-xl overflow-hidden
+            rounded-lg shadow-xl overflow-x-hidden overflow-y-auto overscroll-contain
+            max-h-[calc(100dvh-16px)]
             backdrop-blur-sm
           ">
             {/* Color swatch header - the hero element */}
@@ -642,7 +649,7 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
               )}
               {actions && (
                 <div className="pt-2 mt-2 border-t border-bambu-dark-tertiary space-y-1">
-                  {actions}
+                  <SlotCardDismissContext.Provider value={dismiss}>{actions}</SlotCardDismissContext.Provider>
                 </div>
               )}
             </div>
@@ -702,7 +709,8 @@ export function EmptySlotHoverCard({ children, className = '', configureSlot, on
       const cardWidth = cardRef.current.offsetWidth;
       const centerX = triggerRect.left + triggerRect.width / 2;
       const left = Math.max(8, Math.min(centerX - cardWidth / 2, window.innerWidth - cardWidth - 8));
-      const top = triggerRect.top - cardHeight - 8;
+      // Fork: kept on screen, as the filled-slot card above.
+      const top = Math.max(8, Math.min(triggerRect.top - cardHeight - 8, window.innerHeight - cardHeight - 8));
       setCoords({ top, left });
     };
     compute();
@@ -738,7 +746,8 @@ export function EmptySlotHoverCard({ children, className = '', configureSlot, on
         >
           <div className="
             bg-bambu-dark-secondary border border-bambu-dark-tertiary
-            rounded-md shadow-lg overflow-hidden
+            rounded-md shadow-lg overflow-x-hidden overflow-y-auto overscroll-contain
+            max-h-[calc(100dvh-16px)]
           ">
             {assigned ? (
               <div className="px-3 py-1.5 text-xs space-y-1">
@@ -798,7 +807,7 @@ export function EmptySlotHoverCard({ children, className = '', configureSlot, on
                 )}
                 {actions && (
                   <div className="pt-1 mt-1 border-t border-bambu-dark-tertiary space-y-1">
-                    {actions}
+                    <SlotCardDismissContext.Provider value={dismiss}>{actions}</SlotCardDismissContext.Provider>
                   </div>
                 )}
               </div>

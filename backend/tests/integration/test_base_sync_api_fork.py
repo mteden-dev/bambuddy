@@ -5,9 +5,10 @@ See services/base_sync.py. Base's API is faked: no request leaves the test.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -1099,3 +1100,78 @@ async def test_the_withdraw_preview_puts_a_piece_printing_for_no_one_else_in_sto
     assert [(p["name"], p["pieces"]) for p in preview["to_stock"]] == [
         (printing["pieces"][0]["name"], printing["pieces"][0]["pieces"])
     ]
+
+
+# --- what the Orders page is told -----------------------------------------------------------------
+
+
+async def test_two_saves_on_one_order_at_once_count_shelf_pieces_once(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5701, [("SKU-BOX-100-B", 3)])]
+    await _sync(async_client, {shop.printer})
+    product = (await async_client.get(f"/api/v1/products/{shop.product_id}")).json()
+    lid = next(p["id"] for p in product["parts"] if p["name"] == "Lid")
+
+    def choice(pieces: int) -> dict:
+        return {"products": [{"product_id": shop.product_id, "units": 3, "have": [{"part_id": lid, "pieces": pieces}]}]}
+
+    # The page saves after each tap: two saves of one order run at once.
+    online, status = _live({shop.printer})
+    with online, status:
+        first, second = await asyncio.gather(
+            async_client.post("/api/v1/base-sync/orders/5701/accept", json=choice(1)),
+            async_client.post("/api/v1/base-sync/orders/5701/accept", json=choice(2)),
+        )
+    assert first.status_code == 200 and second.status_code == 200, (first.text, second.text)
+    db_session.expire_all()
+    row = await db_session.get(BaseOrder, 5701)
+    on_hand = base_sync.on_hand_parts(row)
+    deltas = [a.delta for a in (await db_session.execute(select(ProductStockAdjustment))).scalars()]
+    # Stock holds what the order says is on hand, whichever save came last.
+    assert on_hand[lid] in (1, 2)
+    assert sum(deltas) == on_hand[lid]
+
+
+async def test_an_order_answer_says_what_else_was_planned_and_its_plates_their_times(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5702, [("SKU-BOX-100-B", 1)])]
+    await _sync(async_client, {shop.printer})
+    broadcast = AsyncMock()
+    online, status = _live({shop.printer})
+    with online, status, patch("backend.app.core.websocket.ws_manager.broadcast", broadcast):
+        response = await async_client.post("/api/v1/base-sync/orders/5702/accept")
+        plates = (await async_client.get("/api/v1/base-sync/orders/5702/plates")).json()
+        [listed] = (await async_client.get("/api/v1/base-sync/orders?state=accepted")).json()
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["also_replanned"], body["plan_failed"]) == ([], [])
+    broadcast.assert_awaited_once_with({"type": "products_replanned", "product_ids": [shop.product_id]})
+    assert {(p["planned_seconds"], p["learned"]) for p in plates} == {(2 * H, False)}
+    [progress] = listed["progress"]
+    assert progress["estimated_ready_at"] is not None and progress["no_estimate_reason"] is None
+
+    # Its prints deleted from the queue: nothing queued for it.
+    db_session.expire_all()
+    for item in (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.status == "pending"))).scalars():
+        assert (await async_client.delete(f"/api/v1/queue/{item.id}")).status_code == 200
+    with online, status:
+        [listed] = (await async_client.get("/api/v1/base-sync/orders?state=accepted")).json()
+    [progress] = listed["progress"]
+    assert (progress["estimated_ready_at"], progress["no_estimate_reason"]) == (None, "nothing_queued")
+
+
+async def test_a_sync_that_plans_tells_every_client(async_client: AsyncClient, db_session, shop, fake_base):
+    await async_client.put("/api/v1/base-sync/settings", json={"auto_accept": True})
+    fake_base.orders = [_order(5703, [("SKU-BOX-100-B", 1)])]
+    broadcast = AsyncMock()
+    with patch("backend.app.core.websocket.ws_manager.broadcast", broadcast):
+        await _sync(async_client, {shop.printer})
+    broadcast.assert_awaited_once_with({"type": "products_replanned", "product_ids": [shop.product_id]})
+
+    # Nothing changed at the next pass: no message.
+    broadcast.reset_mock()
+    with patch("backend.app.core.websocket.ws_manager.broadcast", broadcast):
+        await _sync(async_client, {shop.printer})
+    broadcast.assert_not_awaited()

@@ -7,7 +7,7 @@ import type { PrintQueueItem } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { Button } from './Button';
-import { ConfirmModal } from './ConfirmModal';
+import { FocusedConfirmModal } from './FocusedConfirmModal';
 
 interface QueueStartButtonProps {
   item: Pick<PrintQueueItem, 'id' | 'created_by_id'>;
@@ -57,7 +57,9 @@ export function QueueStartButton({ item, className = '' }: QueueStartButtonProps
         showToast(t('queue.toast.forcedFilamentMissing', { missing: missingNow.join(', ') }), 'error');
         return;
       }
-      showToast(t('queue.toast.startFailed'), 'error');
+      // The server's reason, not only "could not start" (fork).
+      const reason = error instanceof Error ? error.message : '';
+      showToast(reason ? `${t('queue.toast.startFailed')}: ${reason}` : t('queue.toast.startFailed'), 'error');
     },
   });
 
@@ -65,7 +67,7 @@ export function QueueStartButton({ item, className = '' }: QueueStartButtonProps
     <>
       <Button
         size="sm"
-        className={`pointer-coarse:min-h-11! ${className}`}
+        className={`pointer-coarse:min-h-[44px]! ${className}`}
         disabled={!allowed || start.isPending}
         title={allowed ? t('queue.actions.startPrint') : t('queue.permissions.noStartPrint')}
         onClick={(e: React.MouseEvent) => {
@@ -78,7 +80,7 @@ export function QueueStartButton({ item, className = '' }: QueueStartButtonProps
         {t('queue.hold.start')}
       </Button>
       {short && (
-        <ConfirmModal
+        <FocusedConfirmModal
           title={t('queue.filamentShort.confirmTitle')}
           message={
             t('queue.filamentShort.confirmIntro') +
@@ -101,7 +103,7 @@ export function QueueStartButton({ item, className = '' }: QueueStartButtonProps
         />
       )}
       {missing && (
-        <ConfirmModal
+        <FocusedConfirmModal
           title={t('queue.filamentMissing.confirmTitle')}
           message={t('queue.filamentMissing.confirmIntro') + '\n\n' + missing.join('\n')}
           confirmText={t('queue.filamentShort.printAnyway')}

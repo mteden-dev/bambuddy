@@ -8,7 +8,12 @@ const item = (over: Record<string, unknown>) =>
 describe('queueHold (fork)', () => {
   it('says a short spool or a missing filament holds the job: a problem', () => {
     expect(queueHold(item({ filament_short: true }), t)).toEqual({ problem: true, text: 'queue.filamentShort.rowBadge' });
-    expect(queueHold(item({ waiting_reason: 'Needs PLA Black' }), t)).toEqual({ problem: true, text: 'Needs PLA Black' });
+    // The scheduler's English reason goes through translateWaitingReason (utils/serverMessages).
+    expect(queueHold(item({ waiting_reason: 'Needs PLA Black' }), t)).toEqual({ problem: true, text: 'serverMessages.waiting.needs' });
+    expect(queueHold(item({ waiting_reason: 'Some reason it does not know' }), t)).toEqual({
+      problem: true,
+      text: 'Some reason it does not know',
+    });
   });
 
   it('says a job staged on purpose waits for Start, not a problem', () => {

@@ -2,8 +2,19 @@
  * Fork (products): helpers of the Products tab.
  */
 import { describe, expect, it } from 'vitest';
-import type { ProductPlanResult, ProductPlateFile } from '../../api/client';
-import { foldText, guessPlatePieces, partsSummary, piecesText, planSummary } from '../../utils/products';
+import type { ProductJob, ProductPlanResult, ProductPlateFile } from '../../api/client';
+import {
+  baseOrderIdOf,
+  foldText,
+  groupJobs,
+  guessPlatePieces,
+  partsSummary,
+  piecesText,
+  planSummary,
+  plateTime,
+} from '../../utils/products';
+import { isLate, shortWhen } from '../../utils/baseOrders';
+import { formatDateTime } from '../../utils/date';
 
 const PARTS = [{ name: 'Góra' }, { name: 'Dół' }, { name: 'Tray' }];
 
@@ -72,5 +83,50 @@ describe('planSummary', () => {
       key: 'products.toast.replanned',
       values: { n: 3, kept: 2, replaced: 6 },
     });
+  });
+});
+
+// Fork (UI fixes)
+describe('order and plate helpers', () => {
+  it('finds the Base order of a product order', () => {
+    expect(baseOrderIdOf({ base_order_id: 9, external_source: 'base', external_ref: '1/2' })).toBe(9);
+    expect(baseOrderIdOf({ external_source: 'base', external_ref: '7001/4' })).toBe(7001);
+    expect(baseOrderIdOf({ base_order_id: null, external_source: null, external_ref: null })).toBeNull();
+  });
+
+  it('gives the planned time, and the slicer\'s only when the plan learnt another', () => {
+    expect(plateTime({ print_time_seconds: 7800, planned_seconds: 9600, learned: true })).toEqual({ seconds: 9600, slicer: 7800 });
+    expect(plateTime({ print_time_seconds: 7800, planned_seconds: 7800, learned: false })).toEqual({ seconds: 7800, slicer: null });
+    // Before the backend sends it: the slicer's time.
+    expect(plateTime({ print_time_seconds: 3600 })).toEqual({ seconds: 3600, slicer: null });
+  });
+
+  it('groups identical plates on one printer, keeping the list order', () => {
+    const job = (id: number, printer: number | null): ProductJob => ({
+      id, queue_item_id: id * 10, status: 'planned', printer_id: printer, printer_name: null, pinned: false,
+      pieces: [{ part_id: 1, pieces: 1 }], product_plate_id: 5, filename: 'a.3mf', print_time_seconds: 60,
+      by_hand: false, moved: false,
+    });
+    const groups = groupJobs([job(1, 7), job(2, 8), job(3, 7), job(4, 7)]);
+    expect(groups.map((g) => [g.job.id, g.count])).toEqual([[1, 3], [2, 1]]);
+  });
+
+  it('says a time today without the day, another day with its weekday', () => {
+    const now = new Date();
+    const today = new Date(now);
+    today.setHours(23, 59, 0, 0);
+    expect(shortWhen(today.toISOString(), '24h', now)).not.toMatch(/\s.*\s/);
+    const later = new Date(now);
+    later.setDate(later.getDate() + 2);
+    expect(shortWhen(later.toISOString(), '24h', now)).toBe(
+      formatDateTime(later.toISOString(), '24h', { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
+    );
+  });
+
+  it('is late only when the estimate is after the deadline', () => {
+    expect(isLate('2026-11-25T10:00:00Z', '2026-11-25T09:00:00Z')).toBe(true);
+    expect(isLate('2026-11-25T08:00:00Z', '2026-11-25T09:00:00Z')).toBe(false);
+    expect(isLate(null, '2026-11-25T09:00:00Z')).toBe(false);
+    expect(isLate('2026-11-25T08:00:00Z', null)).toBe(false);
   });
 });

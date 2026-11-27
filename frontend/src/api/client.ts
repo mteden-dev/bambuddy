@@ -3,6 +3,7 @@ import type { FilamentAliasGroups } from '../utils/filamentAliases';
 import type { BambuCatalogColor } from '../utils/colors';
 import type { ArchivePlatesResponse, LibraryFilePlatesResponse } from '../types/plates';
 import { batched, byField, byId } from './batch';
+import { translateServerError } from '../utils/serverMessages';
 
 const API_BASE = '/api/v1';
 
@@ -143,7 +144,7 @@ async function postForBlob(endpoint: string, data: unknown, signal?: AbortSignal
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`);
+    throw new Error(typeof error.detail === 'string' ? translateServerError(error.detail) : `HTTP ${response.status}`);
   }
   return response.blob();
 }
@@ -175,7 +176,8 @@ async function request<T>(
     let message: string;
     let code: string | null = null;
     if (typeof detail === 'string') {
-      message = detail;
+      // Fork: the fork's English details in the user's language; others as they came.
+      message = translateServerError(detail);
     } else if (Array.isArray(detail)) {
       // FastAPI 422 shape: each entry has `msg` like "Value error, <real msg>".
       // Strip the prefix and join. Fall back to raw JSON if every entry has an
@@ -184,6 +186,7 @@ async function request<T>(
       const joined = detail
         .map((e: { msg?: string }) => (e.msg ?? '').replace(/^Value error,\s*/i, ''))
         .filter(Boolean)
+        .map((msg: string) => translateServerError(msg))
         .join('; ');
       message = joined || JSON.stringify(detail) || `HTTP ${response.status}`;
     } else if (detail && typeof detail === 'object') {
@@ -3080,6 +3083,9 @@ export interface PrintQueueItemCreate {
   estimated_cost?: number | null;
   // Delete transient uploaded library file after scheduler creates the archive
   cleanup_library_after_dispatch?: boolean;
+  /** Fork: the OrcaSlicer import dialog's decision id. The jobs of one decision
+   *  may share a waiting upload; another device's are refused with 409. */
+  slicer_inbox_claim?: string;
   // Cross-model alternatives (#671): several sliced files, one job, whichever
   // printer frees up first. Mutually exclusive with printer_id (a named printer
   // defeats the point) and with archive_id/library_file_id (these ARE the files).
@@ -3159,6 +3165,18 @@ export interface QueueForecastPlacement {
   reserved?: boolean;
 }
 
+/** A hold of an "Any" job for one printer. Older servers send only printer_id and active. */
+export interface QueueForecastReservation {
+  printer_id: number;
+  active: boolean;
+  /** "user": made on the timeline, never gives way; "plan": the product planner's. Missing: "user". */
+  source?: 'plan' | 'user';
+  /** A planner's hold that gives way to another printer of the model when its own cannot take the job in time. Missing: false. */
+  soft?: boolean;
+  /** The forecast put the job on that printer. Missing: true. */
+  placed?: boolean;
+}
+
 export interface QueueForecastRefusal {
   /** inactive | model | location | alternatives | scope | tags | offline; others may follow. */
   code: string;
@@ -3187,8 +3205,8 @@ export interface QueueForecast {
   refusals: Record<string, Record<string, QueueForecastRefusal>>;
   /** item id -> printer id -> why the plan may not hold the "Any" job for that printer. */
   reserve_refusals?: Record<string, Record<string, QueueForecastRefusal>>;
-  /** item id -> the printer the plan reserved the job for; inactive while that printer cannot take it. */
-  reservations?: Record<string, { printer_id: number; active: boolean }>;
+  /** item id -> the printer the job is held for; inactive while that printer cannot take it. */
+  reservations?: Record<string, QueueForecastReservation>;
   /** item id -> the job's alternatives (#671), each with its file and print time. */
   variants?: Record<string, QueueForecastVariant[]>;
   /** Printers standing with a finished plate until someone clears it: now, and after each forecast print. */
@@ -3276,6 +3294,7 @@ export interface QueuePlan {
 }
 
 export interface QueuePlanResult {
+  /** The jobs that became firm holds for their printer (the moved "Any" jobs). */
   reserved: number[];
   /** Laid out on a lane but forecast elsewhere once applied. */
   moved_elsewhere: number[];
@@ -4640,7 +4659,14 @@ export interface ProductOrder {
   estimated_ready_at: string | null;
   external_source: string | null;
   external_ref: string | null;
+  /** The Base order it comes from ("base" source): changed or cancelled there, never here (409). */
+  base_order_id?: number | null;
+  /** Why there is no estimate. */
+  no_estimate_reason?: ProductNoEstimateReason | null;
 }
+
+/** Fork (products): why an open order has no estimate. */
+export type ProductNoEstimateReason = 'no_printer' | 'held' | 'nothing_queued';
 
 export interface ProductJob {
   id: number;
@@ -4653,6 +4679,10 @@ export interface ProductJob {
   product_plate_id: number | null;
   filename: string | null;
   print_time_seconds: number | null;
+  /** What the plan and the queue count on; null when not known. */
+  planned_seconds?: number | null;
+  /** planned_seconds comes from print history, not the slicer. */
+  learned?: boolean;
   /** The user's, kept as it is by a plan: queued by hand, or moved by hand to another printer. */
   by_hand: boolean;
   moved: boolean;
@@ -4701,6 +4731,14 @@ export interface ProductPlanResult {
   short: ProductPartPieces[];
   extra: ProductPartPieces[];
   skipped_plates: { plate_id: number; reason: string }[];
+  also_replanned?: PlanSideEffects['also_replanned'];
+  plan_failed?: PlanSideEffects['plan_failed'];
+}
+
+/** Fork (products): other products a plan replanned too (they share printers), and those whose plan failed. */
+export interface PlanSideEffects {
+  also_replanned?: { product_id: number; name: string; created: number; replaced: number }[];
+  plan_failed?: { product_id: number; name: string }[];
 }
 
 /** Fork (Base sync): orders read from Base (base.com), read-only. */
@@ -4787,6 +4825,9 @@ export interface BaseOrder {
   draft: { held: Record<string, number>; on_hand: Record<string, number>; nothing_to_print: boolean } | null;
   /** In production: each product's parts there of the ones needed, and when it is expected. */
   progress: BaseOrderProgress[];
+  /** From accept, skip, reset and requeue (empty in the list and draft answers). */
+  also_replanned?: PlanSideEffects['also_replanned'];
+  plan_failed?: PlanSideEffects['plan_failed'];
 }
 
 export interface BaseOrderProgress {
@@ -4796,6 +4837,7 @@ export interface BaseOrderProgress {
   units: number;
   units_ready: number;
   estimated_ready_at: string | null;
+  no_estimate_reason?: ProductNoEstimateReason | null;
   /** missing: pieces neither there nor coming from a job in the queue (its print left the queue). */
   parts: { part_id: number; name: string; ready: number; needed: number; on_hand: number; missing: number }[];
 }
@@ -4866,6 +4908,8 @@ export interface ProductQcCheckResult {
   reopened_orders: number[];
   /** The queue job printing the plate again, when that was asked for. */
   reprint_item_id?: number | null;
+  also_replanned?: PlanSideEffects['also_replanned'];
+  plan_failed?: PlanSideEffects['plan_failed'];
 }
 
 /** Fork (products): an order a planner job prints for. */
@@ -4901,6 +4945,8 @@ export interface QueueJobCancelResult {
   withdrawn_base_orders: number[];
   /** Pieces the open orders still need that no plate can make. */
   short: ProductPartPieces[];
+  also_replanned?: PlanSideEffects['also_replanned'];
+  plan_failed?: PlanSideEffects['plan_failed'];
 }
 
 export interface ProductOrderTags {
@@ -4935,6 +4981,10 @@ export interface ProductSettings {
   force_color?: boolean;
   /** Plates printed by hand count (stock, orders), from when it is turned on. */
   hand_prints_count?: boolean;
+  /** The planner's reservations give way to jobs queued by hand. */
+  reservation_yield?: boolean;
+  /** Plate times and risk learnt from print history. */
+  learn_history?: boolean;
   /** "Shortest first" is on: the queue may not keep the plan's order. */
   sjf_enabled?: boolean;
 }
@@ -4984,6 +5034,10 @@ export interface BaseOrderPlate {
   swap: 'load' | 'change' | null;
   filament: BaseOrderPlateFilament[];
   printers: { id: number; name: string; available: boolean }[];
+  /** The slicer's estimate, what the plan counts on, and whether that comes from print history. */
+  print_time_seconds?: number | null;
+  planned_seconds?: number | null;
+  learned?: boolean;
   /** A preferred printer can be set: a waiting plate of the plan's, not queued or moved by hand. */
   editable: boolean;
   /** The orders it prints for (one plate may print for several). */
@@ -4996,10 +5050,35 @@ export interface RestorableSlotSpool {
   material: string;
   color_name: string | null;
   rgba: string | null;
+  /** The preset id as the inventory keeps it (no local_/builtin_ prefix). */
+  slicer_filament?: string | null;
   slicer_filament_name: string | null;
   remaining_grams: number;
   label_weight: number;
   archived_at: string | null;
+  /** Of the slot's type; false for the "other" rolls listed after them. */
+  material_match?: boolean;
+  /** The K profiles the roll was set to (only the asked printer's). */
+  k_profiles?: {
+    printer_id: number;
+    extruder: number;
+    nozzle_diameter: string;
+    cali_idx: number | null;
+    k_value: number;
+    name: string | null;
+    setting_id: string | null;
+  }[];
+}
+
+/** Fork (slot spools): what the restore list asks for. */
+export interface RestorableSlotSpoolQuery {
+  material?: string;
+  rgba?: string;
+  /** How many rolls at most (the backend's default is 10, its cap 200). */
+  limit?: number;
+  /** List rolls of another type after the matching ones. */
+  includeOther?: boolean;
+  printerId?: number;
 }
 
 /** Fork (slot spools): start counting the roll in a slot just configured. */
@@ -8233,10 +8312,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ printer_id: printerId }),
     }),
-  getRestorableSlotSpools: (material?: string, rgba?: string) => {
+  getRestorableSlotSpools: ({ material, rgba, limit, includeOther, printerId }: RestorableSlotSpoolQuery = {}) => {
     const params = new URLSearchParams();
     if (material) params.set('material', material);
     if (rgba) params.set('rgba', rgba);
+    if (limit != null) params.set('limit', String(limit));
+    if (includeOther) params.set('include_other', 'true');
+    if (printerId != null) params.set('printer_id', String(printerId));
     const query = params.toString();
     return request<RestorableSlotSpool[]>(`/slot-spools/restorable${query ? `?${query}` : ''}`);
   },
@@ -9083,6 +9165,18 @@ export const api = {
     request<void>(`/library/variant-groups/${groupId}`, { method: 'DELETE' }),
   removeVariantGroupMember: (groupId: number, fileId: number) =>
     request<void>(`/library/variant-groups/${groupId}/members/${fileId}`, { method: 'DELETE' }),
+  // Fork: a new version joins a group without ungrouping it; appended last.
+  addVariantGroupMember: (groupId: number, fileId: number, targetModel?: string) =>
+    request<VariantGroup>(`/library/variant-groups/${groupId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ library_file_id: fileId, ...(targetModel ? { target_model: targetModel } : {}) }),
+    }),
+  // Fork: the full member order, in priority order (used to undo a removal).
+  reorderVariantGroup: (groupId: number, memberFileIds: number[]) =>
+    request<VariantGroup>(`/library/variant-groups/${groupId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ member_file_ids: memberFileIds }),
+    }),
 
   getLibraryFile: (id: number) => request<LibraryFile>(`/library/files/${id}`),
   uploadLibraryFile: async (
@@ -10745,6 +10839,27 @@ export interface PendingSlicerUpload {
   created_at: string;
 }
 
+/** How a waiting upload was decided, as the `slicer_upload_decided` message says. */
+export type SlicerUploadDecision = 'queued' | 'kept' | 'discarded' | 'restored';
+
 export const slicerInboxApi = {
   getPending: () => request<PendingSlicerUpload[]>('/slicer-inbox/pending'),
+  /** To the trash; 409 while a queue job uses the file. */
+  discard: (fileId: number, claim: string) =>
+    request<{ status: string; id: number }>(`/slicer-inbox/${fileId}/discard`, {
+      method: 'POST',
+      body: JSON.stringify({ claim }),
+    }),
+  /** Undo a discard: the upload waits again. */
+  restore: (fileId: number, claim: string) =>
+    request<{ status: string; id: number }>(`/slicer-inbox/${fileId}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ claim }),
+    }),
+  /** Tell the uploader's other sessions that the upload was kept in a folder. */
+  announceKept: (fileId: number, claim: string) =>
+    request<{ status: string; id: number }>(`/slicer-inbox/${fileId}/kept`, {
+      method: 'POST',
+      body: JSON.stringify({ claim }),
+    }),
 };

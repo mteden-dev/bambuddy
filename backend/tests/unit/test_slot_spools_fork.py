@@ -274,6 +274,61 @@ class TestLoadSlotSpool:
         # PETG left out, the nearly empty roll too; green before red.
         assert [s.id for s in found] == [rolls[1], rolls[0]]
 
+    @pytest.mark.asyncio
+    async def test_more_than_five_kilograms_is_refused(self, db_session, printer_factory):
+        """A typo (6500 for 650) would count for months before anyone noticed."""
+        printer = await printer_factory()
+        with pytest.raises(SlotSpoolError) as exc:
+            await load_slot_spool(
+                db_session,
+                SlotSpoolLoad(printer_id=printer.id, ams_id=0, tray_id=0, material="PLA", remaining_grams=6500),
+            )
+        assert exc.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_a_roll_counting_in_another_slot_is_not_restored(self, db_session, printer_factory):
+        """A stale restore list offered it; taking it out of that slot silently
+        would leave the roll there uncounted."""
+        printer = await printer_factory()
+        first = await _load(db_session, printer.id, tray_id=1, remaining_grams=420)
+        spool_id = first.spool_id
+        with pytest.raises(SlotSpoolError) as exc:
+            await load_slot_spool(
+                db_session,
+                SlotSpoolLoad(printer_id=printer.id, ams_id=0, tray_id=2, material="PLA", restore_spool_id=spool_id),
+            )
+        assert exc.value.status_code == 409
+        await db_session.rollback()
+        assigned = (await db_session.execute(select(SpoolAssignment))).scalars().all()
+        assert [(a.spool_id, a.tray_id) for a in assigned] == [(spool_id, 1)]
+
+    @pytest.mark.asyncio
+    async def test_restorable_can_list_other_types_after_the_matching_ones(self, db_session, printer_factory):
+        printer = await printer_factory()
+        rolls = []
+        for tray, (material, rgba) in enumerate([("PETG", "00FF00"), ("PLA", "FF0000"), ("PLA", "00FF00")]):
+            a = await _load(
+                db_session,
+                printer.id,
+                tray_id=tray,
+                material=material,
+                rgba=rgba,
+                remaining_grams=500,
+                k_profile=KProfileChoice(cali_idx=tray + 3, k_value=0.02),
+            )
+            rolls.append(a.spool_id)
+        for a in (await db_session.execute(select(SpoolAssignment))).scalars().all():
+            await db_session.delete(a)
+        await db_session.commit()
+
+        found = await restorable_spools(db_session, material="PLA", rgba="00FF00FF", include_other=True)
+        # PLA first (green before red), then the PETG roll.
+        assert [s.id for s in found] == [rolls[2], rolls[1], rolls[0]]
+        assert [slot_spools.material_matches(s, "PLA") for s in found] == [True, True, False]
+        # The K profiles come along, for the dialog to set the slot back to them.
+        assert [k.cali_idx for k in found[0].k_profiles] == [5]
+        assert len(await restorable_spools(db_session, material="PLA", include_other=True, limit=2)) == 2
+
 
 class TestPrompts:
     @pytest.mark.asyncio

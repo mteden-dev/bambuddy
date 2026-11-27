@@ -43,6 +43,15 @@ const mockPrinterStatus = {
   vt_tray: [],
 };
 
+// Fork: a loaded slot without a Bambu RFID roll or an inventory spool carries the
+// slot-spool "NEW" chip (the built-in inventory is on here). It is no K-value, so
+// the slot's own text is read without it.
+function slotText(el: HTMLElement | null): string {
+  const copy = el!.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('[data-testid^="slot-spool-badge"]').forEach((badge) => badge.remove());
+  return (copy.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
 describe('PrintersPage - K-profile always-visible display (#2532)', () => {
   beforeEach(() => {
     localStorage.removeItem('printerCardSize');
@@ -182,7 +191,7 @@ describe('PrintersPage - K-profile always-visible display (#2532)', () => {
     // ... but no K-value line, fabricated or otherwise, should appear. Read the
     // slot's own text rather than only querying for a "K " label: a guard that
     // leaks a value without the label would pass the label query.
-    expect(screen.getByText('PETG').parentElement).toHaveTextContent(/^1PETG$/);
+    expect(slotText(screen.getByText('PETG').parentElement)).toMatch(/^1PETG$/);
   });
 
   it('does not show a K-value when the printer reports exactly 0 (review #2854, round 2)', async () => {
@@ -221,7 +230,7 @@ describe('PrintersPage - K-profile always-visible display (#2532)', () => {
     });
     // The slot number and the material, and nothing else -- no "K 0.000", and
     // no stray "0" leaked by the guard.
-    expect(screen.getByText('PETG').parentElement).toHaveTextContent(/^1PETG$/);
+    expect(slotText(screen.getByText('PETG').parentElement)).toMatch(/^1PETG$/);
   });
 
   it('does not leak a stray 0 on an external or AMS-HT slot reporting exactly 0', async () => {
@@ -239,8 +248,8 @@ describe('PrintersPage - K-profile always-visible display (#2532)', () => {
     await waitFor(() => {
       expect(screen.getByText('ASA')).toBeInTheDocument();
     });
-    expect(screen.getByText('ASA').parentElement).toHaveTextContent(/^1ASA$/);
-    expect(screen.getByText('PLA').parentElement).toHaveTextContent(/^1PLA$/);
+    expect(slotText(screen.getByText('ASA').parentElement)).toMatch(/^1ASA$/);
+    expect(slotText(screen.getByText('PLA').parentElement)).toMatch(/^1PLA$/);
   });
 
   it('shows the K-value on a loaded AMS-HT slot without hovering', async () => {
@@ -323,6 +332,6 @@ describe('PrintersPage - K-profile always-visible display (#2532)', () => {
     // Same number of children, so the fill bar sits at the same offset in both.
     expect(uncalibrated.children.length).toBe(calibrated.children.length);
     // The reserved row carries no readable text of its own.
-    expect(uncalibrated).toHaveTextContent(/^2PLA$/);
+    expect(slotText(uncalibrated)).toMatch(/^2PLA$/);
   });
 });

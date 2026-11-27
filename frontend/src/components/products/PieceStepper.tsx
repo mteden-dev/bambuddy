@@ -22,7 +22,7 @@ interface PieceStepperProps {
 const SEGMENTS_UP_TO = 4;
 
 const cell =
-  'min-w-9 h-9 pointer-coarse:min-w-11 pointer-coarse:h-11 px-2 text-sm font-medium transition-colors disabled:opacity-50';
+  'min-w-9 h-9 pointer-coarse:min-w-[44px] pointer-coarse:h-[44px] px-2 text-sm font-medium transition-colors disabled:opacity-50';
 
 /**
  * Fork (products): a count picked by touch. Small ranges (pieces on a plate,
@@ -95,7 +95,7 @@ export function PieceStepper({ value, onChange, max, min = 0, label, tone = 'def
             setDraft(null);
           }
         }}
-        className={`w-12 text-center bg-bambu-dark text-white text-sm border-x border-bambu-dark-tertiary focus:outline-none focus:bg-bambu-dark-tertiary ${
+        className={`w-12 any-pointer-coarse:w-14 text-center bg-bambu-dark text-white text-base sm:text-sm border-x border-bambu-dark-tertiary focus:outline-none focus:bg-bambu-dark-tertiary ${
           tone === 'danger' && value > 0 ? 'text-red-400' : tone === 'shelf' && value > 0 ? 'text-sky-700 dark:text-sky-300' : ''
         }`}
       />

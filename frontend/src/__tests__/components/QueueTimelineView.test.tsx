@@ -10,9 +10,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QueueTimelineView } from '../../components/QueueTimelineView';
+import { QueueJobDetails } from '../../components/QueueJobDetails';
+import i18n from '../../i18n';
 import { api } from '../../api/client';
 import type { PrintQueueItem, Printer, QueueForecast, QueueStaffedHoursView } from '../../api/client';
 
@@ -23,6 +25,8 @@ vi.mock('../../api/client', () => ({
     getQueueItemTags: vi.fn().mockResolvedValue([]),
     getPrinterTags: vi.fn().mockResolvedValue([]),
     getLibraryTags: vi.fn().mockResolvedValue([]),
+    // The orders the product planner's jobs print for (fork); none unless a test says so.
+    getProductOrderTags: vi.fn().mockResolvedValue({ items: {}, printers: {} }),
     getStaffedHours: vi.fn(),
     updateStaffedHours: vi.fn(),
     getLibraryFileThumbnailUrl: (id: number) => `/thumb/${id}`,
@@ -109,8 +113,25 @@ function renderTimeline(props: Partial<Parameters<typeof QueueTimelineView>[0]> 
   );
 }
 
+/** Like renderTimeline, with the query client and a rerender that keeps it (fork). */
+function renderTimelineWithClient(props: Partial<Parameters<typeof QueueTimelineView>[0]> = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const ui = (over: Partial<Parameters<typeof QueueTimelineView>[0]>) => (
+    <QueryClientProvider client={client}>
+      <QueueTimelineView queueItems={queueItems} printers={printers} printerStatuses={{}} sjfEnabled={false} t={t} {...over} />
+    </QueryClientProvider>
+  );
+  const view = render(ui(props));
+  return { client, rerenderWith: (over: Partial<Parameters<typeof QueueTimelineView>[0]>) => view.rerender(ui(over)) };
+}
+
 function lane(printerId: number): HTMLElement {
   return document.querySelector(`[data-lane="${printerId}"]`) as HTMLElement;
+}
+
+// Fork: the legend and the hints are folded behind "?" on a window this short.
+function openHelp() {
+  fireEvent.click(screen.getByTestId('timeline-help-toggle'));
 }
 
 function bar(name: string): HTMLElement {
@@ -118,9 +139,15 @@ function bar(name: string): HTMLElement {
 }
 
 describe('QueueTimelineView', () => {
+  // A wide desktop: the zoom opens on 24 hours (fork: it follows the track's width).
+  const screenWidth = window.innerWidth;
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getQueueForecast).mockResolvedValue(forecast());
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 });
+  });
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: screenWidth });
   });
 
   it('draws an "Any" job on the printer the forecast gives it, dashed, and a pinned job solid', async () => {
@@ -134,6 +161,29 @@ describe('QueueTimelineView', () => {
     const pinnedBar = within(lane(1)).getByTitle((title) => title.startsWith('Pinned box'));
     expect(pinnedBar).toHaveAttribute('data-kind', 'pinned');
     expect(pinnedBar.className).not.toContain('border-dashed');
+  });
+
+  it('names the orders a job prints for, without empty brackets for a hand order (fork)', async () => {
+    const tag = (label: string, title: string) => ({
+      product_order_id: 9,
+      label,
+      title,
+      base_order_id: null,
+      source_kind: null,
+      ship_by: null,
+      due: null,
+    });
+    vi.mocked(api.getProductOrderTags).mockResolvedValue({
+      items: { '1': { orders: [tag('#1', ''), tag('nick_b', 'Shop B')], for_stock: false } },
+      printers: {},
+    } as unknown as Awaited<ReturnType<typeof api.getProductOrderTags>>);
+    renderTimeline();
+
+    await waitFor(() =>
+      expect(bar('Pinned box').getAttribute('title')).toContain(
+        'products.orderLabel.forTooltip {"list":"#1, nick_b (Shop B)"}',
+      ),
+    );
   });
 
   it('marks a job held by a short spool and starts it from its details (fork)', async () => {
@@ -188,15 +238,31 @@ describe('QueueTimelineView', () => {
       expect(lid.querySelector('img')?.getAttribute('style')).toMatch(/min\(\d+px, 24cqw\)/);
     });
 
-    it('opens on 12 hours on a narrow screen when no zoom was chosen', async () => {
-      const width = window.innerWidth;
-      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 820 });
+    it('opens on 12 hours on an iPad across when no zoom was chosen', async () => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1180 });
+      renderTimeline();
+      expect(await screen.findByText('12 h')).toBeInTheDocument();
+    });
+
+    it('picks the zoom from the measured track, at least 50 px an hour', async () => {
+      const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(700);
       try {
         renderTimeline();
+        // 700 px: 12 hours give 58 px an hour, 24 would give 29.
         expect(await screen.findByText('12 h')).toBeInTheDocument();
+        expect(localStorage.setItem).not.toHaveBeenCalledWith('queueTimelineZoomHours', expect.anything());
       } finally {
-        Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+        width.mockRestore();
       }
+    });
+
+    it('gives the hours and the print time a line each on a tall bar (fork)', async () => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
+      renderTimeline();
+      const pinned = await within(lane(1)).findByTitle((title) => title.startsWith('Pinned box'));
+      expect(parseInt(pinned.style.height, 10)).toBeGreaterThanOrEqual(108);
+      expect(pinned.querySelector('[data-bar-line="timing"]')?.textContent).not.toContain('·');
+      expect(pinned.querySelector('[data-bar-line="length"]')?.textContent).toBe('1h 0m');
     });
 
     it('keeps the two-line bar when the screen has no room for more', async () => {
@@ -340,9 +406,11 @@ describe('QueueTimelineView', () => {
       const wait = await within(lane(2)).findByTestId('plate-wait-2');
       expect(wait.getAttribute('title')).toContain('queue.timeline.plateWait');
       expect(screen.getAllByTestId('unstaffed').length).toBeGreaterThan(0);
+      openHelp();
       expect(screen.getByText('queue.timeline.legend.unstaffed')).toBeInTheDocument();
-      // In the legend and on the waiting stretch.
-      expect(screen.getAllByText('queue.timeline.legend.plateWait').length).toBe(2);
+      // In the legend, and on the waiting stretch with until when.
+      expect(screen.getByText('queue.timeline.legend.plateWait')).toBeInTheDocument();
+      expect(wait).toHaveTextContent(/queue\.timeline\.legend\.plateWait · \d{2}:\d{2}/);
     });
 
     it('lays out a plan with the night in mind', async () => {
@@ -415,6 +483,58 @@ describe('QueueTimelineView', () => {
       expect(screen.queryByTestId('staffed-hours-dialog')).toBeNull();
     });
 
+    it('asks before dropping changes, and keeps Save in view (fork)', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: staffed() }));
+      const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
+      vi.mocked(api.getStaffedHours).mockResolvedValue({ enabled: false, timezone: 'UTC', days: week, clear_minutes: 0, learn: true });
+      renderTimeline({ canEditStaffedHours: true });
+
+      fireEvent.click(await screen.findByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
+      let dialog = await screen.findByTestId('staffed-hours-dialog');
+      fireEvent.click(await within(dialog).findByTestId('staffed-tab-week'));
+      expect(within(dialog).getByTestId('staffed-hours-body').contains(within(dialog).getByTestId('staffed-hours-footer'))).toBe(false);
+
+      // Nothing changed: Cancel closes at once.
+      fireEvent.click(within(dialog).getByRole('button', { name: 'common.cancel' }));
+      expect(screen.queryByTestId('staffed-hours-dialog')).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
+      dialog = await screen.findByTestId('staffed-hours-dialog');
+      fireEvent.click(await within(dialog).findByTestId('staffed-tab-week'));
+      fireEvent.click(within(dialog).getByRole('checkbox', { name: 'queue.timeline.staffed.enabled' }));
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'common.cancel' }));
+      expect(within(dialog).getByTestId('staffed-discard-ask')).toHaveTextContent('queue.timeline.staffed.discardAsk');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'queue.timeline.staffed.keepEditing' }));
+      expect(within(dialog).queryByTestId('staffed-discard-ask')).toBeNull();
+
+      // A tap beside the sheet asks too.
+      fireEvent.click(dialog.parentElement!);
+      expect(screen.getByTestId('staffed-hours-dialog')).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'queue.timeline.staffed.discard' }));
+      expect(screen.queryByTestId('staffed-hours-dialog')).toBeNull();
+      expect(api.updateStaffedHours).not.toHaveBeenCalled();
+    });
+
+    it('says a heat map hour\'s usual wait on a tap (fork)', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: staffed() }));
+      const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
+      vi.mocked(api.getStaffedHours).mockResolvedValue({
+        enabled: true, timezone: 'UTC', days: week, clear_minutes: 5, learn: true,
+        learned: { samples: 40, needed: 20, typical_minutes: Array.from({ length: 168 }, (_, i) => i) },
+      });
+      renderTimeline();
+
+      fireEvent.click(await screen.findByRole('button', { name: /queue\.timeline\.staffed\.button/ }));
+      const dialog = await screen.findByTestId('staffed-hours-dialog');
+      fireEvent.click(await within(dialog).findByTestId('staffed-tab-week'));
+      expect(within(dialog).getByTestId('staffed-heat-info')).toHaveTextContent('queue.timeline.staffed.heatmapTap');
+
+      fireEvent.click(within(dialog).getAllByTestId('staffed-heat-cell')[25]);
+      expect(within(dialog).getByTestId('staffed-heat-info')).toHaveTextContent('queue.timeline.staffed.heatmapCell');
+      expect(within(dialog).getByTestId('staffed-heat-info')).toHaveTextContent('"hour":"01:00"');
+    });
+
     it('is read-only without the right, and says when it changes nothing', async () => {
       vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ staffed: staffed(false) }));
       const week = Array.from({ length: 7 }, () => ({ start: '07:00', end: '22:00' }));
@@ -458,6 +578,7 @@ describe('QueueTimelineView', () => {
         expect(wait.getAttribute('title')).toContain('queue.timeline.plateWaitAbsent');
         expect(screen.getAllByTestId('marked-away')).toHaveLength(1);
         expect(screen.getAllByTestId('axis-mark').map((m) => m.dataset.kind)).toEqual(['away', 'here']);
+        openHelp();
         expect(screen.getByTestId('legend-absent')).toBeInTheDocument();
         expect(screen.getByTestId('legend-here')).toBeInTheDocument();
         // The weekly hours are not used.
@@ -554,6 +675,7 @@ describe('QueueTimelineView', () => {
         expect(staging).toHaveAttribute('data-hold', 'problem');
         expect(staging).toHaveTextContent('Load PETG');
         expect(staging.getAttribute('title')).toContain('Load PETG — queue.hold.wontStart');
+        openHelp();
         expect(screen.getByTestId('legend-manual')).toHaveTextContent('queue.timeline.legend.manual');
         expect(screen.queryByText(/queue\.timeline\.offTimeline\.title/)).not.toBeInTheDocument();
         // A job that starts by itself carries no such mark.
@@ -812,13 +934,9 @@ describe('QueueTimelineView', () => {
         fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.apply/ }));
       });
 
+      // Only the lane the user changed (fork): the server keeps the others' places.
       expect(onApplyPlan).toHaveBeenCalledWith({
-        lanes: [
-          { printer_id: 1, item_ids: [1] },
-          { printer_id: 2, item_ids: [4, 2] },
-          { printer_id: 3, item_ids: [] },
-          { printer_id: 4, item_ids: [] },
-        ],
+        lanes: [{ printer_id: 2, item_ids: [4, 2] }],
         reserve: [4],
       });
       expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
@@ -911,6 +1029,85 @@ describe('QueueTimelineView', () => {
       expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
     });
 
+    it('opens the job when a held tap started a drag that hardly moved (fork)', async () => {
+      renderTimeline({ onApplyPlan: vi.fn() });
+      const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      dragFromLane = 2;
+      const fromX = anyBar.getBoundingClientRect().left + 10;
+      fireEvent.mouseDown(anyBar, { button: 0, clientX: fromX, clientY: 76 });
+      act(() => {
+        fireEvent.mouseMove(document, { clientX: fromX + 7, clientY: 76 });
+      });
+      drop();
+
+      expect(screen.getByTestId('queue-job-details')).toBeInTheDocument();
+      expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
+    });
+
+    it('marks a job moved in the plan apart from a hold: an outline and its own icon (fork)', async () => {
+      renderTimeline({ onApplyPlan: vi.fn().mockResolvedValue(applied) });
+      const later = await within(lane(2)).findByTitle((title) => title.startsWith('Later cup'));
+      drag(later, 2, 2, 0);
+      drop();
+
+      const moved = bar('Later cup');
+      expect(moved.className).toContain('outline-dashed');
+      expect(moved.className).not.toContain('ring-amber');
+      // Held once applied (the lock) and moved (its own icon), both shown.
+      expect(moved.querySelector('[data-icon="firm"]')).not.toBeNull();
+      expect(moved.querySelector('[data-icon="moved"]')).not.toBeNull();
+    });
+
+    it('says a plan is out of date when the queue changed under it, and lays the moves again (fork)', async () => {
+      const onApplyPlan = vi.fn().mockResolvedValue(applied);
+      const view = renderTimelineWithClient({ onApplyPlan });
+      const later = await within(lane(2)).findByTitle((title) => title.startsWith('Later cup'));
+      drag(later, 2, 2, 0);
+      drop();
+      await afterDrop();
+
+      // A job arrives meanwhile; the forecast puts it on printer 4.
+      const arrived = job(6, 'New mug');
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+        placements: [
+          ...forecast().placements,
+          { item_id: 6, printer_id: 4, start: iso(0), end: iso(1), projected: true },
+        ],
+      }));
+      view.rerenderWith({ onApplyPlan, queueItems: [...queueItems, arrived] });
+
+      await waitFor(() => expect(screen.getByTestId('timeline-plan-bar')).toHaveAttribute('data-stale', 'true'));
+      expect(screen.getByTestId('timeline-plan-bar')).toHaveTextContent('queue.timeline.plan.stale');
+      expect(screen.queryByRole('button', { name: /queue\.timeline\.plan\.apply/ })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.refresh/ }));
+      expect(screen.getByTestId('timeline-plan-bar')).not.toHaveAttribute('data-stale');
+      expect(bar('Later cup')).toHaveAttribute('data-moved', 'true');
+      expect(leftOf(bar('Later cup'))).toBeLessThan(leftOf(bar('Any tray')));
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.apply/ }));
+      });
+      // Only the lane the user changed; the job that arrived keeps its place.
+      expect(onApplyPlan).toHaveBeenCalledWith({ lanes: [{ printer_id: 2, item_ids: [4, 2] }], reserve: [4] });
+    });
+
+    it('discards an out-of-date plan', async () => {
+      const view = renderTimelineWithClient({ onApplyPlan: vi.fn() });
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      drag(bar('Any tray'), 4, 2);
+      drop();
+      await afterDrop();
+
+      // The job after it on its lane left the queue.
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({ placements: forecast().placements.slice(0, 2) }));
+      view.rerenderWith({ onApplyPlan: vi.fn(), queueItems: [pinned, anyJob, staged] });
+      await waitFor(() => expect(screen.getByTestId('timeline-plan-bar')).toHaveAttribute('data-stale', 'true'));
+
+      fireEvent.click(screen.getByRole('button', { name: /queue\.timeline\.plan\.discard/ }));
+      expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
+    });
+
     it('does not drag jobs the user may not change, or while the order is not manual', async () => {
       const { unmount } = renderTimeline({ onApplyPlan: vi.fn(), canModifyItem: () => false });
       const anyBar = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
@@ -925,6 +1122,7 @@ describe('QueueTimelineView', () => {
       drop();
       expect(screen.queryByTestId('lane-refusal-3')).toBeNull();
       expect(screen.queryByTestId('timeline-plan-bar')).toBeNull();
+      openHelp();
       expect(screen.getByText('queue.timeline.legend.sjfHint')).toBeInTheDocument();
     });
   });
@@ -1015,6 +1213,265 @@ describe('QueueTimelineView', () => {
 
       fireEvent.keyDown(window, { key: 'Escape' });
       expect(screen.queryByTestId('queue-job-details')).toBeNull();
+    });
+  });
+
+  describe('holds (fork)', () => {
+    it('tells the planner\'s soft hold from one that gave way, on the tile, in the legend and in the details', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+        placements: [
+          { item_id: 1, printer_id: 1, start: iso(0), end: iso(1), projected: false },
+          { item_id: 2, printer_id: 2, start: iso(0), end: iso(1), projected: true },
+          { item_id: 4, printer_id: 4, start: iso(3), end: iso(4), projected: true },
+        ],
+        reservations: {
+          '2': { printer_id: 2, active: true, source: 'plan', soft: true, placed: true },
+          '4': { printer_id: 2, active: true, source: 'plan', soft: true, placed: false },
+        },
+      }));
+      renderTimeline({ onReleaseReservation: vi.fn(), onPinItem: vi.fn() });
+
+      const soft = await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      expect(soft).toHaveAttribute('data-reservation', 'soft');
+      expect(soft).toHaveAttribute('data-kind', 'planner');
+      expect(soft.className).toContain('border-dashed');
+      expect(soft.querySelector('[data-icon="soft"]')).not.toBeNull();
+      expect(soft.querySelector('[data-icon="firm"]')).toBeNull();
+
+      const gave = within(lane(4)).getByTitle((title) => title.startsWith('Later cup'));
+      expect(gave).toHaveAttribute('data-reservation', 'gaveWay');
+      expect(gave).toHaveAttribute('data-kind', 'projected');
+      expect(gave.querySelector('[data-icon="gaveWay"]')).not.toBeNull();
+
+      openHelp();
+      expect(screen.getByTestId('legend-hold-firm')).toHaveTextContent('queue.timeline.legend.reserved');
+      expect(screen.getByTestId('legend-hold-soft')).toHaveTextContent('queue.timeline.hold.legendSoft');
+      expect(screen.getByTestId('legend-hold-gave-way')).toHaveTextContent('queue.timeline.hold.legendGaveWay');
+
+      fireEvent.click(soft);
+      let hold = screen.getByTestId('queue-job-reservation');
+      expect(hold).toHaveAttribute('data-hold', 'soft');
+      expect(hold).toHaveTextContent('queue.timeline.hold.soft {"printer":"P1S-02"}');
+      expect(hold).toHaveTextContent('queue.timeline.hold.softHelp {"printer":"P1S-02"}');
+      expect(hold).not.toHaveTextContent('queue.timeline.details.reservedHelp');
+      fireEvent.keyDown(window, { key: 'Escape' });
+
+      fireEvent.click(gave);
+      hold = screen.getByTestId('queue-job-reservation');
+      expect(hold).toHaveAttribute('data-hold', 'gaveWay');
+      // Says the planner's printer and why it is forecast on another: no "waits for".
+      expect(hold).toHaveTextContent('queue.timeline.hold.gaveWay {"printer":"P1S-02","expected":"P1S-03"}');
+      expect(hold).toHaveTextContent('queue.timeline.hold.gaveWayHelp {"printer":"P1S-02"}');
+      expect(hold).not.toHaveTextContent('queue.timeline.details.reservedHelp');
+      expect(within(hold).getByRole('button', { name: /queue\.timeline\.details\.release/ })).toBeInTheDocument();
+    });
+
+    it('keeps the lock beside the mark of a job held by a problem', async () => {
+      const held = job(5, 'Held cup', { manual_start: true, waiting_reason: 'Load PETG' });
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+        placements: [{ item_id: 5, printer_id: 2, start: iso(0), end: iso(1), projected: true, reserved: true }],
+        off_timeline: [],
+        reservations: { '5': { printer_id: 2, active: true } },
+      }));
+      renderTimeline({ queueItems: [held] });
+
+      const tile = await within(lane(2)).findByTitle((title) => title.startsWith('Held cup'));
+      expect(tile.querySelector('[data-icon="problem"]')).not.toBeNull();
+      expect(tile.querySelector('[data-icon="firm"]')).not.toBeNull();
+    });
+
+    it('says who made a firm hold', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+        reservations: { '2': { printer_id: 2, active: true, source: 'plan', soft: false } },
+      }));
+      renderTimeline({ onReleaseReservation: vi.fn() });
+      fireEvent.click(await within(lane(2)).findByTitle((title) => title.startsWith('Any tray')));
+
+      const hold = screen.getByTestId('queue-job-reservation');
+      expect(hold).toHaveAttribute('data-hold', 'firm');
+      expect(hold).toHaveTextContent('queue.timeline.hold.firmPlanner {"printer":"P1S-02"}');
+      expect(hold).toHaveTextContent('queue.timeline.details.reservedHelp');
+    });
+  });
+
+  describe('the forecast\'s state (fork)', () => {
+    it('says the forecast is being worked out before it first comes', () => {
+      vi.mocked(api.getQueueForecast).mockReturnValue(new Promise(() => {}));
+      renderTimeline();
+      expect(screen.getByTestId('timeline-forecast-loading')).toHaveTextContent('queue.timeline.forecastLoading');
+    });
+
+    it('keeps the last forecast and says so when a refresh fails', async () => {
+      const view = renderTimelineWithClient();
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+
+      vi.mocked(api.getQueueForecast).mockRejectedValue(new Error('down'));
+      await act(async () => {
+        await view.client.refetchQueries({ queryKey: ['queue', 'forecast'] });
+      });
+
+      expect(await screen.findByTestId('timeline-forecast-stale')).toHaveTextContent('queue.timeline.forecastStale');
+      expect(within(lane(2)).getByTitle((title) => title.startsWith('Any tray'))).toBeInTheDocument();
+    });
+  });
+
+  describe('touch, trackpad and language (fork)', () => {
+    it('explains a plate wait, a mark and nobody being there on a tap', async () => {
+      vi.mocked(api.getQueueForecast).mockResolvedValue(forecast({
+        plate_waits: [{ printer_id: 2, start: iso(1), end: iso(3) }],
+        staffed: {
+          enabled: false,
+          windows: [],
+          marks: [{ start: iso(4), end: iso(6), kind: 'away' }],
+          clear_minutes: 5,
+          waits_for_plate: true,
+          away_until: iso(5),
+        },
+      }));
+      renderTimeline();
+
+      fireEvent.click(await within(lane(2)).findByTestId('plate-wait-2'));
+      expect(screen.getByTestId('timeline-info')).toHaveTextContent('queue.timeline.plateWait');
+
+      fireEvent.pointerDown(document.body);
+      fireEvent.click(screen.getByTestId('axis-mark'));
+      expect(screen.getByTestId('timeline-info')).toHaveTextContent('queue.timeline.markAway');
+
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByTestId('timeline-info')).toBeNull();
+      fireEvent.click(screen.getByTestId('timeline-away'));
+      expect(screen.getByTestId('timeline-info')).toHaveTextContent('queue.timeline.awayHelp');
+    });
+
+    it('zooms on Safari\'s trackpad pinch (gesture events) instead of the page', async () => {
+      renderTimeline();
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      const chart = lane(2).closest('.overflow-x-auto') as HTMLElement;
+      const gesture = (type: string, scale: number) => {
+        const e = new Event(type, { cancelable: true });
+        Object.assign(e, { scale, clientX: 300 });
+        act(() => {
+          chart.dispatchEvent(e);
+        });
+        return e;
+      };
+
+      expect(gesture('gesturestart', 1).defaultPrevented).toBe(true);
+      expect(gesture('gesturechange', 1.5).defaultPrevented).toBe(true);
+      expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('12 h');
+      gesture('gesturechange', 1);
+      expect(screen.getByTestId('timeline-zoom')).toHaveTextContent('24 h');
+      gesture('gestureend', 1);
+    });
+
+    it('moves the window on a sideways swipe, never leaving it to the browser', async () => {
+      renderTimeline();
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      const chart = lane(2).closest('.overflow-x-auto') as HTMLElement;
+      expect(chart.className).toContain('overscroll-x-contain');
+      const before = screen.getByTestId('timeline-range').textContent;
+
+      const notCancelled = fireEvent.wheel(chart, { deltaX: 200, deltaY: 0 });
+
+      expect(notCancelled).toBe(false);
+      expect(screen.getByTestId('timeline-range').textContent).not.toBe(before);
+      expect(screen.getByRole('button', { name: 'queue.timeline.window.now' })).toBeInTheDocument();
+    });
+
+    it('folds the legend behind "?" and remembers it', async () => {
+      renderTimeline();
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      expect(screen.queryByTestId('timeline-legend')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('timeline-help-toggle'));
+
+      expect(screen.getByTestId('timeline-legend')).toBeInTheDocument();
+      expect(screen.getByTestId('timeline-help-toggle')).toHaveAttribute('aria-expanded', 'true');
+      expect(localStorage.setItem).toHaveBeenCalledWith('queueTimelineHelpOpen', '1');
+    });
+
+    it('writes times in the app\'s language, not the device\'s', async () => {
+      const times = vi.spyOn(Date.prototype, 'toLocaleTimeString');
+      await act(async () => {
+        await i18n.changeLanguage('pl');
+      });
+      try {
+        renderTimeline({ onApplyPlan: vi.fn() });
+        await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+        expect(times).toHaveBeenCalled();
+        expect(times.mock.calls.filter(([language]) => language !== 'pl')).toEqual([]);
+        // dnd-kit's screen-reader words are the app's too.
+        expect(screen.getByText('queue.timeline.a11y.instructions')).toBeInTheDocument();
+      } finally {
+        times.mockRestore();
+        await act(async () => {
+          await i18n.changeLanguage('en');
+        });
+      }
+    });
+  });
+
+  describe('a link to one job (fork)', () => {
+    it('opens the job\'s details once, and opens nothing for a job that is gone', async () => {
+      const done = vi.fn();
+      const { unmount } = renderTimeline({ focusItemId: 4, onFocusItemDone: done });
+      expect(await screen.findByTestId('queue-job-details')).toHaveTextContent('Later cup');
+      expect(done).toHaveBeenCalled();
+      unmount();
+
+      const gone = vi.fn();
+      renderTimeline({ focusItemId: 99, onFocusItemDone: gone });
+      await within(lane(2)).findByTitle((title) => title.startsWith('Any tray'));
+      expect(screen.queryByTestId('queue-job-details')).toBeNull();
+      expect(gone).toHaveBeenCalled();
+    });
+  });
+
+  describe('job details (fork)', () => {
+    const p = (id: number) => printers.find((printer) => printer.id === id)!;
+    function renderDetails(props: Partial<Parameters<typeof QueueJobDetails>[0]> = {}) {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const base = {
+        item: anyJob,
+        printers,
+        expected: { printerId: 2, start: new Date(), end: new Date() },
+        pinChoices: [p(1), p(2), p(4)],
+        canModify: true,
+        onPin: vi.fn(),
+        onClose: vi.fn(),
+        t,
+      };
+      const ui = (over: Partial<Parameters<typeof QueueJobDetails>[0]>) => (
+        <QueryClientProvider client={client}>
+          <QueueJobDetails {...base} {...props} {...over} />
+        </QueryClientProvider>
+      );
+      const view = render(ui({}));
+      return { rerenderWith: (over: Partial<Parameters<typeof QueueJobDetails>[0]>) => view.rerender(ui(over)) };
+    }
+
+    it('keeps the printer picked while the forecast refreshes', () => {
+      const view = renderDetails();
+      const select = screen.getByRole('combobox');
+      expect(select).toHaveValue('2');
+
+      fireEvent.change(select, { target: { value: '4' } });
+      // The next forecast expects the job on printer 1.
+      view.rerenderWith({ expected: { printerId: 1, start: new Date(), end: new Date() } });
+      expect(screen.getByRole('combobox')).toHaveValue('4');
+
+      // The printer picked can no longer take it: back to the default.
+      view.rerenderWith({ expected: { printerId: 1, start: new Date(), end: new Date() }, pinChoices: [p(1), p(2)] });
+      expect(screen.getByRole('combobox')).toHaveValue('1');
+    });
+
+    it('keeps its actions in view below a scrolling body', () => {
+      renderDetails();
+      const body = screen.getByTestId('queue-job-details-body');
+      const footer = screen.getByTestId('queue-job-details-footer');
+      expect(body.className).toContain('overflow-y-auto');
+      expect(body.contains(footer)).toBe(false);
+      expect(screen.getByRole('button', { name: 'common.close' }).className).toContain('any-pointer-coarse:min-h-[44px]');
     });
   });
 });

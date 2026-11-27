@@ -52,7 +52,7 @@ class SlotSpoolLoadRequest(BaseModel):
     slicer_filament: str | None = Field(default=None, max_length=50)
     slicer_filament_name: str | None = Field(default=None, max_length=100)
     # Grams on the roll; omitted = a full roll, or what a restored roll had.
-    remaining_grams: float | None = Field(default=None, ge=0, le=100000)
+    remaining_grams: float | None = Field(default=None, ge=0, le=service.MAX_SLOT_SPOOL_GRAMS)
     restore_spool_id: int | None = None
     k_profile: KProfileIn | None = None
 
@@ -68,15 +68,31 @@ class SlotSpoolPromptResponse(BaseModel):
         from_attributes = True
 
 
+class RestorableKProfileResponse(BaseModel):
+    printer_id: int
+    extruder: int
+    nozzle_diameter: str
+    cali_idx: int | None = None
+    k_value: float
+    name: str | None = None
+    setting_id: str | None = None
+
+
 class RestorableSpoolResponse(BaseModel):
     id: int
     material: str
     color_name: str | None = None
     rgba: str | None = None
+    slicer_filament: str | None = None
     slicer_filament_name: str | None = None
     remaining_grams: float
     label_weight: int
     archived_at: datetime | None = None
+    # Of the type asked for (always true when none was asked for).
+    material_match: bool = True
+    # The K profiles the roll was set to, so the dialog can set the slot back
+    # to them; only those of ``printer_id`` when the request names one.
+    k_profiles: list[RestorableKProfileResponse] = []
 
 
 @router.get("/prompts", response_model=list[SlotSpoolPromptResponse])
@@ -111,22 +127,45 @@ async def keep_same_roll(
 async def list_restorable(
     material: str | None = Query(default=None, max_length=50),
     rgba: str | None = Query(default=None, max_length=9),
+    limit: int = Query(default=10, ge=1, le=200),
+    include_other: bool = Query(default=False),
+    printer_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
-    """Rolls taken out of a slot with filament left on them, to put back in one."""
+    """Rolls taken out of a slot with filament left on them, to put back in one.
+
+    ``include_other`` lists rolls of another type after those of ``material``
+    (marked by ``material_match``) instead of leaving them out.
+    """
+    spools = await service.restorable_spools(db, material=material, rgba=rgba, limit=limit, include_other=include_other)
     return [
         RestorableSpoolResponse(
             id=s.id,
             material=s.material,
             color_name=s.color_name,
             rgba=s.rgba,
+            slicer_filament=s.slicer_filament,
             slicer_filament_name=s.slicer_filament_name,
             remaining_grams=max(0.0, float(s.label_weight or 0) - float(s.weight_used or 0)),
             label_weight=s.label_weight,
             archived_at=s.archived_at,
+            material_match=service.material_matches(s, material),
+            k_profiles=[
+                RestorableKProfileResponse(
+                    printer_id=k.printer_id,
+                    extruder=k.extruder,
+                    nozzle_diameter=k.nozzle_diameter,
+                    cali_idx=k.cali_idx,
+                    k_value=k.k_value,
+                    name=k.name,
+                    setting_id=k.setting_id,
+                )
+                for k in s.k_profiles
+                if printer_id is None or k.printer_id == printer_id
+            ],
         )
-        for s in await service.restorable_spools(db, material=material, rgba=rgba)
+        for s in spools
     ]
 
 

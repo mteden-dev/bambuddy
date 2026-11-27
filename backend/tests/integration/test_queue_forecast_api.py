@@ -236,6 +236,79 @@ async def test_a_job_the_product_planner_reserved_goes_where_the_scheduler_will_
     assert placed == {planned: (a_id, False), mine: (b_id, True)}
 
 
+async def test_each_hold_says_who_holds_it_and_whether_the_job_is_placed_there(
+    async_client: AsyncClient, db_session, printer_factory, archive_factory
+):
+    from backend.app.models.queue_reservations import QueueReservation
+    from backend.app.services.queue_reservations import SOURCE_PLAN, SOURCE_USER, release, reserve
+
+    a = await printer_factory(name="P1S-A", model="P1S")
+    b = await printer_factory(name="P1S-B", model="P1S")
+    a_id, b_id = a.id, b.id
+    archive_id = (await archive_factory(a_id, sliced_for_model="P1S")).id
+    gave_way = await _item(db_session, archive_id, 1, target_model="P1S")
+    firm = await _item(db_session, archive_id, 2, target_model="P1S")
+    soft = await _item(db_session, archive_id, 3, target_model="P1S")
+    released = await _item(db_session, archive_id, 4, target_model="P1S")
+    legacy = await _item(db_session, archive_id, 5, target_model="P1S")
+    for item_id, printer_id, source in (
+        (gave_way, b_id, SOURCE_PLAN),
+        (firm, b_id, SOURCE_USER),
+        (soft, a_id, SOURCE_PLAN),
+        (released, b_id, SOURCE_PLAN),
+        (legacy, b_id, SOURCE_USER),
+    ):
+        await reserve(db_session, await db_session.get(PrintQueueItem, item_id), printer_id, source=source)
+    await db_session.flush()
+    (await db_session.get(QueueReservation, legacy)).source = None  # a row from before the column
+    await release(db_session, released)
+    await db_session.commit()
+
+    # B prints for nine more hours: the planner's hold on B gives way, A's holds.
+    connected, status = _live({a_id, b_id}, printing={b_id: 9 * 60})
+    with connected, status:
+        response = await async_client.get("/api/v1/queue/forecast")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["reservations"] == {
+        str(gave_way): {"printer_id": b_id, "active": True, "source": "plan", "soft": True, "placed": False},
+        str(firm): {"printer_id": b_id, "active": True, "source": "user", "soft": False, "placed": True},
+        str(soft): {"printer_id": a_id, "active": True, "source": "plan", "soft": True, "placed": True},
+        str(legacy): {"printer_id": b_id, "active": True, "source": "user", "soft": False, "placed": True},
+    }
+    # The released job is anyone's: A, free first, takes it.
+    placed = {p["item_id"]: p["printer_id"] for p in body["placements"]}
+    assert placed[gave_way] == a_id and placed[released] == a_id
+
+
+async def test_a_hold_that_does_not_hold_now_is_not_placed_there(
+    async_client: AsyncClient, db_session, printer_factory, archive_factory
+):
+    from backend.app.services.queue_reservations import SOURCE_PLAN, reserve
+
+    a = await printer_factory(name="P1S-A", model="P1S")
+    b = await printer_factory(name="P1S-B", model="P1S")
+    a_id, b_id = a.id, b.id
+    archive_id = (await archive_factory(a_id, sliced_for_model="P1S")).id
+    job = await _item(db_session, archive_id, 1, target_model="P1S")
+    await reserve(db_session, await db_session.get(PrintQueueItem, job), b_id, source=SOURCE_PLAN)
+    await db_session.commit()
+
+    # B is offline with no Auto On plug: the hold is not kept to.
+    connected, status = _live({a_id})
+    with connected, status:
+        response = await async_client.get("/api/v1/queue/forecast")
+
+    assert response.json()["reservations"][str(job)] == {
+        "printer_id": b_id,
+        "active": False,
+        "source": "plan",
+        "soft": True,
+        "placed": False,
+    }
+
+
 async def test_jobs_held_for_filament_are_planned_but_stay_off_the_timeline(
     async_client: AsyncClient, db_session, printer_factory, archive_factory
 ):

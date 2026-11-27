@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Boxes, ImageIcon, Link2, Loader2, Plus, Search, Timer, Trash2, Upload, X } from 'lucide-react';
 import { api } from '../../api/client';
 import type { LibraryFileListItem, Product, ProductPlateFile, ProductWrite } from '../../api/client';
+import type { PlateMetadata } from '../../types/plates';
 import { Card, CardContent } from '../Card';
 import { Button } from '../Button';
 import { NumberInput } from '../NumberInput';
@@ -11,6 +12,9 @@ import { useToast } from '../../contexts/ToastContext';
 import { formatDuration } from '../../utils/date';
 import { isSlicedLibraryFile } from '../../utils/libraryFiles';
 import { guessPlatePieces } from '../../utils/products';
+import { PlateTime } from './PlateTime';
+import { useDiscardGuard } from './useDiscardGuard';
+import { useModalBehavior } from '../../hooks/useModalBehavior';
 
 interface DraftPart {
   id?: number;
@@ -21,12 +25,19 @@ interface DraftPart {
 }
 
 interface DraftPlate {
+  /** Unique in the draft: two plates of one multi-plate file share the file id. */
+  key: string;
   library_file_id: number;
   plate_id: number | null;
   file: ProductPlateFile;
   /** Pieces per part, by the part's index in the draft. */
   pieces: number[];
+  /** The file's plates, when it has several and they were read (a plate added here). */
+  filePlates?: PlateMetadata[];
 }
+
+let draftKeys = 0;
+const nextKey = () => `plate-${++draftKeys}`;
 
 interface ProductEditorModalProps {
   /** The product to change; none to create one. */
@@ -34,8 +45,12 @@ interface ProductEditorModalProps {
   onClose: () => void;
 }
 
+// 16 px on a phone: a smaller field makes iOS zoom in on focus.
 const inputClass =
-  'w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray text-sm focus:border-bambu-green focus:outline-none';
+  'w-full px-3 py-2 any-pointer-coarse:min-h-[44px] bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray text-base sm:text-sm focus:border-bambu-green focus:outline-none';
+const TOUCH = 'any-pointer-coarse:min-h-[44px]!';
+const iconButton =
+  'p-2 any-pointer-coarse:min-h-[44px] any-pointer-coarse:min-w-[44px] flex items-center justify-center shrink-0 text-bambu-gray hover:text-red-400 disabled:opacity-30';
 
 function draftFrom(product: Product | null | undefined): { parts: DraftPart[]; plates: DraftPlate[] } {
   if (!product) return { parts: [{ name: '', quantity: 1, matched: false, finish_minutes: 0 }], plates: [] };
@@ -47,6 +62,7 @@ function draftFrom(product: Product | null | undefined): { parts: DraftPart[]; p
     finish_minutes: p.finish_minutes ?? 0,
   }));
   const plates = product.plates.map((plate) => ({
+    key: nextKey(),
     library_file_id: plate.library_file_id,
     plate_id: plate.plate_id,
     file: plate.file,
@@ -91,13 +107,22 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
       ? api.getProductThumbnailUrl(product.id, product.thumbnail_version)
       : null);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // What the draft was on opening, to tell whether Escape would lose edits.
+  const snapshot = () =>
+    JSON.stringify({
+      name,
+      notes,
+      parts,
+      plates: plates.map((p) => [p.library_file_id, p.plate_id, p.pieces]),
+      skus,
+      picture: picture ? [picture.name, picture.size] : null,
+      dropPicture,
+    });
+  const [baseline] = useState(snapshot);
+  const dirty = snapshot() !== baseline;
+  const titleId = useId();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const { requestClose, confirm } = useDiscardGuard(dirty, onClose);
 
   const { data: files, isLoading: filesLoading } = useQuery({
     queryKey: ['library-files', 'products-picker'],
@@ -106,7 +131,8 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
   });
 
   const candidates = useMemo(() => {
-    const used = new Set(plates.map((p) => p.library_file_id));
+    // A single-plate file is used up once picked; a multi-plate file stays for its other plates.
+    const used = new Set(plates.filter((p) => p.plate_id == null).map((p) => p.library_file_id));
     const needle = search.trim().toLowerCase();
     return (files ?? [])
       .filter((f: LibraryFileListItem) => isSlicedLibraryFile(f) && !used.has(f.id))
@@ -130,14 +156,40 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
     },
     onError: (e: Error) => setError(e.message),
   });
+  // Escape asks before dropping edits; a sheet on a phone, so Back closes it too.
+  useModalBehavior(requestClose, overlayRef, { busy: saveMutation.isPending, backCloses: 'narrow' });
 
   const addPlate = async (file: LibraryFileListItem) => {
     setAdding(file.id);
     try {
-      const info = await api.getProductFileInfo(file.id);
+      const [info, platesInfo] = await Promise.all([
+        api.getProductFileInfo(file.id),
+        // Without the plate list the file is taken as one plate.
+        api.getLibraryFilePlates(file.id).catch(() => null),
+      ]);
+      const filePlates = platesInfo?.is_multi_plate && platesInfo.plates.length > 1 ? platesInfo.plates : undefined;
+      let plateId: number | null = null;
+      let guessFrom = info;
+      if (filePlates) {
+        const taken = new Set(plates.filter((p) => p.library_file_id === file.id).map((p) => p.plate_id));
+        const free = filePlates.find((p) => !taken.has(p.index));
+        if (!free) {
+          showToast(t('products.plateAllUsed'), 'error');
+          return;
+        }
+        plateId = free.index;
+        guessFrom = { ...info, object_count: free.object_count ?? free.objects.length };
+      }
       setPlates((current) => [
         ...current,
-        { library_file_id: file.id, plate_id: null, file: info, pieces: guessPlatePieces(parts, info) },
+        {
+          key: nextKey(),
+          library_file_id: file.id,
+          plate_id: plateId,
+          file: info,
+          pieces: guessPlatePieces(parts, guessFrom),
+          filePlates,
+        },
       ]);
       setPicking(false);
       setSearch('');
@@ -187,17 +239,29 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
   const partsWithoutPlate = parts.filter((_, index) => !plates.some((plate) => (plate.pieces[index] ?? 0) > 0));
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-3xl max-h-[90vh] flex flex-col">
+    // A bottom sheet on a phone, a centred dialog from sm.
+    <div ref={overlayRef} className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 sm:p-4">
+      <Card
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="outline-none w-full sm:max-w-3xl max-h-[92dvh] flex flex-col rounded-b-none sm:rounded-b-xl"
+      >
         <CardContent className="p-0 flex flex-col min-h-0">
           <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary shrink-0">
             <div className="flex items-center gap-2">
               <Boxes className="w-5 h-5 text-bambu-green" />
-              <h2 className="text-lg font-semibold text-white">
+              <h2 id={titleId} className="text-lg font-semibold text-white">
                 {product ? t('products.editor.editTitle') : t('products.editor.newTitle')}
               </h2>
             </div>
-            <button onClick={onClose} className="text-bambu-gray hover:text-white" aria-label={t('common.close')}>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 -m-2 any-pointer-coarse:min-h-[44px] any-pointer-coarse:min-w-[44px] flex items-center justify-center text-bambu-gray hover:text-white"
+              aria-label={t('common.close')}
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -211,7 +275,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder={t('products.editor.namePlaceholder')}
-                  autoFocus
+                  data-autofocus
                 />
               </label>
               <label className="block">
@@ -230,7 +294,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap gap-2">
-                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-bambu-dark-tertiary hover:bg-bambu-gray-dark text-white cursor-pointer">
+                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 any-pointer-coarse:min-h-[44px] text-sm rounded-lg bg-bambu-dark-tertiary hover:bg-bambu-gray-dark text-white cursor-pointer">
                     <Upload className="w-4 h-4" />
                     {t('products.editor.pictureUpload')}
                     <input
@@ -250,6 +314,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                     <Button
                       variant="ghost"
                       size="sm"
+                      className={TOUCH}
                       onClick={() => {
                         setPicture(null);
                         setDropPicture(true);
@@ -327,7 +392,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                       type="button"
                       onClick={() => removePart(index)}
                       disabled={parts.length === 1}
-                      className="p-2 text-bambu-gray hover:text-red-400 disabled:opacity-30"
+                      className={iconButton}
                       aria-label={t('products.editor.removePart')}
                     >
                       <Trash2 className="w-4 h-4" />
@@ -335,7 +400,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                   </div>
                 ))}
               </div>
-              <Button variant="ghost" size="sm" className="mt-2" onClick={addPart}>
+              <Button variant="ghost" size="sm" className={`mt-2 ${TOUCH}`} onClick={addPart}>
                 <Plus className="w-4 h-4" />
                 {t('products.editor.addPart')}
               </Button>
@@ -372,7 +437,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                     <button
                       type="button"
                       onClick={() => setSkus((current) => current.filter((_, i) => i !== index))}
-                      className="p-2 text-bambu-gray hover:text-red-400"
+                      className={iconButton}
                       aria-label={t('products.editor.removeSku')}
                     >
                       <Trash2 className="w-4 h-4" />
@@ -383,7 +448,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
               <Button
                 variant="ghost"
                 size="sm"
-                className="mt-2"
+                className={`mt-2 ${TOUCH}`}
                 onClick={() => setSkus((current) => [...current, { sku: '', units: 1 }])}
               >
                 <Plus className="w-4 h-4" />
@@ -396,30 +461,66 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
               <p className="text-xs text-bambu-gray mb-2">{t('products.editor.platesHint')}</p>
               {plates.length > 0 && (
                 <div className="space-y-2">
-                  {plates.map((plate, plateIndex) => (
+                  {plates.map((plate, plateIndex) => {
+                    const meta = plate.filePlates?.find((p) => p.index === plate.plate_id);
+                    // Plates of this file the other rows take: not offered again here.
+                    const taken = new Set(
+                      plates.filter((p) => p !== plate && p.library_file_id === plate.library_file_id).map((p) => p.plate_id),
+                    );
+                    return (
                     <div
-                      key={plate.library_file_id}
+                      key={plate.key}
                       className="rounded-lg border border-bambu-dark-tertiary p-3 flex flex-col gap-2"
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm text-white truncate flex-1">
+                      <div className="flex flex-wrap items-center gap-2 min-w-0">
+                        <span className="text-sm text-white truncate flex-1 min-w-[8rem]">
                           {plate.file.print_name || plate.file.filename}
                         </span>
+                        {plate.filePlates ? (
+                          <select
+                            className="px-2 py-1 any-pointer-coarse:min-h-[44px] bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-base sm:text-sm focus:border-bambu-green focus:outline-none"
+                            value={plate.plate_id ?? ''}
+                            aria-label={t('products.plateOf', { name: plate.file.print_name || plate.file.filename })}
+                            onChange={(e) => {
+                              const index = Number(e.target.value);
+                              setPlates((current) => current.map((p, i) => (i === plateIndex ? { ...p, plate_id: index } : p)));
+                            }}
+                          >
+                            {plate.filePlates
+                              .filter((p) => p.index === plate.plate_id || !taken.has(p.index))
+                              .map((p) => (
+                                <option key={p.index} value={p.index}>
+                                  {t('products.plateN', { n: p.index })}
+                                  {p.name ? ` · ${p.name}` : ''}
+                                </option>
+                              ))}
+                          </select>
+                        ) : (
+                          plate.plate_id != null && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-dark-tertiary text-bambu-gray-light shrink-0">
+                              {t('products.plateN', { n: plate.plate_id })}
+                            </span>
+                          )
+                        )}
                         {plate.file.model && (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-bambu-dark-tertiary text-bambu-gray-light shrink-0">
                             {plate.file.model}
                           </span>
                         )}
-                        {plate.file.print_time_seconds ? (
-                          <span className="text-xs text-bambu-gray shrink-0">{formatDuration(plate.file.print_time_seconds)}</span>
-                        ) : null}
+                        {meta ? (
+                          meta.print_time_seconds ? (
+                            <span className="text-xs text-bambu-gray shrink-0">{formatDuration(meta.print_time_seconds)}</span>
+                          ) : null
+                        ) : (
+                          <PlateTime plate={plate.file} className="text-xs text-bambu-gray shrink-0" />
+                        )}
                         {plate.file.missing && (
                           <span className="text-xs text-amber-500 shrink-0">{t('products.editor.fileMissing')}</span>
                         )}
                         <button
                           type="button"
                           onClick={() => setPlates((current) => current.filter((_, i) => i !== plateIndex))}
-                          className="p-1 text-bambu-gray hover:text-red-400 shrink-0"
+                          className={iconButton}
                           aria-label={t('products.editor.removePlate')}
                         >
                           <Trash2 className="w-4 h-4" />
@@ -433,7 +534,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                               min={0}
                               max={1000}
                               fallback={0}
-                              className={`${inputClass} w-16 py-1`}
+                              className={`${inputClass} w-20 py-1`}
                               value={plate.pieces[partIndex] ?? 0}
                               onChange={(value) => {
                                 setPlates((current) =>
@@ -449,7 +550,8 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                         ))}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
               {partsWithoutPlate.length > 0 && plates.length > 0 && (
@@ -483,7 +585,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                             type="button"
                             onClick={() => addPlate(file)}
                             disabled={adding !== null}
-                            className="w-full flex items-center gap-2 py-2 px-1 text-left hover:bg-bambu-dark-tertiary rounded disabled:opacity-50"
+                            className="w-full flex items-center gap-2 py-2 px-1 min-h-[44px] text-left hover:bg-bambu-dark-tertiary rounded disabled:opacity-50"
                           >
                             <span className="text-sm text-white truncate flex-1">{file.print_name || file.filename}</span>
                             {file.sliced_for_model && (
@@ -501,13 +603,13 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                     </ul>
                   )}
                   <div className="flex justify-end mt-2">
-                    <Button variant="ghost" size="sm" onClick={() => setPicking(false)}>
+                    <Button variant="ghost" size="sm" className={TOUCH} onClick={() => setPicking(false)}>
                       {t('common.cancel')}
                     </Button>
                   </div>
                 </div>
               ) : (
-                <Button variant="secondary" size="sm" className="mt-2" onClick={() => setPicking(true)}>
+                <Button variant="secondary" size="sm" className={`mt-2 ${TOUCH}`} onClick={() => setPicking(true)}>
                   <Plus className="w-4 h-4" />
                   {t('products.editor.addPlate')}
                 </Button>
@@ -517,17 +619,20 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
             {error && <p className="text-sm text-red-400">{error}</p>}
           </div>
 
-          <div className="flex justify-end gap-2 p-4 border-t border-bambu-dark-tertiary shrink-0">
-            <Button variant="secondary" onClick={onClose}>
+          {/* On a touch phone the sheet's buttons stay clear of the home-indicator zone. */}
+          <div className="flex justify-end gap-2 p-4 max-sm:any-pointer-coarse:pb-8 border-t border-bambu-dark-tertiary shrink-0">
+            <Button variant="secondary" className={TOUCH} onClick={onClose} disabled={saveMutation.isPending}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={save} disabled={saveMutation.isPending}>
+            <Button className={TOUCH} onClick={save} disabled={saveMutation.isPending}>
+
               {saveMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
               {t('common.save')}
             </Button>
           </div>
         </CardContent>
       </Card>
+      {confirm}
     </div>
   );
 }

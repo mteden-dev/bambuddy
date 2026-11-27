@@ -86,6 +86,46 @@ describe('PrintFromLibraryModal', () => {
     fireEvent.click(screen.getByText('Show files for other printers (1)'));
     const row = (await screen.findByText('Other printer.gcode.3mf')).closest('button')!;
     expect(row).toBeDisabled();
+    // Why, in words on the row, not only in its title.
+    expect(within(row).getByText('This file was sliced for A1, but this printer is a X1C')).toBeInTheDocument();
+  });
+
+  describe('on a P1P (fork: a P1S slice runs there, CUSTOM_FORK.md)', () => {
+    const p1sFile = file(15, 'Box P1S.gcode.3mf', null, { sliced_for_model: 'P1S' });
+    const renderP1P = () =>
+      render(<PrintFromLibraryModal printerId={6} printerName="Old" printerModel="C11" onClose={vi.fn()} />);
+
+    it('offers a P1S file with an amber badge and opens the print dialog for it', async () => {
+      server.use(http.get('/api/v1/library/files', () => HttpResponse.json([...files, p1sFile])));
+      renderP1P();
+      const row = (await screen.findByText('Box P1S.gcode.3mf')).closest('button')!;
+      expect(row).toBeEnabled();
+      expect(within(row).getByText('sliced for P1S')).toBeInTheDocument();
+      fireEvent.click(row);
+      expect(within(await screen.findByTestId('print-modal')).getByText('file:15')).toBeInTheDocument();
+    });
+
+    it('keeps an uploaded P1S file instead of deleting it as incompatible', async () => {
+      server.use(
+        http.post('/api/v1/library/files', () =>
+          HttpResponse.json({
+            id: 97, filename: 'p1s.gcode.3mf', file_type: 'gcode.3mf', file_size: 10, thumbnail_path: null,
+            duplicate_of: null, metadata: { sliced_for_model: 'P1S' },
+          }),
+        ),
+        http.delete('/api/v1/library/files/:id', ({ params }) => {
+          deletes.push(Number(params.id));
+          return HttpResponse.json({ status: 'ok' });
+        }),
+      );
+      renderP1P();
+      await screen.findByText('Print on Old');
+      fireEvent.change(screen.getByTestId('print-picker-file-input'), {
+        target: { files: [new File(['x'], 'p1s.gcode.3mf')] },
+      });
+      expect(within(await screen.findByTestId('print-modal')).getByText('file:97')).toBeInTheDocument();
+      expect(deletes).toEqual([]);
+    });
   });
 
   it('walks into folders and back through the breadcrumb', async () => {

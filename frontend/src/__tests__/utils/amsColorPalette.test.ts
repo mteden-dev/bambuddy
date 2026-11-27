@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_AMS_COLOR_PALETTE,
+  defaultColorKey,
   moveItem,
+  paletteColorLabel,
+  storedColorName,
   normalizeHex,
   parseAmsColorPalette,
   serializeAmsColorPalette,
@@ -64,5 +67,18 @@ describe('amsColorPalette', () => {
     expect(moveItem(items, 0, 2)).toEqual(['b', 'c', 'a']);
     expect(moveItem(items, 2, -5)).toEqual(['c', 'a', 'b']);
     expect(items).toEqual(['a', 'b', 'c']);
+  });
+
+  it('translates the default colours where shown, and stores them back in English', () => {
+    const polish: Record<string, string> = { white: 'Biały', black: 'Czarny' };
+    const translate = (key: string) => polish[key] ?? key;
+    expect(defaultColorKey({ name: 'White', hex: 'FFFFFF' })).toBe('white');
+    // Renamed or recoloured: the user's own, shown as it is.
+    expect(defaultColorKey({ name: 'Jade White', hex: 'FFFFFF' })).toBeNull();
+    expect(defaultColorKey({ name: 'White', hex: 'F5F5F5' })).toBeNull();
+    expect(paletteColorLabel({ name: 'White', hex: 'FFFFFF' }, translate)).toBe('Biały');
+    expect(paletteColorLabel({ name: 'Jade White', hex: 'FFFFFF' }, translate)).toBe('Jade White');
+    expect(storedColorName('Biały', 'FFFFFF', translate)).toBe('White');
+    expect(storedColorName('Biały', '123456', translate)).toBe('Biały');
   });
 });

@@ -917,9 +917,11 @@ async def queue_forecast(
             if visible(item_id)
         },
         reservations={
-            str(item_id): QueueForecastReservation(printer_id=printer_id, active=active)
-            for item_id, (printer_id, active) in forecast.reservations.items()
-            if visible(item_id) and printer_scope.allows(printer_id)
+            str(item_id): QueueForecastReservation(
+                printer_id=r.printer_id, active=r.active, source=r.source, soft=r.soft, placed=r.placed
+            )
+            for item_id, r in forecast.reservations.items()
+            if visible(item_id) and printer_scope.allows(r.printer_id)
         },
         variants={
             str(item_id): [_forecast_variant(v) for v in variants]
@@ -1640,6 +1642,10 @@ async def add_to_queue(
     # item lands relative to the whole list, not to its printer's share of it.
     queue_scope = (PrintQueueItem.status == "pending",)
     await lock_queue_positions(db)
+    # Fork: under the lock, so two devices cannot both queue one OrcaSlicer upload.
+    from backend.app.api.routes.octoprint_compat import announce_slicer_upload_decided, claim_slicer_upload
+
+    inbox_decided = library_file is not None and await claim_slicer_upload(db, library_file, data.slicer_inbox_claim)
 
     insert_position = max(1, data.insert_position or 1)
     if data.insert_at_top or data.insert_position is not None:
@@ -1816,6 +1822,8 @@ async def add_to_queue(
     logger.info("Added %s to queue for %s%s", source_name, target_desc, qty_desc)
 
     await announce_queue_jobs_added(db, [i.id for i in items])
+    if inbox_decided and library_file is not None:
+        await announce_slicer_upload_decided(library_file, "queued", actor, data.slicer_inbox_claim)
 
     return _enrich_response(item)
 
@@ -2947,7 +2955,10 @@ async def release_queue_reservation(
     ),
     printer_scope: PrinterScope = RequestPrinterScope,
 ):
-    """Hand a job the timeline's plan reserved back to any printer of its model (fork)."""
+    """Hand a job the timeline's plan reserved back to any printer of its model (fork).
+
+    A release of the product planner's hold sticks: its replans leave the job alone.
+    """
     user, can_modify_all = auth_result
     item = await db.get(PrintQueueItem, item_id)
     if not item or not printer_scope.allows(item.printer_id):

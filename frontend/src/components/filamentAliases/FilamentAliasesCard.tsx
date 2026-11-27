@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, Plus, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Loader2, Plus, Trash2, X } from 'lucide-react';
 import { api } from '../../api/client';
 import type { FilamentAliases } from '../../api/client';
 import { Card, CardContent, CardHeader } from '../Card';
@@ -16,17 +16,36 @@ import { ColorSquare } from '../HexColorText';
 type Kind = 'colors' | 'presets';
 
 const inputClass =
-  'min-h-11 md:min-h-9 px-2 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none';
+  'min-h-[44px] md:min-h-9 px-2 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none';
 
 const OTHER = '__other__';
+
+// The rest of Settings saves itself this long after the last change.
+const SAVE_DELAY_MS = 500;
 
 function cleanMember(kind: Kind, raw: string): string | null {
   const text = raw.trim();
   if (kind === 'colors') {
     const hex = text.replace('#', '').toLowerCase();
+    // The short form too, as the AMS colour palette takes it.
+    if (/^[0-9a-f]{3}$/.test(hex)) return hex.split('').map((c) => c + c).join('');
     return /^[0-9a-f]{6}$/.test(hex) ? hex : null;
   }
   return text && text.length <= 64 ? text : null;
+}
+
+// A group while it is edited, with an id of its own: keyed by its index, a
+// half-typed field moved to the next group when one above was removed.
+interface DraftGroup {
+  id: number;
+  members: string[];
+}
+type Draft = Record<Kind, DraftGroup[]>;
+
+/** What is saved: the groups of two or more (one alone means nothing). */
+function completeGroups(draft: Draft): FilamentAliasGroups {
+  const pick = (groups: DraftGroup[]) => groups.filter((g) => g.members.length >= 2).map((g) => g.members);
+  return { colors: pick(draft.colors), presets: pick(draft.presets) };
 }
 
 interface Suggestion {
@@ -133,7 +152,7 @@ function GroupEditor({
                         type="button"
                         role="option"
                         aria-selected={false}
-                        className="w-full min-h-11 px-3 py-2 flex items-center gap-2.5 text-left text-sm text-white hover:bg-bambu-dark-tertiary"
+                        className="w-full min-h-[44px] px-3 py-2 flex items-center gap-2.5 text-left text-sm text-white hover:bg-bambu-dark-tertiary"
                         onClick={() => {
                           setPicking(false);
                           add(s.value);
@@ -149,7 +168,7 @@ function GroupEditor({
                       type="button"
                       role="option"
                       aria-selected={false}
-                      className="w-full min-h-11 px-3 py-2 text-left text-sm text-bambu-gray hover:bg-bambu-dark-tertiary hover:text-white"
+                      className="w-full min-h-[44px] px-3 py-2 text-left text-sm text-bambu-gray hover:bg-bambu-dark-tertiary hover:text-white"
                       onClick={() => {
                         setPicking(false);
                         setTyping(true);
@@ -222,7 +241,9 @@ function GroupEditor({
 
 /**
  * Fork (filament aliases): colours and filament profiles that count as the
- * same in the queue's matching, in Settings → Filament. Saved as a whole.
+ * same in the queue's matching, in Settings → Filament. Saved as a whole, by
+ * itself a moment after a change like the rest of Settings, so nothing is lost
+ * by leaving the page; a group of one is never sent (it says so).
  */
 export function FilamentAliasesCard() {
   const { t } = useTranslation();
@@ -231,10 +252,12 @@ export function FilamentAliasesCard() {
   const queryClient = useQueryClient();
   const canEdit = hasPermission('settings:update');
   const { data } = useQuery({ queryKey: FILAMENT_ALIASES_QUERY_KEY, queryFn: api.getFilamentAliases });
-  const [draft, setDraft] = useState<FilamentAliasGroups | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const nextId = useRef(0);
+  const toGroups = (groups: string[][]): DraftGroup[] => groups.map((members) => ({ id: nextId.current++, members }));
 
   useEffect(() => {
-    if (data && draft === null) setDraft({ colors: data.colors, presets: data.presets });
+    if (data && draft === null) setDraft({ colors: toGroups(data.colors), presets: toGroups(data.presets) });
   }, [data, draft]);
 
   const place = (where: string[]) => where.map((w) => (w === 'queue' ? t('filamentAliases.queue') : w)).join(', ');
@@ -262,21 +285,52 @@ export function FilamentAliasesCard() {
   );
 
   const saved = data ? JSON.stringify({ colors: data.colors, presets: data.presets }) : '';
-  const dirty = draft !== null && JSON.stringify(draft) !== saved;
+  const wanted = draft ? completeGroups(draft) : null;
+  const wantedKey = wanted ? JSON.stringify(wanted) : '';
+  const dirty = wanted !== null && wantedKey !== saved;
 
   const mutation = useMutation({
     mutationFn: (groups: FilamentAliasGroups) => api.setFilamentAliases(groups),
+    // The draft is left as it is: it may hold a group still being filled,
+    // which the saved value leaves out.
     onSuccess: (result: FilamentAliases) => {
       queryClient.setQueryData(FILAMENT_ALIASES_QUERY_KEY, result);
       setFilamentAliases(result);
-      setDraft({ colors: result.colors, presets: result.presets });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
-      showToast(t('filamentAliases.saved'), 'success');
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
 
-  const update = (kind: Kind, groups: string[][]) => setDraft((d) => (d ? { ...d, [kind]: groups } : d));
+  // Save a moment after the last change; on leaving the page at once.
+  const pendingRef = useRef<FilamentAliasGroups | null>(null);
+  const mutateRef = useRef(mutation.mutate);
+  mutateRef.current = mutation.mutate;
+  useEffect(() => {
+    if (!canEdit || !dirty || !wanted || mutation.isPending || mutation.isError) {
+      pendingRef.current = null;
+      return;
+    }
+    pendingRef.current = wanted;
+    const timer = window.setTimeout(() => {
+      pendingRef.current = null;
+      mutateRef.current(wanted);
+    }, SAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+    // wanted is keyed by wantedKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canEdit, dirty, wantedKey, mutation.isPending, mutation.isError]);
+  useEffect(
+    () => () => {
+      if (pendingRef.current) mutateRef.current(pendingRef.current);
+    },
+    [],
+  );
+
+  const update = (kind: Kind, groups: DraftGroup[]) => {
+    // A failed save is tried again on the next change.
+    if (mutation.isError) mutation.reset();
+    setDraft((d) => (d ? { ...d, [kind]: groups } : d));
+  };
 
   const section = (kind: Kind, suggestions: Suggestion[]) => {
     const groups = draft?.[kind] ?? [];
@@ -289,20 +343,25 @@ export function FilamentAliasesCard() {
           </p>
         </div>
         {groups.length === 0 && <p className="text-sm text-bambu-gray italic">{t('filamentAliases.none')}</p>}
-        {groups.map((group, index) => (
+        {groups.map((group) => (
           <GroupEditor
-            key={index}
+            key={group.id}
             kind={kind}
-            group={group}
+            group={group.members}
             suggestions={suggestions}
             names={presetNames}
-            disabled={!canEdit || mutation.isPending}
-            onChange={(next) => update(kind, groups.map((g, i) => (i === index ? next : g)))}
-            onRemove={() => update(kind, groups.filter((_, i) => i !== index))}
+            disabled={!canEdit}
+            onChange={(next) => update(kind, groups.map((g) => (g.id === group.id ? { ...g, members: next } : g)))}
+            onRemove={() => update(kind, groups.filter((g) => g.id !== group.id))}
           />
         ))}
         {canEdit && (
-          <Button type="button" size="sm" variant="secondary" onClick={() => update(kind, [...groups, []])}>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => update(kind, [...groups, { id: nextId.current++, members: [] }])}
+          >
             <Plus className="w-4 h-4" />
             {t(kind === 'colors' ? 'filamentAliases.addColorGroup' : 'filamentAliases.addPresetGroup')}
           </Button>
@@ -320,22 +379,26 @@ export function FilamentAliasesCard() {
         <p className="text-sm text-bambu-gray">{t('filamentAliases.description')}</p>
         {section('presets', presetSuggestions)}
         {section('colors', colorSuggestions)}
-        {canEdit && (
-          <div className="flex justify-end gap-2">
-            {dirty && (
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={mutation.isPending}
-                onClick={() => data && setDraft({ colors: data.colors, presets: data.presets })}
-              >
-                {t('common.cancel')}
-              </Button>
+        {canEdit && (mutation.isPending || mutation.isSuccess || mutation.isError) && (
+          <p
+            data-testid="filament-aliases-status"
+            className={`flex items-center justify-end gap-1.5 text-xs ${mutation.isError ? 'text-red-400' : 'text-bambu-gray'}`}
+            aria-live="polite"
+          >
+            {mutation.isPending ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                {t('filamentAliases.saving')}
+              </>
+            ) : mutation.isError ? (
+              t('filamentAliases.saveFailed')
+            ) : dirty ? null : (
+              <>
+                <Check className="w-3.5 h-3.5 text-bambu-green" />
+                {t('filamentAliases.saved')}
+              </>
             )}
-            <Button type="button" disabled={!dirty || mutation.isPending} onClick={() => draft && mutation.mutate(draft)}>
-              {t('common.save')}
-            </Button>
-          </div>
+          </p>
         )}
       </CardContent>
     </Card>

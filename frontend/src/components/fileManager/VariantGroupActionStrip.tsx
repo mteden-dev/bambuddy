@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Printer, Trash2, Unlink } from 'lucide-react';
 import type { GroupRow } from '../../pages/fileManager/variantGroups';
 import type { VariantGroupActions } from './useVariantGroupActions';
+import { TOUCH_BUTTON } from '../../pages/fileManager/useCoarsePointer';
 
 // Group-level icons of the list and columns views: print all versions as one
 // job, ungroup, delete every version (#3628). Same look as a file's strip.
@@ -18,7 +19,7 @@ export function VariantGroupActionStrip({
   const canPrint = actions.canPrint(row);
   const canUngroup = actions.canUngroup(row);
   const canDelete = actions.canDeleteFiles(row);
-  const base = 'p-1.5 rounded transition-colors';
+  const base = `p-1.5 rounded transition-colors ${TOUCH_BUTTON}`;
   const off = 'text-bambu-gray/50 cursor-not-allowed';
   return (
     <div

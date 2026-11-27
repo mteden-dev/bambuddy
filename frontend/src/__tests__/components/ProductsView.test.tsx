@@ -327,4 +327,124 @@ describe('ProductsView', () => {
     await waitFor(() => expect(saved[2]).toEqual({ plate_cost_minutes: 15, hand_prints_count: true }));
     expect(screen.getByRole('spinbutton', { name: 'Loading or changing a spool takes' })).toHaveValue(10);
   });
+
+  // Fork (UI fixes): Base orders, plan notes, times, grouping, the order dialog and the advanced settings.
+  it('shows an order from Base read-only, with a link to it on the Orders page', async () => {
+    const baseOrder = {
+      ...DETAIL.orders[0],
+      id: 21,
+      notes: 'nick_7001',
+      external_source: 'base',
+      external_ref: '7001/4',
+      base_order_id: 7001,
+    };
+    server.use(http.get('/api/v1/products/4', () => HttpResponse.json({ ...DETAIL, orders: [baseOrder] })));
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByText('9mm box'));
+    const link = await screen.findByRole('link', { name: /Base order nick_7001/ });
+    expect(link).toHaveAttribute('href', '/orders?order=7001');
+    expect(screen.queryByRole('button', { name: 'Cancel order' })).not.toBeInTheDocument();
+    // The product's own Edit only.
+    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
+  });
+
+  it('marks a late order and says why another has no estimate', async () => {
+    const late = { ...DETAIL.orders[0], due_date: '2026-11-24T12:00:00Z' };
+    const none = { ...DETAIL.orders[0], id: 22, estimated_ready_at: null, no_estimate_reason: 'held' as const };
+    server.use(http.get('/api/v1/products/4', () => HttpResponse.json({ ...DETAIL, orders: [late, none] })));
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByText('9mm box'));
+    expect(await screen.findByText('late')).toBeInTheDocument();
+    expect(screen.getByText('no estimate: its plates are held in the queue')).toBeInTheDocument();
+  });
+
+  it('shows a time learnt from history with the slicer\'s, and groups identical plates with a link to the queue', async () => {
+    const learnt = { ...DETAIL.jobs[0], planned_seconds: 9600, print_time_seconds: 7800, learned: true };
+    server.use(
+      http.get('/api/v1/products/4', () =>
+        HttpResponse.json({ ...DETAIL, jobs: [learnt, { ...learnt, id: 33, queue_item_id: 303 }, DETAIL.jobs[1]] }),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByText('9mm box'));
+    expect((await screen.findAllByText('2h 40m from history')).length).toBe(1);
+    expect(screen.getByText(/slicer estimate 2h 10m/)).toBeInTheDocument();
+    // Said in words ("2 plates · 2× Lid", not "2× 2× Lid"); nothing extra on a single plate.
+    expect(screen.getByText('2 plates ·')).toBeInTheDocument();
+    expect(screen.queryByText(/^1 plate/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Show lid_x2.gcode.3mf in the queue' })).toHaveAttribute(
+      'href',
+      '/queue?tab=timeline&item=300',
+    );
+  });
+
+  it('names the other products a plan redid and keeps a failed one on screen', async () => {
+    server.use(
+      http.post('/api/v1/products/4/orders', () =>
+        HttpResponse.json({
+          product: DETAIL, planned_jobs: 1, created: 1, kept: 0, replaced: 0, ready_at: {}, finish_at: null,
+          short: [], extra: [], skipped_plates: [],
+          also_replanned: [{ product_id: 5, name: 'Clip', created: 1, replaced: 2 }],
+          plan_failed: [{ product_id: 6, name: 'Tray box' }],
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: /Order/ }));
+    await user.click(await screen.findByRole('button', { name: 'Add and plan' }));
+    expect(await screen.findByText('Queued plates: 1. Also replanned: Clip.')).toBeInTheDocument();
+    expect(screen.getByText(/Could not plan: Tray box/)).toBeInTheDocument();
+  });
+
+  it('cannot be closed while the order is being planned', async () => {
+    let release: () => void = () => {};
+    server.use(
+      http.post('/api/v1/products/4/orders', async () => {
+        await new Promise<void>((resolve) => (release = resolve));
+        return HttpResponse.json({
+          product: DETAIL, planned_jobs: 0, created: 0, kept: 0, replaced: 0, ready_at: {}, finish_at: null,
+          short: [], extra: [], skipped_plates: [],
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: /Order/ }));
+    await user.click(await screen.findByRole('button', { name: 'Add and plan' }));
+    expect(await screen.findByText('Planning… this takes a few seconds.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(screen.getByLabelText('Quantity')).toBeInTheDocument();
+    release();
+    await waitFor(() => expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument());
+  });
+
+  it('turns the advanced planning settings on and off', async () => {
+    const saved: unknown[] = [];
+    server.use(
+      http.get('/api/v1/products/settings', () =>
+        HttpResponse.json({ plate_cost_minutes: 15, reservation_yield: true, learn_history: true }),
+      ),
+      http.put('/api/v1/products/settings', async ({ request }) => {
+        const body = await request.json();
+        saved.push(body);
+        return HttpResponse.json({ plate_cost_minutes: 15, reservation_yield: true, learn_history: true, ...(body as object) });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ProductsView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Planning' }));
+    expect(await screen.findByText('Advanced')).toBeInTheDocument();
+    const yieldBox = screen.getByRole('checkbox', { name: /The planner's reservations give way/ });
+    expect(yieldBox).toBeChecked();
+    await user.click(yieldBox);
+    await waitFor(() => expect(saved).toEqual([{ plate_cost_minutes: 15, reservation_yield: false }]));
+    await user.click(screen.getByRole('checkbox', { name: /Times and risk from print history/ }));
+    await waitFor(() => expect(saved[1]).toEqual({ plate_cost_minutes: 15, learn_history: false }));
+  });
 });

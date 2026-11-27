@@ -124,7 +124,14 @@ class QueueForecastStaffed(BaseModel):
 
 class QueueForecastReservation(BaseModel):
     printer_id: int
+    # Kept to now (the printer can take the job).
     active: bool
+    # "plan" (the product planner's) or "user".
+    source: Literal["plan", "user"]
+    # The planner's hold that gives way when its printer cannot take the job soon.
+    soft: bool
+    # The forecast placed the job on that printer.
+    placed: bool
 
 
 class QueueForecastResponse(BaseModel):

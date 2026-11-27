@@ -40,6 +40,9 @@ interface VariantCandidatesProps {
   /** "Chosen printers" of a version group (fork): file id -> names of the
    *  selected printers that print it. A file missing here prints on none. */
   assignedPrinters?: Record<number, string[]>;
+  /** The same, for the printers that already have the file in the queue from
+   *  an earlier submit (fork): shown as done, never queued again. */
+  queuedPrinters?: Record<number, string[]>;
 }
 
 /**
@@ -78,6 +81,7 @@ export function VariantCandidates({
   onToggleExcluded,
   reorderable = true,
   assignedPrinters,
+  queuedPrinters,
 }: VariantCandidatesProps) {
   const { t } = useTranslation();
 
@@ -154,8 +158,9 @@ export function VariantCandidates({
           const model = candidate.sliced_for_model;
           const excluded = excludedIds?.has(candidate.id) ?? false;
           const printerNames = assignedPrinters ? assignedPrinters[candidate.id] ?? [] : null;
+          const doneNames = queuedPrinters?.[candidate.id] ?? [];
           // Dimmed when it is not part of what Print queues.
-          const idle = excluded || (printerNames !== null && printerNames.length === 0);
+          const idle = excluded || (printerNames !== null && printerNames.length === 0 && doneNames.length === 0);
           return (
             <div
               key={candidate.id}
@@ -165,13 +170,16 @@ export function VariantCandidates({
               }`}
             >
               {onToggleExcluded && !readOnly ? (
-                <input
-                  type="checkbox"
-                  checked={!excluded}
-                  onChange={() => onToggleExcluded(candidate.id)}
-                  className="w-4 h-4 shrink-0 accent-bambu-green"
-                  aria-label={t('printModal.variants.include', { filename: candidate.filename })}
-                />
+                // The label is the touch target: the box alone is 16 px.
+                <label className="-m-1 p-1 shrink-0 inline-flex items-center justify-center cursor-pointer any-pointer-coarse:min-h-[44px] any-pointer-coarse:min-w-[44px]">
+                  <input
+                    type="checkbox"
+                    checked={!excluded}
+                    onChange={() => onToggleExcluded(candidate.id)}
+                    className="w-4 h-4 accent-bambu-green"
+                    aria-label={t('printModal.variants.include', { filename: candidate.filename })}
+                  />
+                </label>
               ) : (
                 <span className="text-xs font-mono text-bambu-gray w-5 shrink-0">{index + 1}.</span>
               )}
@@ -222,11 +230,16 @@ export function VariantCandidates({
                   </button>
                 </div>
               )}
-              {printerNames !== null && (
+              {printerNames !== null && (printerNames.length > 0 || doneNames.length === 0) && (
                 <span className="basis-full pl-7 text-xs text-bambu-gray">
                   {printerNames.length > 0
                     ? t('printModal.variants.printsOn', { printers: printerNames.join(', ') })
                     : t('printModal.variants.noPrinterChosen')}
+                </span>
+              )}
+              {doneNames.length > 0 && (
+                <span className="basis-full pl-7 text-xs text-bambu-green">
+                  {t('printModal.variants.alreadyQueuedOn', { printers: doneNames.join(', ') })}
                 </span>
               )}
             </div>

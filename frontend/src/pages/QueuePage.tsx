@@ -22,6 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { queueItemDisplayName } from '../utils/queueItemName';
 import { queueItemThumbnailUrl } from '../utils/queueItemThumbnail';
+import { translateWaitingReason } from '../utils/serverMessages';
 import {
   Clock,
   Trash2,
@@ -87,6 +88,8 @@ import { QueueStatsBar } from '../components/QueueStatsBar';
 import { CompactHistoryRow } from '../components/CompactHistoryRow';
 import { ColorSubstitutionNotes } from '../components/ColorSubstitutionNotes';
 import { QueueTimelineView, type QueueMoveTarget } from '../components/QueueTimelineView';
+import { queueJobName } from '../utils/queueJobDisplay';
+import { planAppliedToast } from '../utils/queueTimelinePlan';
 import { compareQueueOrder } from '../utils/queueOrder';
 import { BatchOrdersView } from '../components/BatchOrdersView';
 import { ThumbnailHoverPreview } from '../components/ThumbnailHoverPreview';
@@ -1078,7 +1081,7 @@ function SortableQueueItem({
           {item.waiting_reason && item.status === 'pending' && (
             <p className="text-[10px] sm:text-xs text-purple-700 dark:text-purple-400 mt-1.5 sm:mt-2 flex items-start gap-1">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-              <span>{withColorSquares(item.waiting_reason)}</span>
+              <span>{withColorSquares(translateWaitingReason(item.waiting_reason, t))}</span>
             </p>
           )}
 
@@ -1812,6 +1815,20 @@ export function QueuePage() {
     const id = Number(new URLSearchParams(window.location.search).get('batch'));
     return Number.isInteger(id) && id > 0 ? id : null;
   });
+  // Fork: /queue?tab=timeline&item=<id> opens that job's details on the
+  // timeline once; the parameter then leaves the URL so a refresh does not.
+  const [focusItemId, setFocusItemId] = useState<number | null>(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('item'));
+    return Number.isInteger(id) && id > 0 ? id : null;
+  });
+  const clearFocusItem = useCallback(() => {
+    setFocusItemId(null);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('item')) {
+      url.searchParams.delete('item');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, []);
   const [activeTab, setActiveTab] = useState<'queue' | 'batches' | 'history' | 'timeline' | 'pipelines'>(() => {
     // URL deep-link wins so the legacy /pipelines/runs redirect lands on the
     // right tab. localStorage holds the per-user last-selected fallback.
@@ -1819,6 +1836,8 @@ export function QueuePage() {
     const url = search.get('tab');
     // A link to one batch (/queue?batch=<id>) opens the tab that shows it.
     if (search.get('batch')) return 'batches';
+    // Fork: a link to one job (/queue?item=<id>) opens it on the timeline.
+    if (search.get('item')) return 'timeline';
     if (url === 'pipelines' || url === 'history' || url === 'timeline' || url === 'queue' || url === 'batches') {
       return url;
     }
@@ -2097,12 +2116,12 @@ export function QueuePage() {
     mutationFn: (plan: QueuePlan) => api.applyQueuePlan(plan),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['queue'] });
-      showToast(
-        result.moved_elsewhere.length > 0
-          ? `${t('queue.timeline.plan.applied', { count: result.reserved.length })} ${t('queue.timeline.plan.elsewhere', { count: result.moved_elsewhere.length })}`
-          : t('queue.timeline.plan.applied', { count: result.reserved.length }),
-        result.moved_elsewhere.length > 0 ? 'warning' : 'success',
-      );
+      // Fork: names the jobs now held for their printer, or says there are none.
+      const toast = planAppliedToast(result, (id) => {
+        const item = queue?.find((q) => q.id === id);
+        return item ? queueJobName(item) : `#${id}`;
+      }, t);
+      showToast(toast.text, toast.type);
     },
     onError: (error: Error) => {
       queryClient.invalidateQueries({ queryKey: ['queue'] });
@@ -2815,20 +2834,20 @@ export function QueuePage() {
 
   return (
     <div className="p-4 md:p-8">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      {/* Header (fork: tighter on the timeline, so its lanes start on the first screen) */}
+      <div className={`flex items-center justify-between ${activeTab === 'timeline' ? 'mb-3' : 'mb-6'}`}>
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-3">
             <ListOrdered className="w-7 h-7 text-bambu-green" />
             {t('queue.title')}
           </h1>
-          <p className="text-bambu-gray mt-1">{t('queue.subtitle')}</p>
+          {activeTab !== 'timeline' && <p className="text-bambu-gray mt-1">{t('queue.subtitle')}</p>}
         </div>
       </div>
 
       {/* Tab strip — fork: the timeline is the main view, then the active
           queue; History lives in its own tab so the queue page stays focused. */}
-      <div className="flex gap-1 border-b border-bambu-dark-tertiary mb-6 overflow-x-auto">
+      <div className={`flex gap-1 border-b border-bambu-dark-tertiary overflow-x-auto ${activeTab === 'timeline' ? 'mb-3' : 'mb-6'}`}>
         {([
           { id: 'timeline' as const, label: t('queue.tabs.timeline'), icon: GanttChart, count: null as number | null },
           { id: 'queue' as const, label: t('queue.tabs.queue'), icon: Clock, count: pendingItems.length + activeItems.length },
@@ -2862,7 +2881,7 @@ export function QueuePage() {
       </div>
 
       {/* Summary Stats — about the print queue, not pipelines. */}
-      {activeTab !== 'pipelines' && activeTab !== 'batches' && <QueueStatsBar
+      {activeTab !== 'pipelines' && activeTab !== 'batches' && activeTab !== 'timeline' && <QueueStatsBar
         activeCount={activeItems.length}
         pendingCount={pendingItems.length}
         totalTime={totalQueueTime}
@@ -2940,7 +2959,7 @@ export function QueuePage() {
           The Pipelines tab has its own pipeline + status filters inside the
           dashboard, so this row is hidden when that tab is active. */}
       {activeTab !== 'pipelines' && activeTab !== 'batches' && (
-      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mb-6">
+      <div className={`flex flex-wrap items-center gap-2 sm:gap-4 ${activeTab === 'timeline' ? 'mb-3' : 'mb-6'}`}>
         <select
           className="px-2 sm:px-3 py-2 text-sm sm:text-base bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none min-w-0 flex-1 sm:flex-none"
           value={filterPrinter === -1 ? 'unassigned' : (filterPrinter || '')}
@@ -2986,6 +3005,25 @@ export function QueuePage() {
         )}
 
         <div className="hidden sm:block flex-1" />
+
+        {/* Fork: on the timeline the summary is one line beside the filters. */}
+        {activeTab === 'timeline' && (
+          <div
+            className="basis-full sm:basis-auto flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-bambu-gray"
+            data-testid="queue-stats-compact"
+          >
+            <span><span className="font-semibold text-white">{activeItems.length}</span> {t('queue.summary.printing')}</span>
+            <span><span className="font-semibold text-white">{pendingItems.length}</span> {t('queue.summary.queued')}</span>
+            <span title={t('queue.summary.totalTime')}>
+              <Clock className="inline w-3.5 h-3.5 mr-1 text-bambu-green" aria-label={t('queue.summary.totalTime')} />
+              <span className="font-semibold text-white">{formatDuration(totalQueueTime)}</span>
+            </span>
+            <span title={t('queue.summary.totalWeight')}>
+              <span className="sr-only">{t('queue.summary.totalWeight')}</span>
+              <span className="font-semibold text-white">{formatWeight(totalWeight, true)}</span>
+            </span>
+          </div>
+        )}
 
         {activeTab === 'history' && historyTotal > 0 && (
           <Button
@@ -3086,6 +3124,8 @@ export function QueuePage() {
           onCancelItem={(item) => requestAction({ type: 'cancel', item })}
           onStopItem={(item) => requestAction({ type: 'stop', item })}
           onStartItem={(item) => startMutation.mutate({ id: item.id })}
+          focusItemId={focusItemId}
+          onFocusItemDone={clearFocusItem}
           t={t}
         />
       ) : activeTab === 'history' ? (

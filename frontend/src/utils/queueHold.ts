@@ -1,4 +1,5 @@
 import type { PrintQueueItem } from '../api/client';
+import { translateWaitingReason } from './serverMessages';
 
 type T = (key: string, options?: Record<string, unknown>) => string;
 
@@ -21,6 +22,6 @@ export function queueHold(
 ): QueueHold | null {
   if (item.status !== 'pending' || !item.manual_start) return null;
   if (item.filament_short) return { problem: true, text: t('queue.filamentShort.rowBadge') };
-  if (item.waiting_reason) return { problem: true, text: item.waiting_reason };
+  if (item.waiting_reason) return { problem: true, text: translateWaitingReason(item.waiting_reason, t) };
   return { problem: false, text: t('queue.hold.staged') };
 }

@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
+  Bookmark,
+  BookmarkX,
   CalendarClock,
   Clock,
   Hand,
@@ -20,16 +23,29 @@ import {
 } from 'lucide-react';
 
 import type { PrintQueueItem, Printer, QueueForecastVariant } from '../api/client';
+import type { QueueHoldKind } from '../utils/queueTimelinePlan';
 import { formatDuration, parseUTCDate } from '../utils/date';
 import { queueJobModels, queueJobName, queueJobPrintTime, queueJobThumbnailUrl } from '../utils/queueJobDisplay';
 import { Button } from './Button';
 import { QueueItemTagChips } from './QueueItemTagChips';
 import { OrderLabelChip } from './OrderLabelChip';
 import { queueHold } from '../utils/queueHold';
+import { translateWaitingReason } from '../utils/serverMessages';
 import { withColorSquares } from '../utils/colorSquares';
+import { useModalBehavior } from '../hooks/useModalBehavior';
 
 /** Where a job is sent: one printer, or back to any printer of a model. */
 export type QueuePinTarget = { printer_id: number } | { target_model: string };
+
+/** A hold as the details show it. */
+export interface QueueJobReservation {
+  printer: string;
+  active: boolean;
+  kind: QueueHoldKind;
+  byPlanner: boolean;
+  /** Where the forecast has the job, when that is another printer. */
+  expectedPrinter?: string | null;
+}
 
 export interface QueueJobDetailsProps {
   item: PrintQueueItem;
@@ -38,8 +54,8 @@ export interface QueueJobDetailsProps {
   expected?: { printerId: number; start: Date; end: Date } | null;
   /** For a job with alternatives: the one the expected printer takes. */
   variant?: QueueForecastVariant | null;
-  /** The printer the timeline's plan holds this "Any" job for, and whether that holds now. */
-  reservation?: { printer: string; active: boolean } | null;
+  /** The printer this "Any" job is held for, by whom, and whether that holds now. */
+  reservation?: QueueJobReservation | null;
   /** Hand the job back to any printer of its model. */
   onReleaseReservation?: () => void;
   /** A running print's progress (0-100). */
@@ -61,8 +77,8 @@ export interface QueueJobDetailsProps {
   t: (key: string, options?: Record<string, unknown>) => string;
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+function formatTime(date: Date, language: string): string {
+  return date.toLocaleString(language, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 function swatches(item: PrintQueueItem): { type: string; color: string }[] {
@@ -120,21 +136,22 @@ export function QueueJobDetails({
   const pinnedPrinter = pinned ? printers.find((p) => p.id === item.printer_id) : undefined;
   const unpinModel = pinnedPrinter?.model ?? null;
 
+  // Fork: dates in the app's language, not the device's.
+  const { i18n } = useTranslation();
+  const language = i18n.language;
   const defaultChoice =
     (suggestedPrinterId != null && pinChoices.some((p) => p.id === suggestedPrinterId) && suggestedPrinterId) ||
     (expected && pinChoices.some((p) => p.id === expected.printerId) && expected.printerId) ||
     pinChoices[0]?.id ||
     null;
-  const [choice, setChoice] = useState<number | null>(defaultChoice);
-  useEffect(() => setChoice(defaultChoice), [defaultChoice]);
+  // The default follows the forecast only until the user picks a printer: a
+  // refresh every 30 s must not undo a choice being made.
+  const [picked, setPicked] = useState<number | null>(null);
+  const choice = picked != null && pinChoices.some((p) => p.id === picked) ? picked : defaultChoice;
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // A sheet on a phone: Back closes it.
+  useModalBehavior(onClose, dialogRef, { backCloses: 'narrow' });
 
   const name = queueJobName(item, variant);
   const thumbnail = queueJobThumbnailUrl(item, variant);
@@ -156,7 +173,7 @@ export function QueueJobDetails({
     ? progress != null
       ? t('queue.timeline.details.printingProgress', { progress: Math.round(progress) })
       : t('queue.timeline.legend.printing')
-    : heldReason || item.waiting_reason || t('queue.timeline.details.pending');
+    : heldReason || translateWaitingReason(item.waiting_reason, t) || t('queue.timeline.details.pending');
 
   return (
     <div
@@ -165,13 +182,17 @@ export function QueueJobDetails({
       role="presentation"
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={t('queue.timeline.details.title')}
         data-testid="queue-job-details"
-        className="w-full sm:max-w-xl max-h-[90vh] overflow-y-auto bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-t-2xl sm:rounded-2xl shadow-2xl"
+        className="outline-none w-full sm:max-w-xl max-h-[90vh] flex flex-col bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-t-2xl sm:rounded-2xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Fork: the body scrolls, the actions below stay in view. */}
+        <div className="flex-1 min-h-0 overflow-y-auto" data-testid="queue-job-details-body">
         <div className="flex gap-4 p-4 sm:p-5 border-b border-bambu-dark-tertiary">
           <div className="w-28 h-28 sm:w-36 sm:h-36 shrink-0 rounded-xl bg-bambu-dark overflow-hidden flex items-center justify-center">
             {thumbnail ? (
@@ -186,7 +207,7 @@ export function QueueJobDetails({
               <button
                 type="button"
                 onClick={onClose}
-                className="p-1 -mr-1 rounded-lg text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary"
+                className="p-1 -mr-1 -mt-1 shrink-0 inline-flex items-center justify-center rounded-lg text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary any-pointer-coarse:min-w-[44px] any-pointer-coarse:min-h-[44px]"
                 aria-label={t('common.close')}
               >
                 <X className="w-5 h-5" />
@@ -226,6 +247,8 @@ export function QueueJobDetails({
                 <span className="break-words">
                   <span className="font-medium">{withColorSquares(hold.text)}</span>
                   <span className="block text-bambu-gray">{t('queue.hold.wontStart')}</span>
+                  {/* Fork: why it sits where it does on the timeline (was a bar's hover only). */}
+                  {!hold.problem && <span className="block text-bambu-gray">{t('queue.timeline.manualStartHelp')}</span>}
                 </span>
               </div>
             ) : (
@@ -239,8 +262,8 @@ export function QueueJobDetails({
             <div className="mt-2">
               <QueueItemTagChips item={item} />
             </div>
-            {/* Fork: the orders a product job prints for */}
-            <div className="mt-2">
+            {/* Fork: the orders a product job prints for; each a full-height row to tap on a touch screen. */}
+            <div className="mt-2 any-pointer-coarse:[&_li_button]:min-h-[44px]" data-testid="queue-job-orders">
               <OrderLabelChip itemId={item.id} variant="list" />
             </div>
           </div>
@@ -249,7 +272,7 @@ export function QueueJobDetails({
         <div className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 sm:p-5">
           {expected && (
             <Row icon={<CalendarClock className="w-4 h-4" />} label={t('queue.timeline.details.when')}>
-              {formatTime(expected.start)} → {formatTime(expected.end)}
+              {formatTime(expected.start, language)} → {formatTime(expected.end, language)}
             </Row>
           )}
           {printTime ? (
@@ -291,47 +314,70 @@ export function QueueJobDetails({
           )}
           {scheduled && (
             <Row icon={<CalendarClock className="w-4 h-4" />} label={t('queue.timeline.details.scheduled')}>
-              {formatTime(scheduled)}
+              {formatTime(scheduled, language)}
             </Row>
           )}
           {(item.created_by_username || added) && (
             <Row icon={<User className="w-4 h-4" />} label={t('queue.timeline.details.added')}>
-              {[item.created_by_username, added ? formatTime(added) : null].filter(Boolean).join(' · ')}
+              {[item.created_by_username, added ? formatTime(added, language) : null].filter(Boolean).join(' · ')}
             </Row>
           )}
         </div>
 
-        {/* Held for a printer by the timeline's plan, until it starts or is released. */}
-        {!isPrinting && reservation && (
-          <div
-            className="mx-4 sm:mx-5 mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2"
-            data-testid="queue-job-reservation"
-          >
-            <Lock className="w-4 h-4 text-amber-300 shrink-0" aria-hidden />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm text-white">
-                {t('queue.timeline.details.reserved', { printer: reservation.printer })}
+        {/* Held for a printer (fork): firm (waits for it), the planner's soft
+            choice, or a soft choice that gave way to another printer. Each
+            with its own icon and words, never the colour alone. */}
+        {!isPrinting && reservation && (() => {
+          const { kind } = reservation;
+          const printer = reservation.printer;
+          const Icon = kind === 'firm' ? Lock : kind === 'soft' ? Bookmark : BookmarkX;
+          const title = kind === 'firm'
+            ? t(reservation.byPlanner ? 'queue.timeline.hold.firmPlanner' : 'queue.timeline.details.reserved', { printer })
+            : kind === 'soft'
+              ? t('queue.timeline.hold.soft', { printer })
+              : t('queue.timeline.hold.gaveWay', {
+                  printer,
+                  expected: reservation.expectedPrinter ?? t('queue.timeline.hold.anotherPrinter'),
+                });
+          const help = kind === 'firm'
+            ? reservation.active
+              ? t('queue.timeline.details.reservedHelp')
+              : t('queue.timeline.details.reservedInactive')
+            : kind === 'soft'
+              ? t('queue.timeline.hold.softHelp', { printer })
+              : t('queue.timeline.hold.gaveWayHelp', { printer });
+          return (
+            <div
+              className={`mx-4 sm:mx-5 mb-4 flex flex-wrap items-center gap-3 rounded-lg px-3 py-2 ${
+                kind === 'firm'
+                  ? 'border border-amber-400/40 bg-amber-500/10'
+                  : kind === 'soft'
+                    ? 'border border-dashed border-amber-400/50 bg-amber-500/5'
+                    : 'border border-dashed border-bambu-gray/50 bg-bambu-dark/40'
+              }`}
+              data-testid="queue-job-reservation"
+              data-hold={kind}
+            >
+              <Icon className={`w-4 h-4 shrink-0 ${kind === 'gaveWay' ? 'text-bambu-gray' : 'text-amber-300'}`} aria-hidden />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-white">{title}</div>
+                <div className="text-xs text-bambu-gray">{help}</div>
               </div>
-              <div className="text-xs text-bambu-gray">
-                {reservation.active
-                  ? t('queue.timeline.details.reservedHelp')
-                  : t('queue.timeline.details.reservedInactive')}
-              </div>
+              {onReleaseReservation && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={onReleaseReservation}
+                  disabled={!canModify}
+                  title={!canModify ? t('queue.timeline.details.noPermission') : undefined}
+                >
+                  <LockOpen className="w-4 h-4" />
+                  {t('queue.timeline.details.release')}
+                </Button>
+              )}
             </div>
-            {onReleaseReservation && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={onReleaseReservation}
-                disabled={!canModify}
-                title={!canModify ? t('queue.timeline.details.noPermission') : undefined}
-              >
-                <LockOpen className="w-4 h-4" />
-                {t('queue.timeline.details.release')}
-              </Button>
-            )}
-          </div>
-        )}
+          );
+        })()}
 
         {/* Pinning: the one place a job is tied to (or freed from) a printer. */}
         {!isPrinting && onPin && (
@@ -347,7 +393,7 @@ export function QueueJobDetails({
                   <div className="flex gap-2">
                     <select
                       value={choice ?? ''}
-                      onChange={(e) => setChoice(Number(e.target.value))}
+                      onChange={(e) => setPicked(Number(e.target.value))}
                       disabled={!canModify}
                       aria-label={pinned ? t('queue.timeline.details.moveTo') : t('queue.timeline.details.pinTo')}
                       className="flex-1 min-w-0 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
@@ -387,7 +433,9 @@ export function QueueJobDetails({
           </div>
         )}
 
-        <div className="flex flex-wrap justify-end gap-2 px-4 sm:px-5 py-3 border-t border-bambu-dark-tertiary">
+        </div>
+
+        <div className="shrink-0 flex flex-wrap justify-end gap-2 px-4 sm:px-5 py-3 border-t border-bambu-dark-tertiary" data-testid="queue-job-details-footer">
           {isPrinting
             ? onStop && (
                 <Button variant="danger" onClick={onStop} disabled={!canModify}>

@@ -340,19 +340,22 @@ export function FilamentMapping({
         onClick={() => setIsExpanded(!isExpanded)}
         className="flex items-center gap-2 text-sm text-bambu-gray hover:text-white transition-colors w-full"
       >
-        <Circle className="w-4 h-4" fill={statusColor} stroke="none" />
-        <span>{plateLabel ? `${t('printModal.filamentMapping')} — ${plateLabel}` : t('printModal.filamentMapping')}</span>
+        <Circle className="w-4 h-4 shrink-0" fill={statusColor} stroke="none" />
+        {/* A long file name as the label must not widen the dialog (fork). */}
+        <span className="min-w-0 truncate text-left" title={plateLabel}>
+          {plateLabel ? `${t('printModal.filamentMapping')} — ${plateLabel}` : t('printModal.filamentMapping')}
+        </span>
         {hasTypeMismatch ? (
-          <span className="text-xs text-orange-700 dark:text-orange-400">({t('printModal.statusTypeNotFound')})</span>
+          <span className="shrink-0 text-xs text-orange-700 dark:text-orange-400">({t('printModal.statusTypeNotFound')})</span>
         ) : hasColorMismatch ? (
-          <span className="text-xs text-yellow-700 dark:text-yellow-400">({t('printModal.statusColorMismatch')})</span>
+          <span className="shrink-0 text-xs text-yellow-700 dark:text-yellow-400">({t('printModal.statusColorMismatch')})</span>
         ) : (
-          <span className="text-xs text-bambu-green">({t('printModal.statusReady')})</span>
+          <span className="shrink-0 text-xs text-bambu-green">({t('printModal.statusReady')})</span>
         )}
         {isExpanded ? (
-          <ChevronUp className="w-4 h-4 ml-auto" />
+          <ChevronUp className="w-4 h-4 ml-auto shrink-0" />
         ) : (
-          <ChevronDown className="w-4 h-4 ml-auto" />
+          <ChevronDown className="w-4 h-4 ml-auto shrink-0" />
         )}
       </button>
 
@@ -574,6 +577,18 @@ export function FilamentMapping({
                   </span>
                 )}
               </div>
+              {/* The triangle's meaning in words, not only in its colour and title (fork). */}
+              {item.status !== 'match' && (
+                <span
+                  className={`block pl-5 text-[11px] ${
+                    item.status === 'type_only'
+                      ? 'text-yellow-700 dark:text-yellow-400'
+                      : 'text-orange-700 dark:text-orange-400'
+                  }`}
+                >
+                  {item.status === 'type_only' ? t('printModal.badgeOtherColor') : t('printModal.badgeTypeMissing')}
+                </span>
+              )}
               {/* Force Color Match checkbox — matches FilamentOverride's layout. */}
               {canForceMatch && (
                 <label className="inline-flex items-center gap-1.5 text-xs text-bambu-gray cursor-pointer select-none pl-5">

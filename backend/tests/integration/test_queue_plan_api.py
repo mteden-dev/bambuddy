@@ -98,7 +98,13 @@ async def test_a_moved_job_is_held_for_its_printer_and_the_rest_stay_put(async_c
     assert body["moved_elsewhere"] == []
     after = await _forecast(async_client, connected)
     assert _lanes(after) == {farm.a: [farm.j1], farm.b: [farm.j3, farm.j2]}
-    assert after["reservations"][str(farm.j3)] == {"printer_id": farm.b, "active": True}
+    assert after["reservations"][str(farm.j3)] == {
+        "printer_id": farm.b,
+        "active": True,
+        "source": "user",
+        "soft": False,
+        "placed": True,
+    }
     reserved = {p["item_id"] for p in after["placements"] if p["reserved"]}
     assert farm.j3 in reserved and farm.j1 not in reserved
 
@@ -190,3 +196,93 @@ async def test_holding_a_job_the_product_planner_reserved_makes_the_hold_someone
     db_session.expire_all()
     row = await db_session.get(QueueReservation, farm.j3)
     assert (row.printer_id, row.source) == (farm.b, SOURCE_USER)
+
+
+async def test_a_job_the_product_planner_holds_softly_and_the_user_left_alone_keeps_that_hold(
+    async_client: AsyncClient, db_session, farm
+):
+    from backend.app.services.queue_reservations import SOURCE_PLAN, SOURCE_USER, reserve
+
+    # The planner holds j3 for B, which prints for five more hours.
+    await reserve(db_session, await db_session.get(PrintQueueItem, farm.j3), farm.b, source=SOURCE_PLAN)
+    await db_session.commit()
+
+    # The user moves j2 onto B and leaves j3 where it was. Replayed, A frees up
+    # first and takes j3, which the planner's hold lets go: it stays the planner's.
+    online, status = _live({farm.a, farm.b}, {farm.b: 300})
+    with online, status:
+        response = await async_client.post(
+            "/api/v1/queue/plan",
+            json={
+                "lanes": [
+                    {"printer_id": farm.a, "item_ids": [farm.j1]},
+                    {"printer_id": farm.b, "item_ids": [farm.j2, farm.j3]},
+                ],
+                "reserve": [farm.j2],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["reserved"] == [farm.j2]
+    assert farm.j3 in body["moved_elsewhere"]
+    db_session.expire_all()
+    rows = (await db_session.execute(select(QueueReservation))).scalars()
+    assert {row.queue_item_id: (row.printer_id, row.source) for row in rows} == {
+        farm.j2: (farm.b, SOURCE_USER),
+        farm.j3: (farm.b, SOURCE_PLAN),
+    }
+
+
+async def test_releasing_the_planners_hold_sticks_until_someone_holds_the_job(
+    async_client: AsyncClient, db_session, farm
+):
+    from backend.app.services.queue_reservations import SOURCE_PLAN, SOURCE_RELEASED, SOURCE_USER, reserve
+
+    await reserve(db_session, await db_session.get(PrintQueueItem, farm.j3), farm.b, source=SOURCE_PLAN)
+    await db_session.commit()
+
+    response = await async_client.delete(f"/api/v1/queue/{farm.j3}/reservation")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"released": True}
+    assert str(farm.j3) not in (await _forecast(async_client, {farm.a, farm.b}))["reservations"]
+    # The planner's next replan holds every job it keeps again: not this one.
+    db_session.expire_all()
+    await reserve(db_session, await db_session.get(PrintQueueItem, farm.j3), farm.b, source=SOURCE_PLAN)
+    await db_session.commit()
+    assert (await db_session.get(QueueReservation, farm.j3)).source == SOURCE_RELEASED
+    assert str(farm.j3) not in (await _forecast(async_client, {farm.a, farm.b}))["reservations"]
+
+    # Moved by hand on the timeline, it is the user's.
+    response = await _apply(async_client, {farm.a, farm.b}, {farm.a: [farm.j1, farm.j2], farm.b: [farm.j3]}, [farm.j3])
+    assert response.status_code == 200, response.text
+    db_session.expire_all()
+    row = await db_session.get(QueueReservation, farm.j3)
+    assert (row.printer_id, row.source) == (farm.b, SOURCE_USER)
+    entry = (await _forecast(async_client, {farm.a, farm.b}))["reservations"][str(farm.j3)]
+    assert (entry["source"], entry["soft"]) == ("user", False)
+
+
+async def test_the_printer_cards_list_shows_a_job_whose_planner_hold_gives_way_on_the_others(
+    async_client: AsyncClient, db_session, farm
+):
+    from backend.app.services.queue_reservations import SOURCE_PLAN, reserve
+
+    await reserve(db_session, await db_session.get(PrintQueueItem, farm.j3), farm.b, source=SOURCE_PLAN)
+    await db_session.commit()
+
+    async def shown(printing):
+        online, status = _live({farm.a, farm.b}, printing)
+        result = set()
+        with online, status:
+            for pid in (farm.a, farm.b):
+                listed = (await async_client.get(f"/api/v1/queue/?printer_id={pid}")).json()
+                if farm.j3 in {item["id"] for item in listed}:
+                    result.add(pid)
+        return result
+
+    # B is busy for five hours: A will get the job, so its card lists it.
+    assert await shown({farm.b: 300}) == {farm.a, farm.b}
+    # B is done in ten minutes: the job waits for it.
+    assert await shown({farm.b: 10}) == {farm.b}

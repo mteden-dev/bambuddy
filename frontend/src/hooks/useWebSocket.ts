@@ -4,7 +4,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../api/client';
 import { inventoryLocationsQueryKey, inventorySuppliersQueryKey } from '../utils/inventoryQueries';
-import { SLICER_UPLOAD_EVENT } from '../utils/slicerInbox';
+import { SLICER_DECIDED_EVENT, SLICER_UPLOAD_EVENT } from '../utils/slicerInbox';
 
 // The auth-failure close code of /api/v1/ws (websocket.py
 // _WS_CLOSE_UNAUTHORIZED). It reaches the browser only for a socket the server
@@ -430,6 +430,27 @@ export function useWebSocket() {
         if (detail?.file_id != null) {
           window.dispatchEvent(new CustomEvent(SLICER_UPLOAD_EVENT, { detail }));
         }
+        break;
+      }
+
+      case 'slicer_upload_decided': {
+        // Fork: a waiting upload was queued, kept or discarded, maybe on
+        // another device. The import dialog refreshes and says so.
+        debouncedInvalidate('library-files');
+        debouncedInvalidate('library-folders');
+        const detail = (message as unknown as { data?: { file_id?: number } }).data;
+        if (detail?.file_id != null) {
+          window.dispatchEvent(new CustomEvent(SLICER_DECIDED_EVENT, { detail }));
+        }
+        break;
+      }
+
+      case 'products_replanned': {
+        // Fork: the product plan changed (products pages listen).
+        const productIds = (message as unknown as { product_ids?: number[] }).product_ids;
+        window.dispatchEvent(
+          new CustomEvent('bambuddy:products-replanned', { detail: { product_ids: productIds ?? [] } }),
+        );
         break;
       }
 

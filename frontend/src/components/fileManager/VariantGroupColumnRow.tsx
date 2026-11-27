@@ -10,6 +10,7 @@ import { VariantMemberLine } from './VariantMemberLine';
 import { VariantSelectionBox } from './VariantSelectionBox';
 import { groupSelection } from '../../pages/fileManager/variantSelection';
 import { dragSourceProps, type VariantGroupViewProps } from './variantTypes';
+import { TOUCH_BUTTON } from '../../pages/fileManager/useCoarsePointer';
 
 // A version group as one row of a Miller column (#3628). The row sits where a
 // file's row would; the versions are listed in a pane under it, opened with
@@ -107,13 +108,15 @@ export function VariantGroupColumnRow({
             setExpanded((v) => !v);
           }}
           onDoubleClick={(e) => e.stopPropagation()}
-          className="flex-shrink-0 p-1 rounded text-bambu-gray hover:text-white"
+          className={`flex-shrink-0 p-1 rounded text-bambu-gray hover:text-white ${TOUCH_BUTTON}`}
         >
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
         <div
           className={`flex-shrink-0 transition-opacity ${
-            isFocused || selectedCount > 0 ? '' : 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+            isFocused || selectedCount > 0
+              ? ''
+              : 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 any-pointer-coarse:opacity-100!'
           }`}
         >
           <VariantGroupActionStrip row={row} actions={groupActions} tabIndex={isFocused ? 0 : -1} />
@@ -131,7 +134,7 @@ export function VariantGroupColumnRow({
             <VariantMemberLine
               key={m.id}
               file={m}
-              groupId={row.id}
+              group={row}
               memberActions={memberActions}
               groupActions={groupActions}
               highlighted={highlightedFileId === m.id}

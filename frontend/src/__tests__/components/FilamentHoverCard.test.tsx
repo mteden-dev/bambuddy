@@ -6,6 +6,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '../utils';
 import { act } from '@testing-library/react';
+import { useContext } from 'react';
+import { SlotCardDismissContext } from '../../components/slotSpool/slotCardDismiss';
 import { FilamentHoverCard, EmptySlotHoverCard } from '../../components/FilamentHoverCard';
 import { setColorCatalog, __resetColorCatalogForTests } from '../../utils/colors';
 
@@ -30,6 +32,35 @@ function renderWithHover(ui: React.ReactElement) {
 describe('FilamentHoverCard', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  describe('fork: slot actions', () => {
+    it('is no taller than the screen and scrolls inside', async () => {
+      renderWithHover(
+        <FilamentHoverCard data={baseFilamentData} actions={<button type="button">Act</button>}>
+          <div>trigger</div>
+        </FilamentHoverCard>
+      );
+      vi.advanceTimersByTime(100);
+      const action = await screen.findByRole('button', { name: 'Act' });
+      const scroller = action.closest('.overflow-y-auto') as HTMLElement;
+      expect(scroller.className).toContain('max-h-[calc(100dvh-16px)]');
+    });
+
+    it('lets an action close the card before it opens a dialog', async () => {
+      function Action() {
+        const dismiss = useContext(SlotCardDismissContext);
+        return <button type="button" onClick={() => dismiss?.()}>Open dialog</button>;
+      }
+      renderWithHover(
+        <FilamentHoverCard data={baseFilamentData} actions={<Action />}>
+          <div>trigger</div>
+        </FilamentHoverCard>
+      );
+      vi.advanceTimersByTime(100);
+      fireEvent.click(await screen.findByRole('button', { name: 'Open dialog' }));
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Open dialog' })).not.toBeInTheDocument());
+    });
   });
 
   describe('fill level display', () => {

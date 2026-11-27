@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Send } from 'lucide-react';
 import { api, type AppSettingsUpdate } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { flattenFolders } from '../utils/slicerInbox';
+import { flattenFolders, folderPathLabel } from '../utils/slicerInbox';
 import { Card, CardContent, CardHeader } from './Card';
 import { Toggle } from './Toggle';
 
@@ -24,6 +24,8 @@ export function SlicerUploadSettings() {
   const canRead = !authLoading && hasPermission('settings:read');
   const canUpdate = !authLoading && hasPermission('settings:update');
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const originRef = useRef<HTMLElement>(null);
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings, enabled: canRead });
   const { data: folders } = useQuery({
@@ -53,10 +55,21 @@ export function SlicerUploadSettings() {
   const copyOrigin = async () => {
     try {
       await navigator.clipboard.writeText(origin);
+      setCopyFailed(false);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // No clipboard access (plain http): the address is shown to copy by hand.
+      // No clipboard over plain http: select the address so it can be copied
+      // by hand, and say so instead of doing nothing.
+      const node = originRef.current;
+      const selection = window.getSelection?.();
+      if (node && selection) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      setCopyFailed(true);
     }
   };
 
@@ -77,17 +90,27 @@ export function SlicerUploadSettings() {
             <li>
               {t('slicerUploadSettings.step2')}
               <span className="mt-1 flex items-center gap-2">
-                <code className="rounded bg-bambu-dark px-2 py-1 font-mono text-xs text-white break-all">{origin}</code>
+                <code
+                  ref={originRef}
+                  className="rounded bg-bambu-dark px-2 py-1 font-mono text-xs text-white break-all select-all"
+                >
+                  {origin}
+                </code>
                 <button
                   type="button"
                   onClick={() => void copyOrigin()}
-                  className="p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark"
+                  className="p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark inline-flex items-center justify-center any-pointer-coarse:min-h-[44px] any-pointer-coarse:min-w-[44px]"
                   title={t('slicerUploadSettings.copy')}
                   aria-label={t('slicerUploadSettings.copy')}
                 >
                   {copied ? <Check className="w-4 h-4 text-bambu-green" /> : <Copy className="w-4 h-4" />}
                 </button>
               </span>
+              {copyFailed && (
+                <span role="status" className="mt-1 block text-xs text-yellow-700 dark:text-yellow-400">
+                  {t('slicerUploadSettings.copyFailed')}
+                </span>
+              )}
             </li>
             <li>{t('slicerUploadSettings.step3')}</li>
             <li>{t('slicerUploadSettings.step4')}</li>
@@ -106,7 +129,7 @@ export function SlicerUploadSettings() {
             <option value="">{t('slicerUploadSettings.inboxFolderDefault')}</option>
             {options.map((option) => (
               <option key={option.id} value={option.id}>
-                {`${'  '.repeat(option.depth)}${option.name}`}
+                {folderPathLabel(option)}
               </option>
             ))}
           </select>

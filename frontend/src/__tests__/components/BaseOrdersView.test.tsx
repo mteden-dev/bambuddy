@@ -420,7 +420,7 @@ describe('BaseOrdersView', () => {
     expect(screen.getByText('nick_5001')).toBeInTheDocument();
   });
 
-  it('an order in production shows its parts and changes apply at once', async () => {
+  it('an order in production shows its parts and a change applies with Apply', async () => {
     orders = [
       {
         ...ORDER,
@@ -447,6 +447,10 @@ describe('BaseOrdersView', () => {
     await user.click(screen.getByRole('button', { name: 'Parts' }));
     const lid = await screen.findByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' });
     await user.click(within(lid).getByRole('radio', { name: '1' }));
+    // Each change replans: nothing is sent until Apply.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(accepted).toEqual([]);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(accepted).toEqual([
         { id: 5001, body: { products: [{ product_id: 4, units: 2, have: [{ part_id: 41, pieces: 1 }] }] } },
@@ -656,5 +660,247 @@ describe('BaseOrdersView', () => {
     const body = saved[0] as { since?: string; clear_since?: boolean };
     expect(body.clear_since).toBeUndefined();
     expect(Math.abs(Date.now() - new Date(body.since ?? 0).getTime())).toBeLessThan(120_000);
+  });
+
+  // Fork (UI fixes): what the parts panel saves, when, and what Print sends.
+  describe('saving the parts', () => {
+    const IN_PRODUCTION = {
+      product_id: 4,
+      product_order_id: 9,
+      status: 'open',
+      units: 2,
+      units_ready: 0,
+      estimated_ready_at: null,
+      parts: [
+        { part_id: 41, name: 'Lid', ready: 0, needed: 2, on_hand: 0, missing: 0 },
+        { part_id: 42, name: 'Base', ready: 0, needed: 2, on_hand: 0, missing: 0 },
+      ],
+    };
+
+    it('sends one draft save at a time, and only the latest choice after it', async () => {
+      let release: () => void = () => {};
+      let open = 0;
+      let most = 0;
+      server.use(
+        http.post('/api/v1/base-sync/orders/:id/draft', async ({ params, request }) => {
+          drafts.push({ id: Number(params.id), body: await request.json() });
+          open += 1;
+          most = Math.max(most, open);
+          if (drafts.length === 1) await new Promise<void>((resolve) => (release = resolve));
+          open -= 1;
+          return HttpResponse.json(ORDER);
+        }),
+      );
+      const user = userEvent.setup();
+      render(<BaseOrdersView hasPermission={allowAll} />);
+      await user.click(await screen.findByRole('button', { name: 'Parts' }));
+      const base = await screen.findByRole('radiogroup', { name: 'Extra Base of 9mm 100 Black on hand' });
+      await user.click(within(base).getByRole('radio', { name: '1' }));
+      await waitFor(() => expect(drafts).toHaveLength(1));
+      // While the first save is under way: two more changes.
+      const lid = screen.getByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' });
+      await user.click(within(lid).getByRole('radio', { name: '1' }));
+      await user.click(within(lid).getByRole('radio', { name: '2' }));
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(drafts).toHaveLength(1);
+      release();
+      await waitFor(() => expect(drafts).toHaveLength(2));
+      expect(drafts[1].body).toEqual({
+        products: [
+          {
+            product_id: 4,
+            units: 2,
+            have: [
+              { part_id: 41, pieces: 2 },
+              { part_id: 42, pieces: 1 },
+            ],
+          },
+        ],
+      });
+      expect(most).toBe(1);
+    });
+
+    it('Print right after a change sends that change, not the old draft', async () => {
+      const user = userEvent.setup();
+      render(<BaseOrdersView hasPermission={allowAll} />);
+      await user.click(await screen.findByRole('button', { name: 'Parts' }));
+      const base = await screen.findByRole('radiogroup', { name: 'Extra Base of 9mm 100 Black on hand' });
+      await user.click(within(base).getByRole('radio', { name: '2' }));
+      // Before the draft is saved: the row's own Print.
+      await user.click(screen.getAllByRole('button', { name: 'Print' })[0]);
+      await waitFor(() =>
+        expect(accepted).toEqual([
+          { id: 5001, body: { products: [{ product_id: 4, units: 2, have: [{ part_id: 42, pieces: 2 }] }] } },
+        ]),
+      );
+      expect(drafts).toEqual([]);
+    });
+
+    it('Undo after Apply goes back through the API, even with the panel closed', async () => {
+      orders = [{ ...ORDER, state: 'accepted', progress: [IN_PRODUCTION] }];
+      const user = userEvent.setup();
+      render(<BaseOrdersView hasPermission={allowAll} />);
+      await user.click(await screen.findByRole('button', { name: 'Parts' }));
+      const lid = await screen.findByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' });
+      await user.click(within(lid).getByRole('radio', { name: '1' }));
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      await waitFor(() => expect(accepted).toHaveLength(1));
+      const undo = await screen.findByRole('button', { name: 'Undo' });
+      // Closed before Undo: it still sends the choice from before.
+      await user.click(screen.getByRole('button', { name: 'Parts' }));
+      await user.click(undo);
+      await waitFor(() => expect(accepted).toHaveLength(2));
+      expect(accepted[1]).toEqual({ id: 5001, body: { products: [{ product_id: 4, units: 2, have: [] }] } });
+    });
+
+    it('follows a change in Base under an untouched panel, and asks under a changed one', async () => {
+      orders = [{ ...ORDER, state: 'accepted', progress: [IN_PRODUCTION] }];
+      server.use(
+        http.post('/api/v1/base-sync/sync', () =>
+          HttpResponse.json({ seen: 1, new: 0, updated: 1, cancelled: 0, replanned: [], unmapped: 0 }),
+        ),
+      );
+      const user = userEvent.setup();
+      render(<BaseOrdersView hasPermission={allowAll} />);
+      await user.click(await screen.findByRole('button', { name: 'Parts' }));
+      expect(await screen.findByText('9mm 100 Black: 2 to print')).toBeInTheDocument();
+
+      // Untouched: three ordered now, three to print (no phantom "on the shelf").
+      orders = [{ ...orders[0], lines: [{ ...LINE, quantity: 3 }, ORDER.lines[1]] }];
+      await user.click(screen.getByRole('button', { name: 'Read now' }));
+      expect(await screen.findByText('9mm 100 Black: 3 to print')).toBeInTheDocument();
+      const whole = screen.getByRole('radiogroup', { name: 'Finished 9mm 100 Black on hand' });
+      expect(within(whole).getByRole('radio', { name: '0' })).toBeChecked();
+
+      // Changed and not applied: Base changes again, the panel says so and reloads on request.
+      const lid = screen.getByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' });
+      await user.click(within(lid).getByRole('radio', { name: '1' }));
+      orders = [{ ...orders[0], lines: [{ ...LINE, quantity: 4 }, ORDER.lines[1]] }];
+      await user.click(screen.getByRole('button', { name: 'Read now' }));
+      expect(await screen.findByText('The order changed in Base.')).toBeInTheDocument();
+      expect(screen.getByText('9mm 100 Black: 3 to print')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Reload' }));
+      expect(screen.getByText('9mm 100 Black: 4 to print')).toBeInTheDocument();
+      expect(screen.queryByText('The order changed in Base.')).not.toBeInTheDocument();
+      expect(accepted).toEqual([]);
+    });
+  });
+
+  it('keeps an order busy until its own answer comes, whatever another order does', async () => {
+    const other = { ...ORDER, order_id: 5003, label: 'nick_5003' };
+    orders = [ORDER, other];
+    let release: () => void = () => {};
+    server.use(
+      http.post('/api/v1/base-sync/orders/:id/accept', async ({ params }) => {
+        accepted.push({ id: Number(params.id), body: null });
+        await new Promise<void>((resolve) => (release = resolve));
+        return HttpResponse.json({ ...ORDER, state: 'accepted', ready: true });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await screen.findByText('nick_5003');
+    const rowOf = (id: number) => document.getElementById(`order-${id}`) as HTMLElement;
+    await user.click(within(rowOf(5001)).getByRole('button', { name: 'Print' }));
+    await waitFor(() => expect(within(rowOf(5001)).getByRole('button', { name: 'Print' })).toBeDisabled());
+    // The other order is skipped meanwhile: the first one stays busy.
+    await user.click(within(rowOf(5003)).getByRole('button', { name: 'Skip' }));
+    await waitFor(() => expect(skipped).toEqual([5003]));
+    expect(within(rowOf(5001)).getByRole('button', { name: 'Print' })).toBeDisabled();
+    release();
+    await waitFor(() => expect(within(rowOf(5001)).getByRole('button', { name: 'Print' })).not.toBeDisabled());
+  });
+
+  it('withdrawing waits for the preview before it can be confirmed', async () => {
+    orders = [{ ...ORDER, state: 'accepted', ready: true }];
+    let release: () => void = () => {};
+    server.use(
+      http.post('/api/v1/base-sync/orders/:id/skip/preview', async () => {
+        await new Promise<void>((resolve) => (release = resolve));
+        return HttpResponse.json({ ...NO_CHANGE, done: [{ product_id: 4, name: '9mm 100 Black', units: 2 }] });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Parts' }));
+    await user.click(screen.getByRole('button', { name: 'Withdraw from production' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Withdraw order nick_5001?' });
+    const buttons = within(dialog).getAllByRole('button');
+    expect(buttons[buttons.length - 1]).toBeDisabled();
+    release();
+    const box = await within(dialog).findByRole('checkbox');
+    expect(box).toBeChecked();
+    await user.click(within(dialog).getByRole('button', { name: 'Withdraw from production' }));
+    await waitFor(() => expect(skipBodies).toEqual([{ return_done: true }]));
+  });
+
+  it('a failed preview withdraws without one, keeping the default choice', async () => {
+    orders = [{ ...ORDER, state: 'accepted', ready: true }];
+    server.use(
+      http.post('/api/v1/base-sync/orders/:id/skip/preview', () => HttpResponse.json({ detail: 'x' }, { status: 500 })),
+    );
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Parts' }));
+    await user.click(screen.getByRole('button', { name: 'Withdraw from production' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Withdraw order nick_5001?' });
+    await user.click(await within(dialog).findByRole('button', { name: 'Withdraw without a preview' }));
+    await waitFor(() => expect(skipBodies).toEqual([{ return_done: true }]));
+  });
+
+  it('marks an order expected after its ship-by date and counts it in its section', async () => {
+    orders = [
+      {
+        ...ORDER,
+        state: 'accepted',
+        ship_by: at(0, 23),
+        progress: [
+          {
+            product_id: 4,
+            product_order_id: 9,
+            status: 'open',
+            units: 2,
+            units_ready: 0,
+            estimated_ready_at: at(1, 10),
+            parts: [{ part_id: 41, name: 'Lid', ready: 0, needed: 2, on_hand: 0, missing: 0 }],
+          },
+        ],
+      },
+    ];
+    localStorage.setItem('baseOrders.filter', 'accepted');
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    expect(await screen.findByRole('heading', { name: 'Today · 1 · 1 late' })).toBeInTheDocument();
+    expect(screen.getAllByText('late').length).toBeGreaterThan(0);
+  });
+
+  it('says why an order in production has no estimate', async () => {
+    orders = [
+      {
+        ...ORDER,
+        state: 'accepted',
+        progress: [
+          {
+            product_id: 4,
+            product_order_id: 9,
+            status: 'open',
+            units: 2,
+            units_ready: 0,
+            estimated_ready_at: null,
+            no_estimate_reason: 'no_printer',
+            parts: [{ part_id: 41, name: 'Lid', ready: 0, needed: 2, on_hand: 0, missing: 0 }],
+          },
+        ],
+      },
+    ];
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    expect(await screen.findByText('no estimate: no printer can take its plates now')).toBeInTheDocument();
+  });
+
+  it('names the other products a sent order replanned', async () => {
+    acceptReply = { ...ORDER, state: 'accepted', ready: true, also_replanned: [{ product_id: 7, name: 'Clip', created: 1, replaced: 1 }] };
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Print' }));
+    expect(await screen.findByText('The order is ready. Also replanned: Clip.')).toBeInTheDocument();
   });
 });

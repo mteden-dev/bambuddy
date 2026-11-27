@@ -3,7 +3,10 @@
 //   2. Each leaf's {{placeholder}} set is identical
 //   3. Plural suffixes: every en key ending in _plural / _one / _other must
 //      exist in every other locale, and other locales must not introduce an
-//      _one key that en does not have.
+//      _one key that en does not have. A plural base is compared as a unit: a
+//      locale may add the categories its language needs beyond English
+//      (pl/ru/uk: _few, _many), and the locales in STRICT_PLURAL_LOCALES must
+//      have every category for every plural base (others are only listed).
 //   4. NEW: leaves in a non-English locale must not be identical to en, unless
 //      the value is a brand name / technical token / pure punctuation, OR the
 //      key+locale pair is explicitly listed in IDENTICAL_TO_EN_ALLOWED below.
@@ -552,6 +555,23 @@ for (const code of ['de', 'es', 'fr', 'it', 'ja', 'ko', 'nl', 'pl', 'pt-BR', 'sv
 }
 for (const code of ['de', 'it', 'nl', 'pt-BR', 'sv']) IDENTICAL_TO_EN_ALLOWED[code].add('{{name}} (offline)');
 
+const PLURAL_SUFFIX_RE = /^(.+)_(zero|one|two|few|many|other|plural)$/;
+
+// The CLDR plural categories i18next asks a language for. Only those that
+// whole counts up to 200 or a fraction reach: the "many" of fr/es/it/pt is
+// for millions and no count in the app gets there.
+export function neededPluralCategories(code) {
+  const rules = new Intl.PluralRules(code);
+  const found = new Set();
+  for (let n = 0; n <= 200; n++) found.add(rules.select(n));
+  found.add(rules.select(1.5));
+  return ['zero', 'one', 'two', 'few', 'many', 'other'].filter((c) => found.has(c));
+}
+
+// Locales that must carry every plural category their language needs; a gap
+// elsewhere is only listed. Add a locale here once its plurals are complete.
+export const STRICT_PLURAL_LOCALES = new Set(['pl', 'ru', 'uk']);
+
 // Pure comparison logic, exported so tests can verify each failure mode
 // without going through file IO or the TypeScript parser.
 // Input:  locales = { code: Map<leafKey, leafString> }  (must contain 'en')
@@ -563,14 +583,32 @@ export function compareLocales(locales) {
     if (items.length) reports.push({ label, items });
   };
 
-  const enKeys = new Set(locales.en.keys());
+  const warnings = [];
+  const warn = (label, items) => {
+    if (items.length) warnings.push({ label, items });
+  };
 
-  // Check 1: key set equality
+  const enKeys = new Set(locales.en.keys());
+  // Plural bases are compared as one unit: en has _one/_other (or the legacy
+  // _plural), a language with more categories adds its own (pl: _few, _many).
+  const enPluralBases = new Set();
+  for (const key of enKeys) {
+    const m = key.match(PLURAL_SUFFIX_RE);
+    if (m) enPluralBases.add(m[1]);
+  }
+  const enCategories = new Set(neededPluralCategories('en'));
+  // A locale's own plural form of an en plural base, which en does not need.
+  const isLocalePluralForm = (code, key) => {
+    const m = key.match(PLURAL_SUFFIX_RE);
+    return Boolean(m && enPluralBases.has(m[1]) && neededPluralCategories(code).includes(m[2]));
+  };
+
+  // Check 1: key set equality (plural bases may carry extra categories)
   for (const [code, map] of Object.entries(locales)) {
     if (code === 'en') continue;
     const keys = new Set(map.keys());
     const missing = [...enKeys].filter((k) => !keys.has(k)).sort();
-    const extra = [...keys].filter((k) => !enKeys.has(k)).sort();
+    const extra = [...keys].filter((k) => !enKeys.has(k) && !isLocalePluralForm(code, k)).sort();
     add(`${code}: missing keys vs en`, missing);
     add(`${code}: extra keys vs en`, extra);
   }
@@ -579,7 +617,15 @@ export function compareLocales(locales) {
   for (const [code, map] of Object.entries(locales)) {
     if (code === 'en') continue;
     const mismatches = [];
-    for (const [key, enValue] of locales.en) {
+    const pairs = [...locales.en];
+    // A locale's extra plural forms must use the placeholders of en's plural.
+    for (const key of map.keys()) {
+      if (enKeys.has(key) || !isLocalePluralForm(code, key)) continue;
+      const base = key.match(PLURAL_SUFFIX_RE)[1];
+      const ref = ['_other', '_plural', '', '_one'].map((s) => locales.en.get(base + s)).find((v) => v !== undefined);
+      if (ref !== undefined) pairs.push([key, ref]);
+    }
+    for (const [key, enValue] of pairs) {
       const otherValue = map.get(key);
       if (otherValue === undefined) continue;
       const enPlaceholders = new Set((enValue.match(placeholderRe) ?? []));
@@ -603,11 +649,26 @@ export function compareLocales(locales) {
       if (key.endsWith('_other') && !map.has(key)) pluralIssues.push(`missing _other key: ${key}`);
     }
     for (const key of map.keys()) {
-      if (key.endsWith('_one') && !enKeys.has(key)) {
-        pluralIssues.push(`unexpected _one not present in en: ${key}`);
+      const m = key.match(PLURAL_SUFFIX_RE);
+      if (m && !enKeys.has(key) && !isLocalePluralForm(code, key)) {
+        pluralIssues.push(`unexpected _${m[2]} not present in en: ${key}`);
       }
     }
+    // i18next asks for the language's own category (pl: 2 -> _few, 5 -> _many)
+    // and resolves from English when it is missing, so every category the
+    // language needs must exist for every plural base.
+    const needed = neededPluralCategories(code);
+    const missingCategories = [];
+    for (const base of [...enPluralBases].sort()) {
+      const missingHere = needed.filter((c) => !map.has(`${base}_${c}`));
+      const strict = STRICT_PLURAL_LOCALES.has(code);
+      const relevant = strict ? missingHere : missingHere.filter((c) => !enCategories.has(c));
+      if (!relevant.length) continue;
+      if (strict) pluralIssues.push(`missing plural forms ${relevant.map((c) => `_${c}`).join(', ')}: ${base}`);
+      else missingCategories.push(`${base}: ${relevant.map((c) => `_${c}`).join(', ')}`);
+    }
     add(`${code}: plural key mismatch`, pluralIssues);
+    warn(`${code}: plural categories missing (known gap, not enforced)`, missingCategories);
   }
 
   // Check 4: identical-to-en leaks. A non-English leaf whose value exactly
@@ -630,7 +691,7 @@ export function compareLocales(locales) {
     add(`${code}: leaves identical to en (untranslated?)`, leaks);
   }
 
-  return { failed: reports.length > 0, reports };
+  return { failed: reports.length > 0, reports, warnings };
 }
 
 // en is the reference locale; every other locale discovered in the locales
@@ -653,7 +714,13 @@ if (isMainModule) {
   );
 
   const MAX_REPORT = 20;
-  const { reports } = compareLocales(locales);
+  const { reports, warnings } = compareLocales(locales);
+
+  for (const { label, items } of warnings) {
+    console.warn(`\n[${label}] (${items.length})`);
+    items.slice(0, MAX_REPORT).forEach((i) => console.warn(`  ${i}`));
+    if (items.length > MAX_REPORT) console.warn(`  ... and ${items.length - MAX_REPORT} more`);
+  }
 
   if (reports.length) {
     console.error(`\n=== Locale parity failures (en is the reference) ===`);

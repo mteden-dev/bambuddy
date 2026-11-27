@@ -15,6 +15,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.app.api.routes.products import AlsoReplanned, also_replanned
 from backend.app.core.auth import RequirePermissionIfAuthEnabled, require_ownership_permission
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
@@ -23,7 +24,7 @@ from backend.app.models.products import Product, ProductOrder
 from backend.app.models.user import User
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.schemas.print_queue import NaiveUTCDatetime, UTCDatetime
-from backend.app.services import base_sync as svc
+from backend.app.services import base_sync as svc, products as product_service
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +134,12 @@ async def put_settings(
     await svc.write_config(db, config)
     if "api_token" in sent and data.api_token is not None:
         await svc.write_token(db, data.api_token)
+    done = None
     if config.handling_days != handling_days:
         await db.flush()
-        await _replan(db, await svc.refresh_accepted(db, refresh_due=True))
+        done = await _replan(db, await svc.refresh_accepted(db, refresh_due=True))
     await db.commit()
+    await _announce(done)
     return await _settings_out(db)
 
 
@@ -231,6 +234,8 @@ class ProductProgress(BaseModel):
     units: int
     units_ready: int
     estimated_ready_at: UTCDatetime = None
+    # Why an open one has no estimate: "no_printer", "held" or "nothing_queued"; None with one.
+    no_estimate_reason: str | None = None
     parts: list[PartProgress]
 
 
@@ -242,7 +247,7 @@ class DraftOut(BaseModel):
     nothing_to_print: bool = False
 
 
-class BaseOrderOut(BaseModel):
+class BaseOrderOut(AlsoReplanned):
     order_id: int
     number: str | None
     # What its prints are labelled with: an Allegro nick, else the shop's number.
@@ -275,7 +280,6 @@ class BaseOrderOut(BaseModel):
 
 async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrderOut]:
     from backend.app.models.products import ProductPlate
-    from backend.app.services import products as product_service
 
     skus = await svc.sku_map(db)
     wanted_ids = {t.product_id for t in skus.values() if t.product_id is not None}
@@ -380,8 +384,6 @@ def _nothing_to_print(
     wanted: dict[int, int], held: dict[int, int], on_hand: dict[int, int], products: dict[int, Product]
 ) -> bool:
     """A choice leaves nothing to print: each product is held back or has every part on hand."""
-    from backend.app.services import products as product_service
-
     if not wanted:
         return False
     for product_id, units in wanted.items():
@@ -447,7 +449,7 @@ def _ready(row: BaseOrder, wanted: dict[int, int], live: list) -> bool:
 
 async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, ProductProgress]:
     """Product order id -> its parts there of the ones it needs, and when it is expected (open ones)."""
-    from backend.app.services import product_planner as planner, products as product_service
+    from backend.app.services import product_planner as planner
     from backend.app.services.queue_forecast import build_queue_forecast
 
     result: dict[int, ProductProgress] = {}
@@ -469,11 +471,12 @@ async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, P
         for job in await product_service.queued_jobs(db, product_id):
             planner.pool_add(coming, product_service.piece_printer(job), product_service.counted_pieces(job, part_ids))
         with_queue = planner.allocate(specs, coming, needs)
-        estimates = {}
+        estimates: dict = {}
+        reasons: dict = {}
         if open_rows:
             if forecast is None:
                 forecast = await build_queue_forecast(db)
-            estimates = await product_service.order_estimates(db, product, pool, open_rows, forecast)
+            estimates, reasons = await product_service.order_forecast(db, product, pool, open_rows, forecast)
         for po in (po for po in live if po.product_id == product_id):
             done = po.status == "done"
             parts = [
@@ -501,6 +504,7 @@ async def _progress(db: AsyncSession, orders: list[ProductOrder]) -> dict[int, P
                 units=po.quantity,
                 units_ready=po.quantity if done else allocation.units.get(po.id, 0),
                 estimated_ready_at=None if done else _utc(estimates.get(po.id)),
+                no_estimate_reason=None if done else reasons.get(po.id),
                 parts=parts,
             )
     return result
@@ -621,9 +625,24 @@ async def _get_order(db: AsyncSession, order_id: int) -> BaseOrder:
     return row
 
 
-async def _replan(db: AsyncSession, product_ids: set[int]) -> None:
-    if product_ids:
-        await svc.replan_products(db, product_ids, await svc.read_config(db))
+async def _replan(db: AsyncSession, product_ids: set[int]) -> product_service.PassOutcome | None:
+    if not product_ids:
+        return None
+    return await svc.replan_products(db, product_ids, await svc.read_config(db))
+
+
+async def _announce(done: product_service.PassOutcome | None) -> None:
+    """After the commit: tell every client which products were planned again."""
+    if done is not None:
+        await product_service.announce_replanned(done.changed_ids)
+
+
+async def _order_answer(db: AsyncSession, order_id: int, done: product_service.PassOutcome | None) -> BaseOrderOut:
+    """The order as it is now, with what the plan did to products nobody asked about."""
+    out = (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+    report = await also_replanned(db, done)
+    out.also_replanned, out.plan_failed = report["also_replanned"], report["plan_failed"]
+    return out
 
 
 class AcceptPart(BaseModel):
@@ -657,26 +676,31 @@ async def accept_order(
     full. Per product, ``units`` says how many to print (the rest is held back
     and stays so when Base changes the line) and ``have`` the pieces of parts
     someone has already: they go into stock as pieces of no known printer,
-    which pair with any printer's, so only the rest is printed.
+    which pair with any printer's, so only the rest is printed. Saves on one
+    order run one after the other (``base_sync.order_lock``).
     """
-    row = await _get_order(db, order_id)
-    if row.state == "cancelled":
-        raise HTTPException(409, "The order was cancelled in Base")
-    if svc.is_packed(row):
-        raise HTTPException(409, "The order is packed in Base: nothing to print for it")
     choices = None
     if data is not None and data.products is not None:
         choices = [
             svc.ProductChoice(p.product_id, p.units, {h.part_id: h.pieces for h in p.have if h.pieces > 0})
             for p in data.products
         ]
-    try:
-        changed = await svc.accept(db, row, choices)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    await _replan(db, changed)
-    await db.commit()
-    return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+    async with svc.order_lock(order_id):
+        row = await _get_order(db, order_id)
+        if row.state == "cancelled":
+            raise HTTPException(409, "The order was cancelled in Base")
+        if svc.is_packed(row):
+            raise HTTPException(409, "The order is packed in Base: nothing to print for it")
+        try:
+            changed = await svc.accept(db, row, choices)
+        except ValueError as exc:
+            # Undone before the next save on the order goes ahead.
+            await db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+        done = await _replan(db, changed)
+        await db.commit()
+    await _announce(done)
+    return await _order_answer(db, order_id, done)
 
 
 @router.post("/orders/{order_id}/draft", response_model=BaseOrderOut)
@@ -690,23 +714,26 @@ async def save_draft(
     into stock or the queue. Per product, ``units`` to print and ``have`` the parts on hand, as for
     ``accept``; they replace the saved ones for those products. Sending the order applies them.
     """
-    row = await _get_order(db, order_id)
-    if row.state not in ("new", "skipped"):
-        raise HTTPException(409, "Only a waiting order keeps a draft; change an accepted one with accept")
     if data.products is None:
         raise HTTPException(400, "Say what to keep: products")
-    try:
-        await svc.save_draft(
-            db,
-            row,
-            [
-                svc.ProductChoice(p.product_id, p.units, {h.part_id: h.pieces for h in p.have if h.pieces > 0})
-                for p in data.products
-            ],
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    await db.commit()
+    async with svc.order_lock(order_id):
+        row = await _get_order(db, order_id)
+        if row.state not in ("new", "skipped"):
+            raise HTTPException(409, "Only a waiting order keeps a draft; change an accepted one with accept")
+        try:
+            await svc.save_draft(
+                db,
+                row,
+                [
+                    svc.ProductChoice(p.product_id, p.units, {h.part_id: h.pieces for h in p.have if h.pieces > 0})
+                    for p in data.products
+                ],
+            )
+        except ValueError as exc:
+            # Undone before the next save on the order goes ahead.
+            await db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+        await db.commit()
     return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
 
 
@@ -721,12 +748,14 @@ async def reset_order(
     What was held back is forgotten and the parts put into stock as on hand
     for it are taken out again. Then replan.
     """
-    row = await _get_order(db, order_id)
-    if row.state == "cancelled":
-        raise HTTPException(409, "The order was cancelled in Base")
-    await _replan(db, await svc.reset(db, row))
-    await db.commit()
-    return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+    async with svc.order_lock(order_id):
+        row = await _get_order(db, order_id)
+        if row.state == "cancelled":
+            raise HTTPException(409, "The order was cancelled in Base")
+        done = await _replan(db, await svc.reset(db, row))
+        await db.commit()
+    await _announce(done)
+    return await _order_answer(db, order_id, done)
 
 
 @router.post("/orders/{order_id}/requeue", response_model=BaseOrderOut)
@@ -747,9 +776,10 @@ async def requeue_order(
     products = {po.product_id for po in await svc.product_orders_of(db, order_id) if po.status == "open"}
     if not products:
         raise HTTPException(409, "Nothing of the order is left to print")
-    await _replan(db, products)
+    done = await _replan(db, products)
     await db.commit()
-    return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+    await _announce(done)
+    return await _order_answer(db, order_id, done)
 
 
 class PlatePieceOut(BaseModel):
@@ -810,6 +840,9 @@ class OrderPlateOut(BaseModel):
     editable: bool = False
     # The orders it prints for (one plate may print for several).
     orders: list[str] = Field(default_factory=list)
+    # The time the plan used (its queue job's); learned: from the plate's history, not the slicer's.
+    planned_seconds: int | None = None
+    learned: bool = False
 
 
 @router.get("/orders/{order_id}/plates", response_model=list[OrderPlateOut])
@@ -821,12 +854,12 @@ async def order_plates(order_id: int, db: AsyncSession = Depends(get_db, scope="
     (``PUT /products/jobs/{job_id}/preference``).
     """
     from backend.app.models.printer import Printer
-    from backend.app.services import products as product_service
 
     await _get_order(db, order_id)
     product_orders = {po.id for po in await svc.product_orders_of(db, order_id) if po.status == "open"}
     plates = await product_service.order_plates(db, product_orders)
     names = dict((await db.execute(select(Printer.id, Printer.name))).all())
+    times = await product_service.planned_times(db, [entry.job for entry in plates])
     result = []
     for entry in plates:
         job, plate, product = entry.job, entry.plate, entry.product
@@ -863,6 +896,8 @@ async def order_plates(order_id: int, db: AsyncSession = Depends(get_db, scope="
                 printers=[PlatePrinterOut(id=c.printer_id, name=c.name, available=c.available) for c in entry.choices],
                 editable=entry.status == "planned" and not job.by_hand and not entry.moved,
                 orders=[tag.label for tag in entry.orders],
+                planned_seconds=times.get(job.id, (None, False))[0],
+                learned=times.get(job.id, (None, False))[1],
             )
         )
     return result
@@ -887,10 +922,12 @@ async def skip_order(
     Sending it again (``accept``) undoes it, with what was held back and on
     hand as before.
     """
-    row = await _get_order(db, order_id)
-    await _replan(db, await svc.skip(db, row, return_done=bool(data and data.return_done)))
-    await db.commit()
-    return (await _orders_out(db, [await _get_order(db, order_id)]))[0]
+    async with svc.order_lock(order_id):
+        row = await _get_order(db, order_id)
+        done = await _replan(db, await svc.skip(db, row, return_done=bool(data and data.return_done)))
+        await db.commit()
+    await _announce(done)
+    return await _order_answer(db, order_id, done)
 
 
 class PieceRef(BaseModel):
@@ -950,7 +987,7 @@ async def _withdraw_preview(db: AsyncSession, row: BaseOrder, return_done: bool)
     from backend.app.models.print_queue import PrintQueueItem
     from backend.app.models.printer import Printer
     from backend.app.models.products import ProductJob
-    from backend.app.services import product_planner as planner, products as product_service
+    from backend.app.services import product_planner as planner
 
     orders = await svc.product_orders_of(db, row.order_id)
     open_ids = {po.id for po in orders if po.status == "open"}
@@ -1130,8 +1167,9 @@ async def put_sku(
     row.product_id = data.product_id
     row.units = data.units
     await db.flush()
-    await _replan(db, await svc.refresh_accepted(db, sku))
+    done = await _replan(db, await svc.refresh_accepted(db, sku))
     await db.commit()
+    await _announce(done)
     return SkuOut(sku=row.sku, product_id=row.product_id, product_name=product_name, units=row.units)
 
 
@@ -1147,6 +1185,7 @@ async def delete_sku(
         raise HTTPException(404, "SKU not mapped")
     await db.delete(row)
     await db.flush()
-    await _replan(db, await svc.refresh_accepted(db, sku))
+    done = await _replan(db, await svc.refresh_accepted(db, sku))
     await db.commit()
+    await _announce(done)
     return {"deleted": sku}

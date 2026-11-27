@@ -3,7 +3,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { fileHasQueuedPair, queueSeparateJobs, runAsapTail } from '../../components/PrintModal/separateJobs';
+import {
+  clearGroupRun,
+  fileHasQueuedPair,
+  queueSeparateJobs,
+  readGroupRun,
+  runAsapTail,
+  storeGroupRun,
+  wantedPairs,
+} from '../../components/PrintModal/separateJobs';
 import type { VariantCandidate } from '../../components/PrintModal/VariantCandidates';
 import type { PrintQueueItemCreate } from '../../api/client';
 
@@ -262,5 +270,52 @@ describe('queueSeparateJobs records what it created (#3471 review)', () => {
     });
     expect(result.queuedItemIds).toEqual([101, 102]);
     expect(result.queuedBatchIds).toEqual([201, 202]);
+  });
+});
+
+describe('wantedPairs (fork)', () => {
+  it('is every allowed pair not already queued, in queue order', () => {
+    const pairs = wantedPairs([file(1), file(2)], [7, 8], (f, p) => !(f.id === 2 && p === 7), new Set(['1:8']));
+    expect(pairs.map(({ file: f, printerId }) => [f.id, printerId])).toEqual([
+      [1, 7],
+      [2, 8],
+    ]);
+  });
+});
+
+describe('a refused run names the printer it was refused for (fork)', () => {
+  it('reports the failing pair', async () => {
+    const { addToQueue } = setup(2);
+    const result = await queueSeparateJobs({
+      files: [file(1), file(2)],
+      plateByFile: {},
+      printerIds: [7],
+      quantity: 1,
+      asap: false,
+      buildItem,
+      addToQueue,
+    });
+    expect(result.failure).toMatchObject({ printerId: 7, message: 'nope' });
+    expect(result.failure?.file.id).toBe(2);
+  });
+});
+
+describe('group runs (fork)', () => {
+  const group = [file(21), file(22)];
+  const run = { queuedPairs: ['21:1'], asapInserted: 1, queuedItemIds: [5], queuedBatchIds: [], printerIds: [1, 2] };
+
+  it('are kept for the same group, whatever the order of its files', () => {
+    window.sessionStorage.clear();
+    storeGroupRun(group, run, 1_000);
+    expect(readGroupRun([file(22), file(21)], 2_000)).toMatchObject({ queuedPairs: ['21:1'], printerIds: [1, 2] });
+    expect(readGroupRun([file(21)], 2_000)).toBeNull();
+    clearGroupRun(group);
+    expect(readGroupRun(group, 2_000)).toBeNull();
+  });
+
+  it('are forgotten after a few hours, so a later print of the group is not cut short', () => {
+    window.sessionStorage.clear();
+    storeGroupRun(group, run, 0);
+    expect(readGroupRun(group, 7 * 60 * 60 * 1000)).toBeNull();
   });
 });

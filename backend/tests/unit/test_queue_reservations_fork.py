@@ -28,10 +28,12 @@ from backend.app.services.queue_forecast import ForecastJob, ForecastPrinter, is
 from backend.app.services.queue_plan import planned_order
 from backend.app.services.queue_reservations import (
     SOURCE_PLAN,
+    SOURCE_RELEASED,
     SOURCE_USER,
     YIELD_SETTING_KEY,
     QueueReservations,
     release,
+    release_finished,
     reserve,
 )
 
@@ -358,6 +360,99 @@ class TestTheQueuePassYields:
         launched = await self._pass(farm, idle={1: False, 2: False, 3: False, 4: True}, printing={2: 9 * 60})
         launched.assert_not_called()
         assert await self._waiting(farm, item_id) == (None, "Busy: P1S-2")
+
+
+class TestGivingWay:
+    """``gives_way``: the planner's hold lets the job go elsewhere while its printer is far off."""
+
+    async def _gives_way(self, ctx, item_id, printing):
+        item, reservations = await _reservations(ctx, item_id)
+        with patch(
+            "backend.app.services.printer_manager.printer_manager.get_status",
+            lambda pid: SimpleNamespace(state="RUNNING", remaining_time=printing[pid]) if pid in printing else None,
+        ):
+            return reservations.gives_way(item)
+
+    async def test_while_its_printer_prints_for_long(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN, print_time_seconds=HOUR)
+        assert await self._gives_way(farm, item_id, {2: 9 * 60})
+
+    async def test_not_while_its_printer_is_nearly_done(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN, print_time_seconds=HOUR)
+        assert not await self._gives_way(farm, item_id, {2: 20})
+
+    async def test_never_for_someones_hold(self, farm):
+        assert not await self._gives_way(farm, await _add_job(farm, reserved_for=2), {2: 9 * 60})
+
+
+class TestRelease:
+    """Releasing the planner's hold sticks: its replans hold every kept job again."""
+
+    _row = TestWhoReserved._row
+    _again = TestWhoReserved._again
+
+    async def _release(self, ctx, item_id):
+        async with ctx.session_maker() as db:
+            released = await release(db, item_id)
+            await db.commit()
+        return released
+
+    async def test_the_planners_hold_is_kept_as_released(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        assert await self._release(farm, item_id) is True
+        row = await self._row(farm, item_id)
+        assert (row.printer_id, row.source) == (2, SOURCE_RELEASED)
+        # Released already: nothing more to release.
+        assert await self._release(farm, item_id) is False
+        assert (await self._row(farm, item_id)).source == SOURCE_RELEASED
+
+    async def test_someones_hold_is_deleted(self, farm):
+        item_id = await _add_job(farm, reserved_for=2)
+        assert await self._release(farm, item_id) is True
+        assert await self._row(farm, item_id) is None
+
+    async def test_a_released_job_is_held_for_no_printer(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        await self._release(farm, item_id)
+        item, reservations = await _reservations(farm, item_id)
+        assert reservations.stored_printer(item) is None
+        assert reservations.active_printer(item) is None
+        assert not reservations.is_soft(item)
+
+    async def test_the_planner_leaves_a_released_job_alone(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        await self._release(farm, item_id)
+        await self._again(farm, item_id, 2, SOURCE_PLAN)
+        await self._again(farm, item_id, 1, SOURCE_PLAN)
+        row = await self._row(farm, item_id)
+        assert (row.printer_id, row.source) == (2, SOURCE_RELEASED)
+
+    async def test_someones_hold_replaces_a_release(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        await self._release(farm, item_id)
+        await self._again(farm, item_id, 1, SOURCE_USER)
+        row = await self._row(farm, item_id)
+        assert (row.printer_id, row.source) == (1, SOURCE_USER)
+        item, reservations = await _reservations(farm, item_id)
+        assert reservations.active_printer(item) == 1
+
+    async def test_the_row_of_a_job_that_left_the_queue_goes(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        await self._release(farm, item_id)
+        async with farm.session_maker() as db:
+            (await db.get(PrintQueueItem, item_id)).status = "printing"
+            await release_finished(db)
+            await db.commit()
+        assert await self._row(farm, item_id) is None
+
+    async def test_the_queue_pass_does_not_wait_for_the_released_printer(self, farm):
+        item_id = await _add_job(farm, reserved_for=2, source=SOURCE_PLAN)
+        await self._release(farm, item_id)
+        async with farm.session_maker() as db:
+            db.add(Settings(key=YIELD_SETTING_KEY, value="false"))  # the hold, were it there, would not yield
+            await db.commit()
+        launched = await TestQueuePass._pass(self, farm, idle={1: True, 2: False, 3: True, 4: True})
+        assert launched.call_args[0][1] == {item_id: 1}
 
 
 class TestFilamentHoldWording:

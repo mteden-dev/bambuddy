@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, PlugZap, ShoppingBag, X } from 'lucide-react';
@@ -9,6 +9,8 @@ import { Button } from '../Button';
 import { NumberInput } from '../NumberInput';
 import { parseUTCDate, toDateTimeLocalValue } from '../../utils/date';
 import { useToast } from '../../contexts/ToastContext';
+import { useModalBehavior } from '../../hooks/useModalBehavior';
+import { useDiscardGuard } from './useDiscardGuard';
 
 interface BaseSettingsModalProps {
   onClose: () => void;
@@ -29,10 +31,12 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
   const [draft, setDraft] = useState<BaseSyncSettingsUpdate | null>(null);
   // Local date and time in the field; empty takes every order (Base's 3 months).
   const [since, setSince] = useState<string | null>(null);
+  // The form as loaded, to tell whether Escape would lose changes.
+  const [baseline, setBaseline] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings && draft === null) {
-      setDraft({
+      const initial: BaseSyncSettingsUpdate = {
         enabled: settings.enabled,
         status_ids: settings.status_ids,
         cancel_status_id: settings.cancel_status_id,
@@ -41,22 +45,21 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
         auto_accept: settings.auto_accept,
         manual_start: settings.manual_start,
         handling_days: settings.handling_days,
-      });
+      };
+      setDraft(initial);
       const stored = parseUTCDate(settings.since);
       // A new setup starts from now, so orders handled before do not turn up.
-      setSince(
-        stored ? toDateTimeLocalValue(stored) : settings.status_ids.length === 0 ? toDateTimeLocalValue(new Date()) : '',
-      );
+      const initialSince =
+        stored ? toDateTimeLocalValue(stored) : settings.status_ids.length === 0 ? toDateTimeLocalValue(new Date()) : '';
+      setSince(initialSince);
+      setBaseline(JSON.stringify([initial, initialSince]));
     }
   }, [settings, draft]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const dirty = token.trim() !== '' || (baseline !== null && JSON.stringify([draft, since]) !== baseline);
+  const { requestClose, confirm } = useDiscardGuard(dirty, onClose);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
 
   const testMutation = useMutation({
     // The variables only tell onSuccess whether to say so.
@@ -101,19 +104,27 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
     },
     onError: (e: Error) => showToast(e.message, 'error'),
   });
+  // Escape asks before dropping changes, and waits for a save under way.
+  useModalBehavior(requestClose, overlayRef, saveMutation.isPending);
 
   const set = (patch: BaseSyncSettingsUpdate) => setDraft((current) => ({ ...(current ?? {}), ...patch }));
   const sources = draft?.sources ?? [];
   const statusIds = draft?.status_ids ?? [];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-xl max-h-[90vh] flex flex-col">
+    <div ref={overlayRef} className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <Card
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="outline-none w-full max-w-xl max-h-[90vh] flex flex-col"
+      >
         <CardContent className="p-0 flex flex-col min-h-0">
           <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary shrink-0">
             <div className="flex items-center gap-2">
               <ShoppingBag className="w-5 h-5 text-bambu-green" />
-              <h2 className="text-lg font-semibold text-white">{t('baseSync.settings.title')}</h2>
+              <h2 id={titleId} className="text-lg font-semibold text-white">{t('baseSync.settings.title')}</h2>
             </div>
             <button onClick={onClose} className="text-bambu-gray hover:text-white" aria-label={t('common.close')}>
               <X className="w-5 h-5" />
@@ -286,6 +297,7 @@ export function BaseSettingsModal({ onClose, onSaved }: BaseSettingsModalProps) 
           </div>
         </CardContent>
       </Card>
+      {confirm}
     </div>
   );
 }

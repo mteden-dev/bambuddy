@@ -30,6 +30,10 @@ afterEach(async () => {
     await Promise.race([batchesSettled(), new Promise((resolve) => setTimeout(resolve, 200))]);
   }
   server.resetHandlers();
+  // Pages keep state in the URL (the file manager's ?folder=) and the tab's
+  // session storage; each test starts at the root with neither.
+  window.history.replaceState(null, '', '/');
+  window.sessionStorage.clear();
 });
 afterAll(() => server.close());
 

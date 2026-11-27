@@ -599,6 +599,8 @@ async def test_the_settings_say_when_shortest_first_is_on(async_client: AsyncCli
         "force_color": True,
         "hand_prints_count": False,
         "sjf_enabled": True,
+        "reservation_yield": True,
+        "learn_history": True,
     }
 
 

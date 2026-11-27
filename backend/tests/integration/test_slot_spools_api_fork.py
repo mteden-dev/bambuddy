@@ -69,6 +69,40 @@ class TestSlotSpoolRoutes:
         assert (await async_client.get(f"{URL}/restorable")).json() == []
 
     @pytest.mark.asyncio
+    async def test_more_than_five_kilograms_is_refused(self, async_client: AsyncClient, printer_factory):
+        printer = await printer_factory()
+        resp = await async_client.post(URL, json=_body(printer.id, remaining_grams=6500))
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_restorable_describes_the_roll_to_set_the_slot_back(self, async_client: AsyncClient, printer_factory):
+        printer = await printer_factory()
+        other = await printer_factory()
+        loaded = (await async_client.post(URL, json=_body(printer.id, material="PETG", remaining_grams=420))).json()
+        await async_client.delete(f"/api/v1/inventory/assignments/{printer.id}/0/1")
+
+        params = {"material": "PLA", "include_other": "true", "printer_id": printer.id}
+        [roll] = (await async_client.get(f"{URL}/restorable", params=params)).json()
+        assert roll["id"] == loaded["spool_id"]
+        assert roll["material_match"] is False
+        assert roll["slicer_filament"] == "GFL99"
+        assert [(k["cali_idx"], k["extruder"], k["nozzle_diameter"]) for k in roll["k_profiles"]] == [(4, 0, "0.4")]
+        # Another printer's calibration is not this printer's.
+        params["printer_id"] = other.id
+        assert (await async_client.get(f"{URL}/restorable", params=params)).json()[0]["k_profiles"] == []
+        # Without include_other a PLA slot is not offered the PETG roll.
+        assert (await async_client.get(f"{URL}/restorable", params={"material": "PLA"})).json() == []
+
+    @pytest.mark.asyncio
+    async def test_a_roll_in_another_slot_is_not_restored(self, async_client: AsyncClient, printer_factory):
+        printer = await printer_factory()
+        loaded = (await async_client.post(URL, json=_body(printer.id))).json()
+        resp = await async_client.post(URL, json=_body(printer.id, tray_id=2, restore_spool_id=loaded["spool_id"]))
+        assert resp.status_code == 409
+        assignments = (await async_client.get("/api/v1/inventory/assignments")).json()
+        assert [(a["spool_id"], a["tray_id"]) for a in assignments] == [(loaded["spool_id"], 1)]
+
+    @pytest.mark.asyncio
     async def test_same_roll_prompt(self, async_client: AsyncClient, printer_factory, db_session):
         printer = await printer_factory()
         await async_client.post(URL, json=_body(printer.id))

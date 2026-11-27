@@ -144,6 +144,10 @@ class PrintQueueItemCreate(BaseModel):
     # Direct printer-card uploads are temporary library files. The scheduler
     # deletes them after creating the durable archive copy.
     cleanup_library_after_dispatch: bool = False
+    # Fork: the decision id of the OrcaSlicer import dialog, so the jobs of one
+    # decision may share a waiting upload and another device's may not
+    # (octoprint_compat.claim_slicer_upload).
+    slicer_inbox_claim: str | None = None
     # Cross-model alternatives (#671): several sliced files, one job, whichever
     # printer frees up first. Mutually exclusive with printer_id (a specific
     # printer defeats the purpose) and with archive_id/library_file_id (the

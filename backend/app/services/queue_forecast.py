@@ -34,7 +34,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -145,6 +145,21 @@ class Placement:
     variant: ForecastVariant | None = None
     # Held for this printer by the timeline's plan (or the product planner).
     reserved: bool = False
+
+
+@dataclass
+class ForecastReservation:
+    """The printer a pending "Any" job is held for (services/queue_reservations.py)."""
+
+    printer_id: int
+    # Kept to now: the scheduler would hold the job for that printer.
+    active: bool
+    # "plan" (the product planner's) or "user"; a legacy row is "user".
+    source: Literal["plan", "user"]
+    # The planner's hold, which gives way when its printer cannot take the job soon.
+    soft: bool
+    # The forecast put the job on that printer (False when it gave way or is not placed).
+    placed: bool = False
 
 
 def _model_key(model: str | None) -> str:
@@ -360,8 +375,8 @@ class QueueForecast:
     refusals: dict[int, dict[int, Refusal]]
     # Every pending job the forecast looked at, to filter by what the caller may read.
     items: dict[int, PrintQueueItem]
-    # item id -> (printer id, whether it holds now) for the jobs the plan reserved
-    reservations: dict[int, tuple[int, bool]] = field(default_factory=dict)
+    # item id -> its hold, for the jobs held for a printer (none for a released one)
+    reservations: dict[int, ForecastReservation] = field(default_factory=dict)
     # item id -> printer id -> why the plan may not hold the "Any" job for that printer
     reserve_refusals: dict[int, dict[int, Refusal]] = field(default_factory=dict)
     # item id -> its alternatives (#671), for the jobs that have them
@@ -390,7 +405,7 @@ class ForecastInputs:
     # The jobs that go on the lanes, in dispatch order, and the rest with why.
     schedulable: list[ForecastJob]
     off_timeline: list[OffTimeline]
-    reservations: dict[int, tuple[int, bool]]
+    reservations: dict[int, ForecastReservation]
     turnaround: PlateTurnaround
     # Printers whose plate waits to be cleared before their first forecast job.
     plate_waits: list[PlateWait]
@@ -613,7 +628,7 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
 
     creator_scopes: dict[int | None, PrinterScope] = {}
     jobs: dict[int, ForecastJob] = {}
-    reservations: dict[int, tuple[int, bool]] = {}
+    reservations: dict[int, ForecastReservation] = {}
     schedulable: list[ForecastJob] = []
     off_timeline: list[OffTimeline] = []
     held: list[ForecastJob] = []
@@ -650,10 +665,11 @@ async def load_forecast_inputs(db: AsyncSession, now: datetime | None = None) ->
             # Kept to only where the scheduler keeps to it (queue_reservations).
             printer = next((p for p in forecast_printers if p.id == reserved_for), None)
             holds = printer is not None and reservation_refusal(job, printer) is None
-            reservations[item.id] = (reserved_for, holds)
+            soft = stored_reservations.is_soft(item)
+            reservations[item.id] = ForecastReservation(reserved_for, holds, stored_reservations.source(item), soft)
             if holds:
                 job.reserved_printer_id = reserved_for
-                if stored_reservations.is_soft(item):
+                if soft:
                     job.reservation_soft = True
                     job.yield_margin_s = stored_reservations.yield_margin_s(item)
 
@@ -722,6 +738,10 @@ async def build_queue_forecast(db: AsyncSession, now: datetime | None = None) ->
             if per_printer:
                 reserve_refusals[item_id] = per_printer
 
+    on_printer = {(p.item_id, p.printer_id) for p in placements}
+    reservations = {
+        item_id: replace(r, placed=(item_id, r.printer_id) in on_printer) for item_id, r in inputs.reservations.items()
+    }
     return QueueForecast(
         generated_at=inputs.now,
         placements=placements,
@@ -729,7 +749,7 @@ async def build_queue_forecast(db: AsyncSession, now: datetime | None = None) ->
         printers=inputs.printer_states,
         refusals=refusals,
         items={item.id: item for item in inputs.pending},
-        reservations=inputs.reservations,
+        reservations=reservations,
         reserve_refusals=reserve_refusals,
         variants={item_id: job.variants for item_id, job in inputs.jobs.items() if job.variants},
         plate_waits=plate_waits,

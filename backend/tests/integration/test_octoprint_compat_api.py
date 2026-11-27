@@ -408,3 +408,159 @@ class TestDeviceTabSession:
         both = {"Authorization": "Bearer not-a-jwt", "X-API-Key": key}
         assert (await async_client.get("/api/v1/printers/", headers=both)).status_code == 401
         assert (await async_client.get("/api/v1/printers/", headers={"X-API-Key": key})).status_code == 200
+
+
+async def _queue(client: AsyncClient, file_id: int, printer_id: int, claim: str | None = None):
+    body: dict = {"library_file_id": file_id, "printer_id": printer_id, "cleanup_library_after_dispatch": True}
+    if claim is not None:
+        body["slicer_inbox_claim"] = claim
+    return await client.post("/api/v1/queue/", json=body)
+
+
+class TestDecidedOnce:
+    """Two sessions of the uploader may both be asked about one upload."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_second_device_cannot_queue_it_again(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer_factory
+    ):
+        first_id = (await printer_factory(name="P1S one", model="P1S")).id
+        second_id = (await printer_factory(name="P1S two", model="P1S")).id
+        assert (await async_client.post("/api/files/local", **_upload_form())).status_code == 201
+        stored_id = (await _only_slicer_file(db_session)).id
+
+        with patch(
+            "backend.app.api.routes.octoprint_compat.ws_manager.broadcast_to_user", new_callable=AsyncMock
+        ) as broadcast:
+            queued = await _queue(async_client, stored_id, first_id, claim="tab-a:1")
+        assert queued.status_code == 200, queued.text
+        decided = [c.args[1] for c in broadcast.await_args_list if c.args[1]["type"] == "slicer_upload_decided"]
+        assert decided == [
+            {"type": "slicer_upload_decided", "data": {"file_id": stored_id, "decision": "queued", "claim": "tab-a:1"}}
+        ]
+
+        # The same decision may print it on another printer too...
+        assert (await _queue(async_client, stored_id, second_id, claim="tab-a:1")).status_code == 200
+        # ...another device's decision, or a job without one, may not.
+        other = await _queue(async_client, stored_id, first_id, claim="tab-b:7")
+        assert other.status_code == 409, other.text
+        assert "already in the queue" in other.json()["detail"]
+        assert (await _queue(async_client, stored_id, first_id)).status_code == 409
+        db_session.expire_all()
+        items = (
+            (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.library_file_id == stored_id)))
+            .scalars()
+            .all()
+        )
+        assert len(items) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_kept_file_is_an_ordinary_library_file(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer_factory
+    ):
+        printer_id = (await printer_factory(model="P1S")).id
+        assert (await async_client.post("/api/files/local", **_upload_form())).status_code == 201
+        stored_id = (await _only_slicer_file(db_session)).id
+        keep = LibraryFolder(name="Keep", shared=True)
+        db_session.add(keep)
+        await db_session.commit()
+        moved = await async_client.post(
+            "/api/v1/library/files/move", json={"file_ids": [stored_id], "folder_id": keep.id}
+        )
+        assert moved.status_code == 200, moved.text
+        assert (await _queue(async_client, stored_id, printer_id)).status_code == 200
+        assert (await _queue(async_client, stored_id, printer_id)).status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_discard_refuses_a_file_a_queue_job_uses(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer_factory
+    ):
+        printer_id = (await printer_factory(model="P1S")).id
+        assert (await async_client.post("/api/files/local", **_upload_form())).status_code == 201
+        stored_id = (await _only_slicer_file(db_session)).id
+        assert (await _queue(async_client, stored_id, printer_id, claim="tab-a:1")).status_code == 200
+
+        refused = await async_client.post(f"/api/v1/slicer-inbox/{stored_id}/discard", json={"claim": "tab-b:2"})
+        assert refused.status_code == 409, refused.text
+        assert (await _file(db_session, stored_id)).deleted_at is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_file_manager_cannot_trash_a_waiting_upload_a_job_prints(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer_factory
+    ):
+        printer_id = (await printer_factory(model="P1S")).id
+        assert (await async_client.post("/api/files/local", **_upload_form())).status_code == 201
+        stored_id = (await _only_slicer_file(db_session)).id
+        assert (await _queue(async_client, stored_id, printer_id, claim="tab-a:1")).status_code == 200
+
+        refused = await async_client.delete(f"/api/v1/library/files/{stored_id}")
+        assert refused.status_code == 409, refused.text
+        assert "waits in the queue" in refused.json()["detail"]
+        assert (await _file(db_session, stored_id)).deleted_at is None
+
+        # Its job gone (cancelled), the trash takes it as before.
+        item = (
+            await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.library_file_id == stored_id))
+        ).scalar_one()
+        item.status = "cancelled"
+        await db_session.commit()
+        trashed = await async_client.delete(f"/api/v1/library/files/{stored_id}")
+        assert trashed.status_code == 200, trashed.text
+        assert (await _file(db_session, stored_id)).deleted_at is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_file_manager_still_trashes_a_waiting_upload_nobody_queued(
+        self, async_client: AsyncClient, db_session: AsyncSession
+    ):
+        assert (await async_client.post("/api/files/local", **_upload_form())).status_code == 201
+        stored_id = (await _only_slicer_file(db_session)).id
+        assert (await async_client.delete(f"/api/v1/library/files/{stored_id}")).status_code == 200
+        assert (await _file(db_session, stored_id)).deleted_at is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_discard_and_its_undo_are_announced(self, async_client: AsyncClient, db_session: AsyncSession):
+        assert (await async_client.post("/api/files/local", **_upload_form())).status_code == 201
+        stored_id = (await _only_slicer_file(db_session)).id
+
+        with patch(
+            "backend.app.api.routes.octoprint_compat.ws_manager.broadcast_to_user", new_callable=AsyncMock
+        ) as broadcast:
+            discarded = await async_client.post(f"/api/v1/slicer-inbox/{stored_id}/discard", json={"claim": "t:1"})
+            assert discarded.status_code == 200, discarded.text
+            assert (await _file(db_session, stored_id)).deleted_at is not None
+            assert (await async_client.get("/api/v1/slicer-inbox/pending")).json() == []
+
+            restored = await async_client.post(f"/api/v1/slicer-inbox/{stored_id}/restore", json={"claim": "t:1"})
+            assert restored.status_code == 200, restored.text
+        assert (await _file(db_session, stored_id)).deleted_at is None
+        assert [e["id"] for e in (await async_client.get("/api/v1/slicer-inbox/pending")).json()] == [stored_id]
+        assert [c.args[1]["data"]["decision"] for c in broadcast.await_args_list] == ["discarded", "restored"]
+
+        # Nothing to undo once it is back.
+        assert (await async_client.post(f"/api/v1/slicer-inbox/{stored_id}/restore")).status_code == 404
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_kept_is_announced_only_once_it_left_the_inbox(
+        self, async_client: AsyncClient, db_session: AsyncSession
+    ):
+        assert (await async_client.post("/api/files/local", **_upload_form())).status_code == 201
+        stored_id = (await _only_slicer_file(db_session)).id
+        assert (await async_client.post(f"/api/v1/slicer-inbox/{stored_id}/kept")).status_code == 404
+
+        keep = LibraryFolder(name="Keep", shared=True)
+        db_session.add(keep)
+        await db_session.commit()
+        await async_client.post("/api/v1/library/files/move", json={"file_ids": [stored_id], "folder_id": keep.id})
+        with patch(
+            "backend.app.api.routes.octoprint_compat.ws_manager.broadcast_to_user", new_callable=AsyncMock
+        ) as broadcast:
+            kept = await async_client.post(f"/api/v1/slicer-inbox/{stored_id}/kept", json={"claim": "t:3"})
+        assert kept.status_code == 200, kept.text
+        assert broadcast.await_args.args[1]["data"] == {"file_id": stored_id, "decision": "kept", "claim": "t:3"}

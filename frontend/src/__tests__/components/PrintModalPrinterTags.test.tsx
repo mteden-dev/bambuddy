@@ -111,6 +111,59 @@ describe('PrintModal: printer tags (fork)', () => {
     expect(await screen.findByText(/No active P1S printer has these tags/)).toBeInTheDocument();
   });
 
+  it('holds Print for tags no printer has until "Add anyway" is chosen', async () => {
+    // Fork: such a job waits forever, so queueing it is an explicit choice.
+    mockBackend([7]);
+    const user = userEvent.setup();
+    renderDialog();
+
+    const row = await screen.findByTestId('job-printer-tags');
+    await user.click(within(row).getByRole('button', { name: 'Add tag' }));
+    await user.click(await within(row).findByRole('button', { name: 'left' }));
+    await screen.findByText(/No active P1S printer has these tags/);
+    const submit = screen.getByRole('button', { name: /add to queue|^print$/i });
+    expect(submit).toBeDisabled();
+    expect(within(row).getByRole('button', { name: 'Change tags' })).toBeInTheDocument();
+
+    await user.click(within(row).getByRole('button', { name: 'Add anyway' }));
+    expect(within(row).getByText(/added anyway/)).toBeInTheDocument();
+    await waitFor(() => expect(submit).toBeEnabled());
+  });
+
+  it('says so when the file\'s tags turn the default printer into "Any P1S"', async () => {
+    mockBackend([7]);
+    renderDialog();
+    expect(await screen.findByTestId('tag-mode-switched')).toHaveTextContent(/any P1S that has them/);
+  });
+
+  it('keeps a printer picked before the file\'s tags arrived', async () => {
+    // Fork: the tags query can answer late; it must not replace the user's pick.
+    mockBackend([7]);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get('/api/v1/printer-tags/files', async () => {
+        await gate;
+        return HttpResponse.json([{ file_id: 5, tag_ids: [7] }]);
+      }),
+    );
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(await screen.findByText('P1S One'));
+    release();
+    // Give the late answer time to arrive and be ignored.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId('tag-mode-switched')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /add to queue|^print$/i }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].printer_id).toBe(1);
+    expect(posted[0].target_model).toBeNull();
+  });
+
   it('leaves an untagged file on a specific printer, as before', async () => {
     mockBackend([]);
     renderDialog();

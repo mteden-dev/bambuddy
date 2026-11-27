@@ -50,6 +50,7 @@ from typing import cast
 from sqlalchemy import Table, delete, event, exists, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from backend.app.models.slot_spool_prompt import SlotSpoolPrompt
 from backend.app.models.spool import Spool
@@ -66,6 +67,9 @@ MAX_MARGIN_PCT = 100.0
 SEEDED_SETTINGS = {"filament_check_per_slot": "true", "filament_check_margin_pct": "5"}
 # An archived roll with less than this on it is used up, not worth restoring.
 RESTORABLE_MIN_GRAMS = 5.0
+# The most a roll going into a slot may hold: a typo (6500 for 650) would
+# otherwise count for months before anyone noticed.
+MAX_SLOT_SPOOL_GRAMS = 5000.0
 
 
 # ---------------------------------------------------------------- check settings
@@ -435,6 +439,8 @@ async def load_slot_spool(db: AsyncSession, data: SlotSpoolLoad) -> SpoolAssignm
     """
     if data.remaining_grams is not None and data.remaining_grams < 0:
         raise SlotSpoolError(422, "remaining_grams must not be negative")
+    if data.remaining_grams is not None and data.remaining_grams > MAX_SLOT_SPOOL_GRAMS:
+        raise SlotSpoolError(422, f"remaining_grams must not exceed {MAX_SLOT_SPOOL_GRAMS:.0f}")
     material = _clean(data.material, 50)
     if not material:
         raise SlotSpoolError(422, "material is required")
@@ -465,9 +471,16 @@ async def load_slot_spool(db: AsyncSession, data: SlotSpoolLoad) -> SpoolAssignm
             raise SlotSpoolError(404, "Spool not found")
         if spool.data_origin != SLOT_SPOOL_ORIGIN:
             raise SlotSpoolError(400, "Only a slot spool can be restored into a slot")
-        # A roll is in one slot at a time: restoring it here takes it out of any other.
-        elsewhere = await db.execute(select(SpoolAssignment).where(SpoolAssignment.spool_id == spool.id))
-        for row in elsewhere.scalars().all():
+        # A roll is in one slot at a time. One still counting in another slot
+        # is not a roll taken out: a restore list read before it went in there
+        # offered it, and pulling it out of that slot silently would leave the
+        # roll in it uncounted.
+        elsewhere = (
+            (await db.execute(select(SpoolAssignment).where(SpoolAssignment.spool_id == spool.id))).scalars().all()
+        )
+        if elsewhere and spool.archived_at is None:
+            raise SlotSpoolError(409, "This roll is in another slot now")
+        for row in elsewhere:
             await db.delete(row)
         # Those deletes ran the hook again, which archives the spool on the
         # connection; read it back so clearing archived_at is a real change.
@@ -559,16 +572,29 @@ async def load_slot_spool(db: AsyncSession, data: SlotSpoolLoad) -> SpoolAssignm
     return assignment
 
 
+def material_matches(spool: Spool, material: str | None) -> bool:
+    """Is the spool of the slot's type as the printer names it (PLA+ and PLA both PLA)? Any, without one."""
+    if not material:
+        return True
+    from backend.app.utils.filament_types import printer_filament_type
+
+    return printer_filament_type(spool.material).upper() == printer_filament_type(material).upper()
+
+
 async def restorable_spools(
-    db: AsyncSession, material: str | None = None, rgba: str | None = None, limit: int = 10
+    db: AsyncSession,
+    material: str | None = None,
+    rgba: str | None = None,
+    limit: int = 10,
+    include_other: bool = False,
 ) -> list[Spool]:
     """Archived slot spools with filament left, the same colour first, newest first.
 
-    ``material`` narrows to the slot's type as the printer names it (PLA+ and PLA
-    both count as PLA), so a PETG roll is not offered for a PLA slot.
+    ``material`` narrows to the slot's type, so a PETG roll is not offered for a
+    PLA slot; with ``include_other`` the other types follow the matching ones
+    instead (the dialog lists them apart, for a slot about to change type).
+    The spools come with their K profiles loaded.
     """
-    from backend.app.utils.filament_types import printer_filament_type
-
     result = await db.execute(
         select(Spool)
         .where(
@@ -576,14 +602,17 @@ async def restorable_spools(
             Spool.archived_at.is_not(None),
             Spool.label_weight - Spool.weight_used >= RESTORABLE_MIN_GRAMS,
         )
+        .options(selectinload(Spool.k_profiles))
         .order_by(Spool.archived_at.desc())
         .limit(200)
     )
     spools = list(result.scalars().all())
-    if material:
-        wanted = printer_filament_type(material).upper()
-        spools = [s for s in spools if printer_filament_type(s.material).upper() == wanted]
+    if material and not include_other:
+        spools = [s for s in spools if material_matches(s, material)]
     colour = (_normalize_rgba(rgba) or "")[:6]
+    # Stable sorts: the type first, then the colour, each keeping newest first.
     if colour:
         spools.sort(key=lambda s: (s.rgba or "")[:6].upper() != colour)
+    if material and include_other:
+        spools.sort(key=lambda s: not material_matches(s, material))
     return spools[:limit]

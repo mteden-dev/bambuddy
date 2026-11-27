@@ -12,10 +12,15 @@ import {
   DEFAULT_AMS_COLOR_PALETTE,
   moveItem,
   normalizeHex,
+  paletteColorLabel,
   parseAmsColorPalette,
   serializeAmsColorPalette,
+  storedColorName,
   type PaletteColor,
 } from '../utils/amsColorPalette';
+
+// A control the owner taps on a phone or an iPad: 44 px there.
+const TOUCH_ICON = 'any-pointer-coarse:min-w-[44px] any-pointer-coarse:min-h-[44px] inline-flex items-center justify-center';
 
 interface AmsColorPaletteProps {
   /** The colour set in the form, six hex digits or empty. */
@@ -63,6 +68,13 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
 
   const visible = palette.filter((c) => !c.hidden);
   const hidden = palette.filter((c) => c.hidden);
+  // The default colours' names in the UI language; they are stored in English.
+  const translateDefault = (key: string) => t(`configureAmsSlot.palette.colors.${key}`);
+  const label = (color: PaletteColor) => paletteColorLabel(color, translateDefault);
+  // What the line under the swatches names: the hovered colour, else the one
+  // set in the form (a tap on iOS neither hovers nor focuses a button).
+  const selected = palette.find((c) => c.hex === selectedHex) ?? null;
+  const shownColor = hovered ?? selected;
 
   const saveMutation = useMutation({
     mutationFn: (value: string) => api.updateSettings({ ams_color_palette: value }),
@@ -74,7 +86,7 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
   });
 
   const toDraft = (colors: readonly PaletteColor[]): DraftColor[] =>
-    colors.map((c) => ({ key: nextKey.current++, name: c.name, hex: c.hex, hidden: !!c.hidden }));
+    colors.map((c) => ({ key: nextKey.current++, name: label(c), hex: c.hex, hidden: !!c.hidden }));
 
   const updateRow = (index: number, patch: Partial<DraftColor>) =>
     setDraft((rows) => rows && rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
@@ -92,7 +104,10 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
     if (!draft || draftInvalid) return;
     saveMutation.mutate(
       serializeAmsColorPalette(
-        draft.map((row) => ({ name: row.name.trim(), hex: normalizeHex(row.hex)!, hidden: row.hidden })),
+        draft.map((row) => {
+          const hex = normalizeHex(row.hex)!;
+          return { name: storedColorName(row.name.trim(), hex, translateDefault), hex, hidden: row.hidden };
+        }),
       ),
     );
   };
@@ -101,16 +116,16 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
     <button
       key={`${index}-${color.hex}-${color.name}`}
       type="button"
-      onClick={() => onPick(color.name, color.hex)}
+      onClick={() => onPick(label(color), color.hex)}
       onMouseEnter={() => setHovered(color)}
       onFocus={() => setHovered(color)}
       onBlur={() => setHovered(null)}
-      className={`w-7 h-7 rounded-md border-2 transition-all ${
+      className={`w-7 h-7 any-pointer-coarse:w-10 any-pointer-coarse:h-10 rounded-md border-2 transition-all ${
         selectedHex === color.hex ? 'border-bambu-green scale-110' : 'border-white/20 hover:border-white/40'
       }`}
       style={{ backgroundColor: `#${color.hex}` }}
-      title={color.name}
-      aria-label={`${color.name} #${color.hex}`}
+      title={label(color)}
+      aria-label={`${label(color)} #${color.hex}`}
     />
   );
 
@@ -128,7 +143,7 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
             return (
               <div
                 key={row.key}
-                className={`flex items-center gap-1 ${row.hidden ? 'opacity-60' : ''}`}
+                className={`flex flex-wrap items-center gap-1 ${row.hidden ? 'opacity-60' : ''}`}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
@@ -138,7 +153,10 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
               >
                 <span
                   draggable
-                  onDragStart={() => {
+                  onDragStart={(e) => {
+                    // WebKit may not start a drag that carries no data.
+                    e.dataTransfer.setData('text/plain', String(index));
+                    e.dataTransfer.effectAllowed = 'move';
                     dragFrom.current = index;
                   }}
                   className="cursor-grab text-bambu-gray hover:text-white"
@@ -160,7 +178,7 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
                   onChange={(e) => updateRow(index, { name: e.target.value })}
                   placeholder={t('configureAmsSlot.palette.namePlaceholder')}
                   aria-label={t('configureAmsSlot.palette.namePlaceholder')}
-                  className={`min-w-0 flex-1 px-2 py-1 bg-bambu-dark border rounded text-white text-xs focus:outline-none focus:border-bambu-green ${
+                  className={`min-w-0 flex-1 basis-24 px-2 py-1 bg-bambu-dark border rounded text-white text-xs focus:outline-none focus:border-bambu-green ${
                     errors.name ? 'border-red-500' : 'border-bambu-dark-tertiary'
                   }`}
                 />
@@ -179,7 +197,7 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
                   type="button"
                   onClick={() => setDraft((rows) => rows && moveItem(rows, index, index - 1))}
                   disabled={index === 0}
-                  className="p-0.5 text-bambu-gray hover:text-white disabled:opacity-30"
+                  className={`ml-auto p-0.5 ${TOUCH_ICON} text-bambu-gray hover:text-white disabled:opacity-30`}
                   title={t('configureAmsSlot.palette.moveUp')}
                   aria-label={`${t('configureAmsSlot.palette.moveUp')}: ${row.name}`}
                 >
@@ -189,7 +207,7 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
                   type="button"
                   onClick={() => setDraft((rows) => rows && moveItem(rows, index, index + 1))}
                   disabled={index === draft.length - 1}
-                  className="p-0.5 text-bambu-gray hover:text-white disabled:opacity-30"
+                  className={`p-0.5 ${TOUCH_ICON} text-bambu-gray hover:text-white disabled:opacity-30`}
                   title={t('configureAmsSlot.palette.moveDown')}
                   aria-label={`${t('configureAmsSlot.palette.moveDown')}: ${row.name}`}
                 >
@@ -198,7 +216,7 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
                 <button
                   type="button"
                   onClick={() => updateRow(index, { hidden: !row.hidden })}
-                  className="p-0.5 text-bambu-gray hover:text-white"
+                  className={`p-0.5 ${TOUCH_ICON} text-bambu-gray hover:text-white`}
                   title={row.hidden ? t('configureAmsSlot.palette.show') : t('configureAmsSlot.palette.hide')}
                   aria-label={`${row.hidden ? t('configureAmsSlot.palette.show') : t('configureAmsSlot.palette.hide')}: ${row.name}`}
                 >
@@ -207,7 +225,7 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
                 <button
                   type="button"
                   onClick={() => setDraft((rows) => rows && rows.filter((_, i) => i !== index))}
-                  className="p-0.5 text-bambu-gray hover:text-red-400"
+                  className={`p-0.5 ${TOUCH_ICON} text-bambu-gray hover:text-red-400`}
                   title={t('configureAmsSlot.palette.remove')}
                   aria-label={`${t('configureAmsSlot.palette.remove')}: ${row.name}`}
                 >
@@ -277,10 +295,12 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
           <button
             type="button"
             onClick={() => setShowHidden(!showHidden)}
-            className="w-7 h-7 rounded-md border-2 border-white/20 hover:border-white/40 flex items-center justify-center text-white/60 hover:text-white/80 transition-all text-xs"
+            className="min-w-7 h-7 px-1 any-pointer-coarse:min-w-10 any-pointer-coarse:h-10 rounded-md border-2 border-white/20 hover:border-white/40 flex items-center justify-center text-white/60 hover:text-white/80 transition-all text-xs"
             title={showHidden ? t('configureAmsSlot.showLessColors') : t('configureAmsSlot.showMoreColors')}
+            aria-label={showHidden ? t('configureAmsSlot.showLessColors') : t('configureAmsSlot.showMoreColors')}
           >
-            {showHidden ? '−' : '+'}
+            {/* How many are behind it, visible without a hover. */}
+            {showHidden ? '−' : `+${hidden.length}`}
           </button>
         )}
         {canEdit && (
@@ -291,7 +311,7 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
               setDraft(toDraft(palette));
             }}
             disabled={!paletteLoaded}
-            className="w-7 h-7 rounded-md border-2 border-dashed disabled:opacity-40 border-white/20 hover:border-white/40 flex items-center justify-center text-white/60 hover:text-white/80 transition-all"
+            className="w-7 h-7 any-pointer-coarse:w-10 any-pointer-coarse:h-10 rounded-md border-2 border-dashed disabled:opacity-40 border-white/20 hover:border-white/40 flex items-center justify-center text-white/60 hover:text-white/80 transition-all"
             title={t('configureAmsSlot.palette.edit')}
             aria-label={t('configureAmsSlot.palette.edit')}
           >
@@ -299,13 +319,15 @@ export function AmsColorPalette({ selectedHex, onPick, suggestedName }: AmsColor
           </button>
         )}
       </div>
-      {/* The hovered colour, so its exact hex can be matched to the slicer's
-          without waiting on the browser's title tooltip. Height is reserved so
-          the form does not jump while the pointer moves across the swatches. */}
-      <p className="text-xs text-bambu-gray mt-1 h-4">
-        {hovered && (
+      {/* The hovered colour, else the selected one, so its exact hex can be
+          matched to the slicer's without a hover or the browser's title
+          tooltip. Height is reserved so the form does not jump while the
+          pointer moves across the swatches. */}
+      <p className="text-xs text-bambu-gray mt-1 min-h-4" data-testid="ams-palette-shown">
+        {shownColor && (
           <>
-            {hovered.name} <span className="font-mono text-white/80">#{hovered.hex}</span>
+            {!hovered && `${t('configureAmsSlot.palette.selected')} `}
+            {label(shownColor)} <span className="font-mono text-white/80">#{shownColor.hex}</span>
           </>
         )}
       </p>

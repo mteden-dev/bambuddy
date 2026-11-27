@@ -22,10 +22,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatDateOnly, formatDuration } from '../utils/date';
 import { isSlicedLibraryFile, mayBeSlicedFileName } from '../utils/libraryFiles';
 import { mapModelCode } from '../utils/printerModel';
+import { isGcodeCompatible } from '../utils/printer';
 import { PrintModal } from './PrintModal';
+import { useModalBehavior } from '../hooks/useModalBehavior';
 import {
   isSlicedForOtherPrinter,
   readStoredSort,
+  slicedForRelatedModel,
   sortPickerFiles,
   storeSort,
   type PrintPickerSort,
@@ -188,18 +191,11 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
 
   const subModalOpen = printFile !== null;
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !subModalOpen && !uploading) onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose, subModalOpen, uploading]);
-
-  // Not on touch screens: the keyboard would cover the list before anyone asked to search.
-  useEffect(() => {
-    if (window.matchMedia?.('(pointer: fine)').matches) searchRef.current?.focus();
-  }, []);
+  // Focus starts in the search (data-autofocus), but not on touch screens:
+  // the keyboard would cover the list before anyone asked to search. While
+  // the print dialog is open it has Escape (it is the top layer).
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const requestClose = useModalBehavior(onClose, overlayRef, subModalOpen || !!uploading);
 
   const changeSort = (next: PrintPickerSort) => {
     setSort(next);
@@ -227,7 +223,9 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
           return;
         }
         const slicedFor = (result.metadata as Record<string, unknown> | null)?.sliced_for_model as string | undefined;
-        if (slicedFor && model && slicedFor.toLowerCase() !== model.toLowerCase()) {
+        // The print dialog's rule: a related model's slice (P1S on a P1P) is
+        // printed with a warning there, not deleted here.
+        if (slicedFor && model && !isGcodeCompatible(slicedFor, model)) {
           await api.deleteLibraryFile(result.id).catch(() => {});
           setError(t('printers.incompatibleFile', { slicedFor, printerModel: model }));
           return;
@@ -294,14 +292,16 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
   return (
     <>
       <div
+        ref={overlayRef}
         className={`fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-2 sm:p-4 ${subModalOpen ? 'hidden' : ''}`}
-        onClick={() => !uploading && onClose()}
+        onClick={requestClose}
       >
         <div
+          tabIndex={-1}
           role="dialog"
           aria-modal="true"
           aria-labelledby="print-picker-title"
-          className="relative w-full max-w-4xl h-[90vh] sm:h-[85vh] flex flex-col bg-bambu-dark-secondary rounded-xl border border-bambu-dark-tertiary overflow-hidden"
+          className="outline-none relative w-full max-w-4xl h-[90vh] sm:h-[85vh] flex flex-col bg-bambu-dark-secondary rounded-xl border border-bambu-dark-tertiary overflow-hidden"
           onClick={(e) => e.stopPropagation()}
           onDragEnter={onDragEnter}
           onDragOver={onDragOver}
@@ -337,7 +337,7 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
               <button
                 onClick={onClose}
                 disabled={!!uploading}
-                className="p-1.5 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark disabled:opacity-50"
+                className="p-1.5 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark disabled:opacity-50 inline-flex items-center justify-center any-pointer-coarse:min-h-[44px] any-pointer-coarse:min-w-[44px]"
                 aria-label={t('common.close')}
                 title={t('common.close')}
               >
@@ -352,6 +352,7 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
               <Search className="w-4 h-4 text-bambu-gray absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 ref={searchRef}
+                data-autofocus
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -387,7 +388,7 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
               <>
                 <button
                   onClick={() => openFolderView(null)}
-                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded hover:text-white hover:bg-bambu-dark ${folderId === null ? 'text-white font-medium' : ''}`}
+                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded hover:text-white hover:bg-bambu-dark any-pointer-coarse:min-h-[44px] any-pointer-coarse:px-2.5 ${folderId === null ? 'text-white font-medium' : ''}`}
                 >
                   <Home className="w-3.5 h-3.5" />
                   {t('printPicker.library')}
@@ -397,7 +398,7 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
                     <ChevronRight className="w-3.5 h-3.5 opacity-60" />
                     <button
                       onClick={() => openFolderView(f.id)}
-                      className={`px-1.5 py-0.5 rounded hover:text-white hover:bg-bambu-dark ${i === breadcrumb.length - 1 ? 'text-white font-medium' : ''}`}
+                      className={`px-1.5 py-0.5 rounded hover:text-white hover:bg-bambu-dark any-pointer-coarse:min-h-[44px] any-pointer-coarse:px-2.5 ${i === breadcrumb.length - 1 ? 'text-white font-medium' : ''}`}
                     >
                       {f.name}
                     </button>
@@ -411,7 +412,11 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
             <div className="mx-4 mb-2 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
               <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <span className="flex-1">{error}</span>
-              <button onClick={() => setError(null)} aria-label={t('common.close')} className="text-red-300/70 hover:text-red-200">
+              <button
+                onClick={() => setError(null)}
+                aria-label={t('common.close')}
+                className="-my-1 -mr-1 inline-flex items-center justify-center rounded text-red-300/70 hover:text-red-200 any-pointer-coarse:min-h-[44px] any-pointer-coarse:min-w-[44px]"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -468,6 +473,8 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
                 })}
                 {visibleFiles.map((file) => {
                   const otherPrinter = isSlicedForOtherPrinter(file, model);
+                  // A related model's slice (P1S on a P1P): offered, with a badge.
+                  const related = otherPrinter ? null : slicedForRelatedModel(file, model);
                   const title = otherPrinter
                     ? t('printers.incompatibleFile', { slicedFor: file.sliced_for_model, printerModel: model })
                     : t('printPicker.printThis', { printer: printerName });
@@ -493,12 +500,16 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-medium text-white">{file.print_name || file.filename}</span>
+                          {/* Why it can't be printed here, in words (not only in the title). */}
+                          {otherPrinter && (
+                            <span className="block text-xs text-amber-400">{title}</span>
+                          )}
                           <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-bambu-gray">
                             {file.sliced_for_model && (
                               <span
-                                className={`rounded-full border px-2 py-0.5 ${otherPrinter ? 'border-amber-500/50 text-amber-400' : 'border-bambu-dark-tertiary text-bambu-gray'}`}
+                                className={`rounded-full border px-2 py-0.5 ${otherPrinter || related ? 'border-amber-500/50 text-amber-400' : 'border-bambu-dark-tertiary text-bambu-gray'}`}
                               >
-                                {file.sliced_for_model}
+                                {related ? t('printPicker.slicedForRelated', { model: related }) : file.sliced_for_model}
                               </span>
                             )}
                             {file.print_time_seconds ? (
@@ -551,7 +562,7 @@ export function PrintFromLibraryModal({ printerId, printerName, printerModel, on
             {hiddenOtherCount > 0 && (
               <button
                 onClick={() => setShowOtherPrinters((v) => !v)}
-                className="text-bambu-green hover:underline"
+                className="text-bambu-green hover:underline any-pointer-coarse:min-h-[44px] any-pointer-coarse:px-2"
               >
                 {showOtherPrinters
                   ? t('printPicker.hideOtherPrinters')

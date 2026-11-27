@@ -6,6 +6,8 @@ import { recoverFromMissingChunk } from '../utils/lazyPage';
 // English is bundled: it is the fallback for every missing key. The other
 // languages are separate files, and only the one in use is loaded (#3175).
 import en from './locales/en';
+// Fork: the server's English texts, translated (utils/serverMessages.ts).
+import enServerMessages from './serverMessages/en';
 
 const LOCALE_LOADERS: Record<string, () => Promise<{ default: ResourceLanguage }>> = {
   de: () => import('./locales/de'),
@@ -14,7 +16,10 @@ const LOCALE_LOADERS: Record<string, () => Promise<{ default: ResourceLanguage }
   ja: () => import('./locales/ja'),
   it: () => import('./locales/it'),
   nl: () => import('./locales/nl'),
-  pl: () => import('./locales/pl'),
+  pl: () =>
+    Promise.all([import('./locales/pl'), import('./serverMessages/pl')]).then(([locale, server]) => ({
+      default: { ...locale.default, serverMessages: server.default },
+    })),
   ko: () => import('./locales/ko'),
   'pt-BR': () => import('./locales/pt-BR'),
   'zh-CN': () => import('./locales/zh-CN'),
@@ -58,7 +63,7 @@ export const i18nReady = i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    resources: { en: { translation: en } },
+    resources: { en: { translation: { ...en, serverMessages: enServerMessages } } },
     // Load every other language through localeBackend.
     partialBundledLanguages: true,
     fallbackLng: 'en',

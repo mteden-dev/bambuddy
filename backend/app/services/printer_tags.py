@@ -191,6 +191,8 @@ async def printer_queue_filter(
     model. One whose tags that printer refuses never runs there, so it is left
     out, as the scheduler and the queue timeline leave it out; so is one the
     timeline's plan holds for another printer, and it shows on that one's.
+    The product planner's soft hold whose printer cannot take the job soon
+    gives way (QueueReservations.gives_way), so it shows on the others too.
     """
     from backend.app.services.queue_reservations import QueueReservations
 
@@ -201,9 +203,12 @@ async def printer_queue_filter(
     def allows(item: PrintQueueItem, printer_id: int) -> bool:
         if item.printer_id is not None:
             return True
-        reserved_for = reservations.active_printer(item, routing.scope(item))
-        if reserved_for is not None:
-            return reserved_for == printer_id
+        scope = routing.scope(item)
+        reserved_for = reservations.active_printer(item, scope)
+        if reserved_for == printer_id:
+            return True
+        if reserved_for is not None and not reservations.gives_way(item, scope):
+            return False
         return routing.accepts(item, printer_id)
 
     return allows

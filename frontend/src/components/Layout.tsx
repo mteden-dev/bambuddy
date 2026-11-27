@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo, type CSSProperties } from 'react';
 import { PageLoading } from './PageLoading';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Printer, Archive, ListOrdered, Boxes, ShoppingCart, BarChart3, Cloud, Settings, Sun, Moon, Monitor, ChevronLeft, ChevronRight, Keyboard, Github, ArrowUpCircle, Wrench, FolderKanban, FolderOpen, X, Menu, Info, Plug, Bug, LogOut, Key, Loader2, Disc3, ShieldAlert, Globe, Bell, Receipt, Megaphone, type LucideIcon } from 'lucide-react';
@@ -647,10 +647,24 @@ export function Layout() {
         <header className="fixed top-0 left-0 right-0 z-40 h-14 bg-bambu-dark-secondary border-b border-bambu-dark-tertiary flex items-center px-4">
           <button
             onClick={() => setMobileDrawerOpen(true)}
-            className="p-2 -ml-2 rounded-lg hover:bg-bambu-dark-tertiary transition-colors"
-            aria-label="Open menu"
+            className="relative p-2 -ml-2 rounded-lg hover:bg-bambu-dark-tertiary transition-colors"
+            aria-label={
+              productsToCheckCount > 0
+                ? t('nav.openMenuWithChecks', { count: productsToCheckCount })
+                : t('nav.openMenu')
+            }
           >
             <Menu className="w-6 h-6 text-white" />
+            {/* Fork: the closed drawer hides the Orders badge, so its count shows here. */}
+            {productsToCheckCount > 0 && (
+              <span
+                data-testid="menu-checks-badge"
+                aria-hidden="true"
+                className="absolute top-0.5 right-0 min-w-[18px] h-[18px] px-1 flex items-center justify-center text-[10px] font-bold rounded-full bg-purple-500 text-white"
+              >
+                {productsToCheckCount > 99 ? '99+' : productsToCheckCount}
+              </span>
+            )}
           </button>
           <img
             src={resolvedMode === 'dark' ? '/img/bambuddy_logo_dark_transparent.png' : '/img/bambuddy_logo_light.png'}
@@ -827,8 +841,10 @@ export function Layout() {
                           <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-yellow-500 rounded-full border-2 border-bambu-dark-secondary" />
                         )}
                         {showBadge && (
-                          <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center text-[10px] font-bold rounded-full ${
-                            showArchiveBadge ? 'bg-blue-500 text-white' : 'bg-yellow-500 text-black'
+                          <span
+                            aria-label={showProductsBadge ? t('nav.productsToCheck', { count: badgeCount }) : undefined}
+                            className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center text-[10px] font-bold rounded-full ${
+                            showArchiveBadge ? 'bg-blue-500 text-white' : showProductsBadge ? 'bg-purple-500 text-white' : 'bg-yellow-500 text-black'
                           }`}>
                             {badgeCount > 99 ? '99+' : badgeCount}
                           </span>
@@ -1092,9 +1108,14 @@ export function Layout() {
       </aside>
 
       {/* Main content */}
-      <main className={`flex-1 bg-bambu-dark overflow-auto transition-all duration-300 ${
-        isSidebarCompact ? 'mt-14' : sidebarExpanded ? 'ml-64' : 'ml-16'
-      }`}>
+      {/* Fork: not a scroll container (overflow-x-clip is not one), so sticky
+          elements stick to the window; --app-top is the fixed header they sit below. */}
+      <main
+        className={`flex-1 min-w-0 overflow-x-clip bg-bambu-dark transition-all duration-300 ${
+          isSidebarCompact ? 'mt-14' : sidebarExpanded ? 'ml-64' : 'ml-16'
+        }`}
+        style={{ '--app-top': isSidebarCompact ? '3.5rem' : '0px' } as CSSProperties}
+      >
         {/* Debug logging indicator */}
         {debugLoggingState?.enabled && (
           <div className="bg-amber-100 dark:bg-amber-500/20 border-b border-amber-300 dark:border-amber-500/30 px-4 py-2 flex items-center justify-between">

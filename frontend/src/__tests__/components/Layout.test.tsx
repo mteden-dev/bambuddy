@@ -506,6 +506,69 @@ describe('Layout', () => {
     });
   });
 
+  // Fork: sticky elements stick to the window below the compact header, and
+  // the prints to check are visible with the drawer closed.
+  describe('compact header (fork)', () => {
+    const originalMatchMedia = window.matchMedia;
+    const originalWidth = window.innerWidth;
+    function viewport(compact: boolean) {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: compact ? 390 : 1440 });
+      Object.defineProperty(window, 'matchMedia', {
+        writable: true,
+        configurable: true,
+        value: (query: string) => ({ ...originalMatchMedia(query), matches: compact && /max-width/.test(query) }),
+      });
+    }
+
+    afterEach(() => {
+      Object.defineProperty(window, 'matchMedia', { writable: true, configurable: true, value: originalMatchMedia });
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: originalWidth });
+    });
+
+    it('sets --app-top to the header height on a main that does not scroll', async () => {
+      viewport(true);
+      render(<Layout />);
+      await waitFor(() => expect(document.querySelector('header')).not.toBeNull());
+
+      const main = document.querySelector('main')!;
+      expect(main.style.getPropertyValue('--app-top')).toBe('3.5rem');
+      expect(main.className).not.toMatch(/\boverflow-auto\b/);
+      expect(main.className).toContain('min-w-0');
+    });
+
+    it('sets --app-top to 0px with the sidebar', async () => {
+      viewport(false);
+      render(<Layout />);
+      await waitFor(() => expect(document.querySelector('aside')).not.toBeNull());
+
+      expect(document.querySelector('header')).toBeNull();
+      expect(document.querySelector('main')!.style.getPropertyValue('--app-top')).toBe('0px');
+    });
+
+    it('shows the prints to check on the menu button', async () => {
+      server.use(
+        http.get('/api/v1/products/qc', () => HttpResponse.json([{ id: 1 }, { id: 2 }, { id: 3 }])),
+      );
+      viewport(true);
+      render(<Layout />);
+
+      const menu = await screen.findByRole('button', { name: 'Open menu (3 to check)' });
+      expect(within(menu).getByTestId('menu-checks-badge')).toHaveTextContent('3');
+      // The Orders entry's badge says what it counts, in its own colour.
+      const badge = screen.getByLabelText('To check: 3');
+      expect(badge.className).toContain('bg-purple-500');
+    });
+
+    it('has a translated menu label with nothing to check', async () => {
+      server.use(http.get('/api/v1/products/qc', () => HttpResponse.json([])));
+      viewport(true);
+      render(<Layout />);
+
+      expect(await screen.findByRole('button', { name: 'Open menu' })).toBeInTheDocument();
+      expect(screen.queryByTestId('menu-checks-badge')).toBeNull();
+    });
+  });
+
   describe('theme toggle', () => {
     it('has theme toggle button', async () => {
       render(<Layout />);

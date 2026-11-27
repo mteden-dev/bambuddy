@@ -5,11 +5,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { LoadedFilament } from '../../hooks/useFilamentMapping';
+import type { FilamentComparison, LoadedFilament } from '../../hooks/useFilamentMapping';
 import {
   mappingSwapsMaterial,
   perFileAmsMapping,
+  perFileForcedOverrides,
   perFileMappingKey,
+  rowsWaitingForColor,
 } from '../../components/PrintModal/perFileMapping';
 import type { FilamentReqsData } from '../../components/PrintModal/types';
 
@@ -83,5 +85,32 @@ describe('mappingSwapsMaterial', () => {
     expect(mappingSwapsMaterial(pla, [-1], LOADED)).toBe(false);
     expect(mappingSwapsMaterial(pla, [9], LOADED)).toBe(false);
     expect(mappingSwapsMaterial(pla, undefined, LOADED)).toBe(false);
+  });
+});
+
+describe('perFileForcedOverrides (fork)', () => {
+  const twoSlots = reqs({ slot_id: 1, type: 'PLA', color: '#000000' }, { slot_id: 2, type: 'PLA', color: '#FFFFFF' });
+
+  it('sends each hand pick as the picked tray’s filament, forced', () => {
+    expect(perFileForcedOverrides(twoSlots, LOADED, { 1: 2 })).toEqual([
+      { slot_id: 1, type: 'PETG', color: '#0000FF', color_name: '#0000FF', force_color_match: true },
+    ]);
+  });
+
+  it('sends nothing for a file nobody changed, nor for a tray it cannot see', () => {
+    expect(perFileForcedOverrides(twoSlots, LOADED, undefined)).toBeUndefined();
+    expect(perFileForcedOverrides(twoSlots, LOADED, {})).toBeUndefined();
+    expect(perFileForcedOverrides(twoSlots, LOADED, { 1: 9 })).toBeUndefined();
+  });
+});
+
+describe('rowsWaitingForColor (fork)', () => {
+  const row = (slot_id: number, status: 'match' | 'type_only' | 'mismatch') =>
+    ({ slot_id, status }) as unknown as FilamentComparison;
+
+  it('is the rows matched to another colour of the type, minus the exempt slots', () => {
+    const rows = [row(1, 'match'), row(2, 'type_only'), row(3, 'mismatch'), row(4, 'type_only')];
+    expect(rowsWaitingForColor(rows).map((r) => r.slot_id)).toEqual([2, 4]);
+    expect(rowsWaitingForColor(rows, new Set([4])).map((r) => r.slot_id)).toEqual([2]);
   });
 });

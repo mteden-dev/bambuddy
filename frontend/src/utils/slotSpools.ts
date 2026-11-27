@@ -19,6 +19,10 @@
  *
  * Whatever lights up, a slot with a roll in it can always be given a new roll
  * by hand (`canLoadSlotRoll`), so a missed swap never leaves it stuck.
+ *
+ * Nothing lights while the slot's assignment is not known (the assignments
+ * still loading, failed, or not readable for this user): "no spool" read from
+ * a missing list would offer to replace a roll that is being counted.
  */
 
 export type SlotSpoolState = 'new' | 'check' | null;
@@ -31,6 +35,25 @@ export const SLOT_SPOOL_ORIGIN = 'slot_quick';
 
 /** A slot spool with this little left is used up (the backend's RESTORABLE_MIN_GRAMS). */
 export const USED_UP_GRAMS = 5;
+
+/** The most a roll may hold (the backend's MAX_SLOT_SPOOL_GRAMS): 6500 is a typo for 650. */
+export const MAX_ROLL_GRAMS = 5000;
+
+/**
+ * Grams typed by hand, a decimal comma included (a Polish keyboard types one);
+ * null when blank or not a number.
+ */
+export function parseGrams(text: string): number | null {
+  const cleaned = text.trim().replace(/\s+/g, '').replace(',', '.');
+  if (cleaned === '' || !/^\d*\.?\d*$/.test(cleaned) || cleaned === '.') return null;
+  const value = Number(cleaned);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** Is this a believable amount of filament on a roll going into a slot (1 g to 5 kg)? */
+export function rollGramsValid(grams: number | null | undefined): grams is number {
+  return grams != null && Number.isFinite(grams) && grams >= 1 && grams <= MAX_ROLL_GRAMS;
+}
 
 /** Grams left on a spool, by its label and what the prints used. */
 export function spoolGramsLeft(spool: { label_weight?: number | null; weight_used?: number | null }): number {
@@ -61,13 +84,14 @@ export function slotSpoolState({
   /** Built-in inventory mode and the user may change it. */
   enabled: boolean;
   tray: TrayPresence | null | undefined;
-  hasAssignment: boolean;
+  /** Whether the slot holds a spool; null while that is not known. */
+  hasAssignment: boolean | null;
   isBambuSpool: boolean;
   hasPrompt: boolean;
   /** Grams left on the slot's slot spool; null when the slot holds none. */
   slotSpoolLeft?: number | null;
 }): SlotSpoolState {
-  if (!enabled) return null;
+  if (!enabled || hasAssignment === null) return null;
   if (hasAssignment) {
     if (hasPrompt && slotHasRoll(tray)) return 'check';
     if (slotSpoolLeft != null && slotSpoolLeft <= USED_UP_GRAMS && !isBambuSpool && slotHasRoll(tray)) return 'new';
@@ -90,10 +114,23 @@ export function canLoadSlotRoll({
   return enabled && !isBambuSpool && slotHasRoll(tray);
 }
 
-/** Ring drawn around a lit slot on the printer card. */
+/**
+ * Ring drawn around a slot with a new roll on the printer card. The card puts
+ * the expected, ran-out and active rings ahead of it, so it may not show.
+ */
 export function slotSpoolRingClass(state: SlotSpoolState): string {
   if (state === 'new') return 'ring-2 ring-sky-400 ring-offset-1 ring-offset-bambu-dark animate-pulse';
-  if (state === 'check') return 'ring-2 ring-amber-400 ring-offset-1 ring-offset-bambu-dark animate-pulse';
+  return '';
+}
+
+/**
+ * Frame drawn around a slot asking "same roll?". An outline, not a ring, so it
+ * shows next to whatever ring the slot has (the documented case is the active
+ * slot: a roll added after a runout during a print), and dashed violet, since
+ * amber already means "the slot the paused print expects".
+ */
+export function slotSpoolOutlineClass(state: SlotSpoolState): string {
+  if (state === 'check') return 'outline-2 outline-dashed outline-offset-2 outline-fuchsia-400';
   return '';
 }
 
@@ -104,7 +141,7 @@ export type SlotSpoolAmount =
 
 /** Can the dialog save with this amount? */
 export function slotSpoolAmountValid(amount: SlotSpoolAmount): boolean {
-  if (amount.kind === 'grams') return amount.grams != null && Number.isFinite(amount.grams) && amount.grams >= 0;
+  if (amount.kind === 'grams') return rollGramsValid(amount.grams);
   if (amount.kind === 'restore') return amount.spoolId != null;
   return true;
 }

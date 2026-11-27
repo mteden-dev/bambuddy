@@ -67,6 +67,7 @@ import type {
   ExternalFolderCreate,
   Archive,
   Permission,
+  VariantGroup,
 } from '../api/client';
 import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -104,6 +105,9 @@ import { VariantGroupListRow } from '../components/fileManager/VariantGroupListR
 import { VariantGroupColumnRow } from '../components/fileManager/VariantGroupColumnRow';
 import { draggedMemberIds, selectableMembers } from './fileManager/variantSelection';
 import { useBulkVariantPrint } from './fileManager/useBulkVariantPrint';
+import { useFolderInUrl } from './fileManager/useFolderInUrl';
+import { TOUCH_BUTTON, useCoarsePointer, usePhoneWidth } from './fileManager/useCoarsePointer';
+import { SelectionActionBar, type SelectionAction } from './fileManager/SelectionActionBar';
 import { invalidateAfterLibraryDelete } from './fileManager/invalidate';
 import { useVariantGroupActions } from '../components/fileManager/useVariantGroupActions';
 
@@ -1032,7 +1036,9 @@ function FolderActionsMenu({ folder, onDelete, onLink, onRename, onMove, onToggl
     <div
       ref={rootRef}
       className={`relative flex-shrink-0 flex items-center transition-opacity ${
-        revealOnHover && !menuAnchor ? 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : ''
+        revealOnHover && !menuAnchor
+          ? 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 any-pointer-coarse:opacity-100!'
+          : ''
       }`}
       data-folder-actions
       onClick={(e) => e.stopPropagation()}
@@ -1053,8 +1059,9 @@ function FolderActionsMenu({ folder, onDelete, onLink, onRename, onMove, onToggl
           const rect = e.currentTarget.getBoundingClientRect();
           setMenuAnchor({ x: rect.left, y: rect.bottom + 4 });
         }}
-        className="p-1 rounded hover:bg-bambu-dark-tertiary"
+        className={`p-1 rounded hover:bg-bambu-dark-tertiary ${TOUCH_BUTTON}`}
         title={t('common.actions')}
+        aria-label={t('common.actions')}
       >
         <MoreVertical className="w-3.5 h-3.5 text-bambu-gray" />
       </button>
@@ -1956,15 +1963,15 @@ export function FileManagerPage() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { hasPermission, hasAnyPermission, canModify, authEnabled } = useAuth();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  // Read folder ID from URL query parameter
-  const folderIdFromUrl = searchParams.get('folder');
-  const initialFolderId = folderIdFromUrl ? parseInt(folderIdFromUrl, 10) : null;
+  // Fork: the open folder is the URL's ?folder=, so opening one is a history
+  // step (Back goes up again), and reload and coming back keep it.
+  const { selectedFolderId, setSelectedFolderId } = useFolderInUrl(searchParams, setSearchParams);
+  const coarsePointer = useCoarsePointer();
 
   // State
-  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(initialFolderId);
   // Which top-level pseudo-view the sidebar shows when no specific folder is
   // selected: "internal" = files in Bambuddy's managed storage, "external" =
   // combined view across every linked external folder (#1621). Per-folder
@@ -2109,15 +2116,6 @@ export function FileManagerPage() {
     () => localStorage.getItem('library-show-modified') === 'true'
   );
 
-  // Update selectedFolderId when URL parameter changes (e.g., navigating from Project or Archive page)
-  useEffect(() => {
-    const folderParam = searchParams.get('folder');
-    if (folderParam) {
-      const newFolderId = parseInt(folderParam, 10);
-      setSelectedFolderId(newFolderId);
-    }
-  }, [searchParams]);
-
   // ?highlight=<file id> points at one file (the queue card's "View in File
   // Manager"). The link carries only the id: the folder is looked up here, so
   // a file moved since it was queued is still found. The folder's listing is
@@ -2139,7 +2137,7 @@ export function FileManagerPage() {
         if (cancelled || selectedFolderIdRef.current !== folderAtRequest) return;
         const requestedAt = Date.now();
         queryClient.invalidateQueries({ queryKey: ['library-files'] });
-        setSelectedFolderId(file.folder_id);
+        setSelectedFolderId(file.folder_id, { replace: true });
         setPendingHighlight({ fileId, folderId: file.folder_id, requestedAt });
       },
       () => {
@@ -2149,7 +2147,7 @@ export function FileManagerPage() {
     return () => {
       cancelled = true;
     };
-  }, [highlightParam, queryClient, showToast, t]);
+  }, [highlightParam, queryClient, showToast, t, setSelectedFolderId]);
 
   // Queries
   const { data: settings } = useUiSettings();
@@ -2435,7 +2433,7 @@ export function FileManagerPage() {
       queryClient.invalidateQueries({ queryKey: ['library-files'] });
       queryClient.invalidateQueries({ queryKey: ['library-stats'] });
       if (selectedFolderId === deleteConfirm?.id) {
-        setSelectedFolderId(null);
+        setSelectedFolderId(null, { replace: true });
       }
       setDeleteConfirm(null);
       showToast(t('fileManager.toast.folderDeleted'), 'success');
@@ -2472,6 +2470,27 @@ export function FileManagerPage() {
       setSelectedFiles([]);
     },
     onError: (error: Error) => showToast(error.message, 'error'),
+  });
+
+  // Fork: loose files join a group that is selected with them, one request
+  // per file, so a new printer's version needs no ungrouping.
+  const addToGroupMutation = useMutation({
+    mutationFn: async ({ groupId, fileIds }: { groupId: number; fileIds: number[] }) => {
+      let group: VariantGroup | null = null;
+      for (const id of fileIds) group = await api.addVariantGroupMember(groupId, id);
+      return group!;
+    },
+    onSuccess: (group, { fileIds }) => {
+      queryClient.invalidateQueries({ queryKey: ['library-files'] });
+      queryClient.invalidateQueries({ queryKey: ['variant-group'] });
+      showToast(t('fileManager.variants.addedToGroup', { count: fileIds.length, name: group.name }), 'success');
+      setSelectedFiles([]);
+    },
+    onError: (error: Error) => {
+      // Some may have gone in before the one that failed.
+      queryClient.invalidateQueries({ queryKey: ['library-files'] });
+      showToast(error.message, 'error');
+    },
   });
 
   const bulkDeleteMutation = useMutation({
@@ -2540,7 +2559,10 @@ export function FileManagerPage() {
   // Drops that would change nothing or that the server would refuse are not
   // accepted, so no request leaves for them.
   const folderDrag: FolderDragProps = {
-    canDrag: (folder) => !folder.is_external && (folder.can_rename ?? hasPermission('library:update_all')),
+    // Fork: not on a touch device, where a long-press drag fights scrolling;
+    // the folder menu's Move does the same there.
+    canDrag: (folder) =>
+      !coarsePointer && !folder.is_external && (folder.can_rename ?? hasPermission('library:update_all')),
     onDragStart: (folder, e) => {
       e.dataTransfer.setData(FOLDER_DRAG_TYPE, String(folder.id));
       e.dataTransfer.effectAllowed = 'move';
@@ -2704,6 +2726,7 @@ export function FileManagerPage() {
   const variantGroup = useVariantGroupActions({
     onPrintGroup: (row, groupMode) => void bulkPrint.printVariantGroup(row, groupMode),
     onFilesDeleted: (ids) => setSelectedFiles((prev) => prev.filter((id) => !ids.includes(id))),
+    listedFiles: files,
   });
 
   // In the columns view Select all adds the pane's files to what is ticked, so
@@ -2917,6 +2940,13 @@ export function FileManagerPage() {
   const currentSubfolders = folderPath.length > 0 ? folderPath[folderPath.length - 1].children : [];
   const hasSubfolderCards = viewMode !== 'columns' && currentSubfolders.length > 0;
   const showSubfolders = hasSubfolderCards && !columnsFilterActive;
+  // Fork: on a narrow phone the cards fold away while the folder has files;
+  // the user's own choice holds until another folder opens.
+  const narrowSubfolders = usePhoneWidth(480);
+  const [subfoldersOpenChoice, setSubfoldersOpen] = useState<{ folderId: number | null; open: boolean } | null>(null);
+  const subfoldersExpanded =
+    !narrowSubfolders ||
+    (subfoldersOpenChoice?.folderId === selectedFolderId ? subfoldersOpenChoice.open : (files?.length ?? 0) === 0);
   const subfolderItemProps = {
     onOpen: setSelectedFolderId,
     onDelete: (id: number) => setDeleteConfirm({ type: 'folder', id }),
@@ -3072,6 +3102,19 @@ export function FileManagerPage() {
       return next.length === prev.length ? prev : next;
     });
   }, [selectableFiles]);
+
+  // Fork: a ticked file deleted meanwhile (another device, the slicer inbox)
+  // leaves the selection once a fresh listing no longer has it, so the count
+  // is right and bulk actions never send a missing id. Not while a listing is
+  // still loading, which would read as everything gone.
+  const listingSettled = files !== undefined && !filesLoading && ![...columnFiles.values()].some((l) => l.loading);
+  useEffect(() => {
+    if (!listingSettled) return;
+    setSelectedFiles((prev) => {
+      const next = prev.filter((id) => selectableFiles.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [selectableFiles, listingSettled]);
 
   // "Combine to 3MF" is offered only when every selected file is an STL, so
   // the action never silently drops part of the selection. Resolved like the
@@ -3303,13 +3346,14 @@ export function FileManagerPage() {
           }
         } else if (selectedFolderId === null) {
           if (dir === 1 && folderColumns[0].items.length > 0) {
-            setSelectedFolderId(folderColumns[0].items[0].id);
+            setSelectedFolderId(folderColumns[0].items[0].id, { replace: true });
           }
         } else {
           const col = folderColumns[folderPath.length - 1];
           const idx = col ? col.items.findIndex((f) => f.id === selectedFolderId) : -1;
           const next = idx === -1 ? undefined : col.items[idx + dir];
-          if (next) setSelectedFolderId(next.id);
+          // Walking siblings with the arrows is not a history step each.
+          if (next) setSelectedFolderId(next.id, { replace: true });
           else if (dir === 1 && idx !== -1) {
             // Past the last folder the column's own files continue the list,
             // exactly as they read on screen: the only way a keyboard
@@ -3438,9 +3482,120 @@ export function FileManagerPage() {
     );
   };
 
+  // The selection's actions, drawn as the toolbar's buttons with a mouse and
+  // as the bottom bar on a touch device (fork).
+  const canUpdateFiles = hasAnyPermission('library:update_own', 'library:update_all');
+  const canDeleteFiles = hasAnyPermission('library:delete_own', 'library:delete_all');
+  // Fork: exactly one group selected with loose sliced files: they can join it.
+  const selectedGroupIds = [...new Set(selectedSlicedFiles.map((f) => f.variant_group_id).filter((id) => id != null))];
+  const looseSlicedFiles = selectedSlicedFiles.filter((f) => f.variant_group_id == null);
+  const addToGroupId = selectedGroupIds.length === 1 && looseSlicedFiles.length > 0 ? selectedGroupIds[0]! : null;
+  const selectionActions: SelectionAction[] = [];
+  if (previewSelection) {
+    selectionActions.push({
+      key: 'preview',
+      variant: 'secondary',
+      icon: <Eye className="w-4 h-4 sm:mr-1" />,
+      label: t('fileManager.preview.open'),
+      onClick: () => openPreview(previewSelection),
+      disabled: !hasPermission('library:read'),
+      title: !hasPermission('library:read') ? t('fileManager.noPermissionPreview') : undefined,
+    });
+  }
+  // Print used to disappear the moment a second sliced file was selected.
+  // Selecting several is now how you say "same job, different printers"
+  // (#671) — one queue item, whichever machine frees up first.
+  if (selectedSlicedFiles.length >= 1) {
+    selectionActions.push({
+      key: 'print',
+      variant: 'primary',
+      icon: <Printer className="w-4 h-4 sm:mr-1" />,
+      label: bulkPrint.printLabel,
+      onClick: bulkPrint.handleBulkPrint,
+      disabled: !hasPermission('queue:create'),
+      title: !hasPermission('queue:create') ? t('fileManager.noPermissionAddToQueue') : undefined,
+    });
+  }
+  if (selectedSlicedFiles.length >= 2 && !selectedSlicedFiles.some((f) => f.variant_group_id)) {
+    selectionActions.push({
+      key: 'group',
+      variant: 'secondary',
+      icon: groupAsVersionsMutation.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Layers className="w-4 h-4 sm:mr-1" />,
+      label: t('fileManager.variants.groupAction'),
+      onClick: () => groupAsVersionsMutation.mutate(selectedSlicedFiles.map((f) => f.id)),
+      disabled: groupAsVersionsMutation.isPending || !canUpdateFiles,
+      title: t('fileManager.variants.groupTooltip'),
+    });
+  }
+  if (addToGroupId !== null) {
+    selectionActions.push({
+      key: 'addToGroup',
+      variant: 'secondary',
+      icon: addToGroupMutation.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Layers className="w-4 h-4 sm:mr-1" />,
+      label: t('fileManager.variants.addToGroupAction'),
+      onClick: () => addToGroupMutation.mutate({ groupId: addToGroupId, fileIds: looseSlicedFiles.map((f) => f.id) }),
+      disabled: addToGroupMutation.isPending || !canUpdateFiles,
+      title: t('fileManager.variants.addToGroupTooltip'),
+    });
+  }
+  if (selectedStlFiles.length >= 1) {
+    selectionActions.push({
+      key: 'combine',
+      variant: 'secondary',
+      icon: <Combine className="w-4 h-4 sm:mr-1" />,
+      label: t('fileManager.combine.action'),
+      onClick: () => setShowCombineModal(true),
+      disabled: !hasPermission('library:upload'),
+      title: t('fileManager.combine.tooltip'),
+    });
+  }
+  selectionActions.push(
+    {
+      key: 'move',
+      variant: 'secondary',
+      icon: <MoveRight className="w-4 h-4 sm:mr-1" />,
+      label: t('common.move'),
+      onClick: () => setShowMoveModal(true),
+      disabled: !canUpdateFiles,
+      title: !canUpdateFiles ? t('fileManager.noPermissionMoveFiles') : undefined,
+    },
+    {
+      key: 'tags',
+      variant: 'secondary',
+      icon: <TagIcon className="w-4 h-4 sm:mr-1" />,
+      label: t('fileManager.tags.tagAction'),
+      onClick: () => setShowBulkTagsModal(true),
+      disabled: !canUpdateFiles,
+      title: !canUpdateFiles ? t('fileManager.tags.noPermission') : t('fileManager.tags.bulkTooltip'),
+    },
+    {
+      key: 'delete',
+      variant: 'danger',
+      icon: <Trash2 className="w-4 h-4 sm:mr-1" />,
+      label: t('common.delete'),
+      onClick: () => {
+        if (selectedFiles.length === 1) {
+          setDeleteConfirm({ type: 'file', id: selectedFiles[0] });
+        } else {
+          setDeleteConfirm({ type: 'bulk', id: 0, count: selectedFiles.length });
+        }
+      },
+      disabled: !canDeleteFiles,
+      title: !canDeleteFiles ? t('fileManager.noPermissionDeleteFiles') : undefined,
+    },
+    {
+      key: 'clear',
+      variant: 'secondary',
+      icon: <X className="w-4 h-4 sm:mr-1" />,
+      label: t('common.clear'),
+      onClick: handleDeselectAll,
+    },
+  );
+
   return (
     <div
-      className="p-4 md:p-8 min-h-[calc(100vh-64px)] lg:h-screen flex flex-col relative"
+      // Fork: the screen below the compact header (--app-top), not 100vh.
+      className="p-4 md:p-8 min-h-[calc(100dvh-var(--app-top,0px))] lg:h-[calc(100dvh-var(--app-top,0px))] flex flex-col relative"
       {...dragHandlers}
     >
       {/* Drag & Drop Overlay — page-wide file upload (#1510) */}
@@ -3870,7 +4025,7 @@ export function FileManagerPage() {
               Also over a folder that holds only subfolders, whose files a
               search reaches. */}
           {files && (files.length > 0 || hasSubfolderCards) && (
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 p-2 sm:p-3 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary sticky top-0 z-10 lg:static">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 p-2 sm:p-3 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary sticky top-[var(--app-top,0px)] z-10 lg:static">
               {/* Search */}
               <div className="relative w-full sm:w-auto sm:flex-1 sm:max-w-xs">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-bambu-gray" />
@@ -3998,7 +4153,9 @@ export function FileManagerPage() {
               pane empty: a file ticked in an intermediate column of the
               columns view still needs its count and actions (#3020). */}
           {(filteredAndSortedFiles.length > 0 || selectedFiles.length > 0) && (
-            <div className="flex flex-wrap items-center gap-2 mb-4 p-2 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary sticky top-[52px] z-10 lg:static">
+            // Fork: below the sticky search bar and the compact header; on a
+            // touch device the actions are in the bottom bar, so it scrolls away.
+            <div className={`flex flex-wrap items-center gap-2 mb-4 p-2 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary ${coarsePointer ? '' : 'sticky top-[calc(var(--app-top,0px)+52px)] z-10 lg:static'}`}>
               {/* Select all / Deselect all */}
               {allPaneFilesSelected ? (
                 <Button
@@ -4026,109 +4183,27 @@ export function FileManagerPage() {
                     {t('fileManager.selected', { count: selectedFiles.length })}
                   </span>
                   <div className="hidden sm:block flex-1" />
-                  <div className="w-full sm:w-auto flex flex-wrap items-center gap-2 mt-2 sm:mt-0">
-                    {previewSelection && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => openPreview(previewSelection)}
-                        disabled={!hasPermission('library:read')}
-                        title={!hasPermission('library:read') ? t('fileManager.noPermissionPreview') : undefined}
-                      >
-                        <Eye className="w-4 h-4 sm:mr-1" />
-                        <span className="hidden sm:inline">{t('fileManager.preview.open')}</span>
-                      </Button>
-                    )}
-                    {/* Print used to disappear the moment a second sliced file was
-                        selected. Selecting several is now how you say "same job,
-                        different printers" (#671) — one queue item, whichever
-                        machine frees up first. */}
-                    {selectedSlicedFiles.length >= 1 && (
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={bulkPrint.handleBulkPrint}
-                        disabled={!hasPermission('queue:create')}
-                        title={!hasPermission('queue:create') ? t('fileManager.noPermissionAddToQueue') : undefined}
-                      >
-                        <Printer className="w-4 h-4 sm:mr-1" />
-                        <span className="hidden sm:inline">
-                          {bulkPrint.printLabel}
-                        </span>
-                      </Button>
-                    )}
-                    {selectedSlicedFiles.length >= 2 && !selectedSlicedFiles.some(f => f.variant_group_id) && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => groupAsVersionsMutation.mutate(selectedSlicedFiles.map(f => f.id))}
-                        disabled={
-                          groupAsVersionsMutation.isPending
-                          || !hasAnyPermission('library:update_own', 'library:update_all')
-                        }
-                        title={t('fileManager.variants.groupTooltip')}
-                      >
-                        <Layers className="w-4 h-4 sm:mr-1" />
-                        <span className="hidden sm:inline">{t('fileManager.variants.groupAction')}</span>
-                      </Button>
-                    )}
-                    {selectedStlFiles.length >= 1 && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => setShowCombineModal(true)}
-                        disabled={!hasPermission('library:upload')}
-                        title={t('fileManager.combine.tooltip')}
-                      >
-                        <Combine className="w-4 h-4 sm:mr-1" />
-                        <span className="hidden sm:inline">{t('fileManager.combine.action')}</span>
-                      </Button>
-                    )}
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setShowMoveModal(true)}
-                      disabled={!hasAnyPermission('library:update_own', 'library:update_all')}
-                      title={!hasAnyPermission('library:update_own', 'library:update_all') ? t('fileManager.noPermissionMoveFiles') : undefined}
-                    >
-                      <MoveRight className="w-4 h-4 sm:mr-1" />
-                      <span className="hidden sm:inline">{t('common.move')}</span>
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setShowBulkTagsModal(true)}
-                      disabled={!hasAnyPermission('library:update_own', 'library:update_all')}
-                      title={!hasAnyPermission('library:update_own', 'library:update_all') ? t('fileManager.tags.noPermission') : t('fileManager.tags.bulkTooltip')}
-                    >
-                      <TagIcon className="w-4 h-4 sm:mr-1" />
-                      <span className="hidden sm:inline">{t('fileManager.tags.tagAction')}</span>
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      onClick={() => {
-                        if (selectedFiles.length === 1) {
-                          setDeleteConfirm({ type: 'file', id: selectedFiles[0] });
-                        } else {
-                          setDeleteConfirm({ type: 'bulk', id: 0, count: selectedFiles.length });
-                        }
-                      }}
-                      disabled={!hasAnyPermission('library:delete_own', 'library:delete_all')}
-                      title={!hasAnyPermission('library:delete_own', 'library:delete_all') ? t('fileManager.noPermissionDeleteFiles') : undefined}
-                    >
-                      <Trash2 className="w-4 h-4 sm:mr-1" />
-                      <span className="hidden sm:inline">{t('common.delete')}</span>
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={handleDeselectAll}
-                    >
-                      <X className="w-4 h-4 sm:mr-1" />
-                      <span className="hidden sm:inline">{t('common.clear')}</span>
-                    </Button>
-                  </div>
+                  {/* Fork: on a touch device the actions are a bar at the
+                      bottom of the screen (selectionActionBar). */}
+                  {!coarsePointer && (
+                    <div className="w-full sm:w-auto flex flex-wrap items-center gap-2 mt-2 sm:mt-0">
+                      {selectionActions.map((action) => (
+                        <Button
+                          key={action.key}
+                          variant={action.variant}
+                          size="sm"
+                          onClick={action.onClick}
+                          disabled={action.disabled}
+                          title={action.title}
+                        >
+                          {action.icon}
+                          {/* The print label says how the selection splits
+                              into jobs, so it shows at every width. */}
+                          <span className={action.key === 'print' ? 'ml-1 sm:ml-0' : 'hidden sm:inline'}>{action.label}</span>
+                        </Button>
+                      ))}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -4341,7 +4416,22 @@ export function FileManagerPage() {
             </div>
           ) : viewMode === 'grid' ? (
             <div className="flex-1 lg:overflow-y-auto">
-              {showSubfolders && (
+              {/* Fork: below 480px each card is a full row, so the folders
+                  fold into one line while the folder has files of its own. */}
+              {showSubfolders && narrowSubfolders && (
+                <button
+                  type="button"
+                  data-testid="subfolder-toggle"
+                  aria-expanded={subfoldersExpanded}
+                  onClick={() => setSubfoldersOpen({ folderId: selectedFolderId, open: !subfoldersExpanded })}
+                  className="w-full min-h-[44px] mb-2 flex items-center gap-2 px-3 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary text-sm text-white"
+                >
+                  <ChevronRightIcon className={`w-4 h-4 text-bambu-gray transition-transform ${subfoldersExpanded ? 'rotate-90' : ''}`} />
+                  <FolderOpen className="w-4 h-4 text-bambu-green" aria-hidden="true" />
+                  {t('folderCards.foldersToggle', { count: currentSubfolders.length })}
+                </button>
+              )}
+              {showSubfolders && subfoldersExpanded && (
                 <div
                   // One column fewer than the file cards: a folder card has its
                   // name beside the icon, not under a thumbnail.
@@ -4608,6 +4698,10 @@ export function FileManagerPage() {
         </div>
       </div>
 
+      {/* Fork: a touch device's selection actions, at the bottom of the screen
+          within thumb reach, with short labels and the rest in a menu. */}
+      {coarsePointer && selectedFiles.length > 0 && <SelectionActionBar actions={selectionActions} t={t} />}
+
       {/* Modals */}
       {showNewFolderModal && (
         <NewFolderModal
@@ -4748,6 +4842,29 @@ export function FileManagerPage() {
         </ConfirmModal>
       )}
 
+      {/* Fork: a bulk Print of several jobs says where it is, above its dialog. */}
+      {printFile && bulkPrint.chain && (
+        <div
+          role="status"
+          data-testid="bulk-print-step"
+          className="fixed top-2 left-1/2 -translate-x-1/2 z-[55] px-3 py-1 rounded-full bg-bambu-green text-white text-sm font-medium shadow-lg"
+        >
+          {t('fileManager.variants.jobStep', { step: bulkPrint.chain.step, total: bulkPrint.chain.total })}
+        </div>
+      )}
+      {bulkPrint.discardPending && (
+        <ConfirmModal
+          title={t('fileManager.variants.discardJobsTitle')}
+          message={t('fileManager.variants.discardJobsMessage', { count: bulkPrint.remainingJobs })}
+          confirmText={t('fileManager.variants.discardJobs')}
+          cancelText={t('fileManager.variants.nextJob')}
+          variant="warning"
+          dismissible={false}
+          onConfirm={bulkPrint.discardRest}
+          onCancel={bulkPrint.nextJob}
+        />
+      )}
+
       {/* Held back until the variant group has loaded. The modal reads its
           candidate list once, on mount, so opening before the group arrives
           would show a single-file print for a file that has alternatives. */}
@@ -4775,7 +4892,8 @@ export function FileManagerPage() {
             // onSuccess has just opened the next job of a bulk Print.
             if (bulkPrint.consumeAdvance()) return;
             setPrintFile(null);
-            bulkPrint.reset();
+            // Jobs left in a bulk Print are not dropped without asking (fork).
+            bulkPrint.closeJob();
             // Closed after a refusal: what went in leaves the selection, and the
             // rest reopens as that run (see separateJobsRun).
             if (separateJobsRun) {

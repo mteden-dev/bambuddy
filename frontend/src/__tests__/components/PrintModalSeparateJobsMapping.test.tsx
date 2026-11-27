@@ -167,7 +167,12 @@ describe('PrintModal: separate jobs on one printer, a mapping panel per file', (
     expect(posted[1]).not.toHaveProperty('skip_filament_check');
   });
 
-  it('marks a pick of another material as the user’s choice (#2799)', async () => {
+  it('sends a pick as the tray’s filament, forced, never skipping the check', async () => {
+    // Fork: the job may start hours later. A bare tray with
+    // skip_filament_check would print whatever is in it by then; with the
+    // tray's filament forced, the scheduler keeps the tray only while it holds
+    // that spool, and a pick of another material (#2799) is no longer taken
+    // for a mapping meant for another printer.
     const user = userEvent.setup();
     renderModal();
 
@@ -177,7 +182,12 @@ describe('PrintModal: separate jobs on one printer, a mapping panel per file', (
 
     await waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[1].ams_mapping).toEqual([2]);
-    expect(posted[1].skip_filament_check).toBe(true);
+    expect(posted[1].skip_filament_check).toBeUndefined();
+    expect(posted[1].filament_overrides).toEqual([
+      expect.objectContaining({ slot_id: 1, type: 'PETG', tray_info_idx: 'GFG02', force_color_match: true }),
+    ]);
+    // A file left alone carries neither.
+    expect(posted[0].filament_overrides).toBeUndefined();
   });
 
   it('shows no per-file panels with two printers selected', async () => {
@@ -285,5 +295,64 @@ describe('PrintModal: a reopened separate-jobs run', () => {
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0].library_file_id).toBe(12);
     expect(posted[0].ams_mapping).toEqual([1]);
+  });
+
+  it('says so when a file’s filaments cannot be read, instead of leaving it out', async () => {
+    // Fork: its job goes without a mapping, and the queue picks trays at start.
+    server.use(
+      http.get('/api/v1/library/files/:id/filament-requirements', ({ params }) =>
+        Number(params.id) === 12
+          ? HttpResponse.json({ detail: 'unreadable' }, { status: 500 })
+          : HttpResponse.json({ filaments: REQS[11].map((f) => ({ ...f, used_grams: 15, used_meters: 5 })) }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderModal();
+    await pickPrinterAndWait(user, 'A1 Test');
+    expect(await screen.findByTestId('per-file-unreadable')).toHaveTextContent(
+      'part-b.gcode.3mf: its filaments could not be read. The queue chooses its trays when it starts.',
+    );
+    expect(await panelHeader(PART_A)).toBeInTheDocument();
+  });
+
+  it('labels a row matched to another colour in words, not only by a triangle', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await pickPrinterAndWait(user, 'A1 Test');
+    await user.click(await panelHeader(PART_B));
+    expect(await screen.findByText('other color')).toBeInTheDocument();
+  });
+
+  describe('with "Always ask for the colors in the file" on (fork)', () => {
+    beforeEach(() => {
+      // Read from the full settings with auth off, from ui-flags without settings:read.
+      server.use(
+        http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'USD', require_file_colors: true })),
+        http.get('/api/v1/settings/ui-flags', () => HttpResponse.json({ require_file_colors: true })),
+      );
+    });
+
+    it('warns that a job on this printer would wait for a colour, and offers any printer of the model', async () => {
+      const user = userEvent.setup();
+      renderModal();
+      await pickPrinterAndWait(user, 'A1 Test');
+
+      const warning = await screen.findByTestId('color-wait-warning');
+      expect(warning).toHaveTextContent('A1 Test has no tray in these colors');
+      expect(warning).toHaveTextContent(/part-b\.gcode\.3mf: PLA .*#000000/);
+      expect(warning).not.toHaveTextContent('part-a.gcode.3mf');
+
+      await user.click(within(warning).getByRole('button', { name: 'Any A1' }));
+      await waitFor(() => expect(screen.queryByTestId('color-wait-warning')).not.toBeInTheDocument());
+    });
+
+    it('does not warn for a tray picked by hand, which goes as that tray’s filament', async () => {
+      const user = userEvent.setup();
+      renderModal();
+      await pickPrinterAndWait(user, 'A1 Test');
+      await screen.findByTestId('color-wait-warning');
+      await pickSlot(user, PART_B, /PLA Matte/);
+      await waitFor(() => expect(screen.queryByTestId('color-wait-warning')).not.toBeInTheDocument());
+    });
   });
 });

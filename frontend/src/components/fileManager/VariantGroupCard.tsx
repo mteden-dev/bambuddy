@@ -1,11 +1,13 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CalendarClock, ChevronDown, ChevronRight, Layers, MoreVertical, Printer, Trash2, Unlink } from 'lucide-react';
+import { CalendarClock, ChevronDown, ChevronRight, Layers, MoreVertical, Printer } from 'lucide-react';
 import { api } from '../../api/client';
 import { formatDate } from '../../utils/date';
 import { formatFileSize } from '../../utils/file';
 import type { GroupRow } from '../../pages/fileManager/variantGroups';
-import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
+import { ContextMenu } from '../ContextMenu';
+import { groupMenuItems } from './groupMenuItems';
+import { TOUCH_BUTTON } from '../../pages/fileManager/useCoarsePointer';
 import { VariantMemberLine } from './VariantMemberLine';
 import { VariantVersionsPopover } from './VariantVersionsPopover';
 import { VariantSelectionBox } from './VariantSelectionBox';
@@ -81,40 +83,7 @@ export function VariantGroupCard({
   const version = thumbnailVersions[first.id];
   const thumbUrl = api.getLibraryFileThumbnailUrl(first.id);
 
-  const menuItems: ContextMenuItem[] = [];
-  if (groupActions.hasPrintable(row)) {
-    menuItems.push({
-      label: t('fileManager.variants.print'),
-      icon: <Printer className="w-4 h-4 text-bambu-green" />,
-      onClick: () => groupActions.print(row),
-      disabled: !groupActions.canPrint(row),
-      title: !groupActions.canPrint(row) ? t('fileManager.noPermissionAddToQueue') : undefined,
-    });
-    menuItems.push({
-      label: t('fileManager.variants.printOn'),
-      icon: <Printer className="w-4 h-4" />,
-      onClick: () => groupActions.printOn(row),
-      disabled: !groupActions.canPrint(row),
-      title: !groupActions.canPrint(row) ? t('fileManager.noPermissionAddToQueue') : undefined,
-    });
-  }
-  menuItems.push(
-    {
-      label: t('fileManager.variants.ungroup'),
-      icon: <Unlink className="w-4 h-4" />,
-      onClick: () => groupActions.ungroup(row),
-      disabled: !groupActions.canUngroup(row),
-      title: !groupActions.canUngroup(row) ? t('fileManager.variants.noPermissionUngroup') : undefined,
-    },
-    {
-      label: t('fileManager.variants.deleteGroup'),
-      icon: <Trash2 className="w-4 h-4" />,
-      onClick: () => groupActions.deleteFiles(row),
-      danger: true,
-      disabled: !groupActions.canDeleteFiles(row),
-      title: !groupActions.canDeleteFiles(row) ? t('fileManager.variants.noPermissionDeleteGroup') : undefined,
-    },
-  );
+  const menuItems = groupMenuItems(row, groupActions, t);
 
   return (
     <div
@@ -194,13 +163,14 @@ export function VariantGroupCard({
               onOpenGroupChange(expanded ? null : row.id);
             }}
             onDoubleClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1 text-xs text-bambu-green hover:underline whitespace-nowrap"
+            // Fork: 44px tall on touch, where a miss selects the card.
+            className="inline-flex items-center gap-1 text-xs text-bambu-green hover:underline whitespace-nowrap any-pointer-coarse:min-h-[44px] any-pointer-coarse:pr-2"
           >
             {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
             {expanded ? t('fileManager.variants.hideVersions') : t('fileManager.variants.showVersions')}
           </button>
           <div
-            className="flex-shrink-0 transition-opacity can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+            className="flex-shrink-0 transition-opacity can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 any-pointer-coarse:opacity-100!"
             onClick={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
           >
@@ -212,7 +182,7 @@ export function VariantGroupCard({
                 const rect = e.currentTarget.getBoundingClientRect();
                 setMenuAnchor({ x: rect.left, y: rect.bottom + 4 });
               }}
-              className="p-1.5 rounded bg-bambu-dark-secondary/90 hover:bg-bambu-dark-tertiary"
+              className={`p-1.5 rounded bg-bambu-dark-secondary/90 hover:bg-bambu-dark-tertiary ${TOUCH_BUTTON}`}
             >
               <MoreVertical className="w-4 h-4 text-bambu-gray" />
             </button>
@@ -237,7 +207,7 @@ export function VariantGroupCard({
               <VariantMemberLine
                 key={m.id}
                 file={m}
-                groupId={row.id}
+                group={row}
                 memberActions={popoverMemberActions}
                 groupActions={groupActions}
                 highlighted={highlightedFileId === m.id}
@@ -252,7 +222,9 @@ export function VariantGroupCard({
           label={t('fileManager.variants.selectGroup', { name: row.name })}
           onToggle={() => onToggleSelect(row)}
           className={`absolute top-2 left-2 ${
-            selectedCount > 0 ? '' : 'border-white/30 bg-black/30 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+            selectedCount > 0
+              ? ''
+              : 'border-white/30 bg-black/30 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 any-pointer-coarse:opacity-100!'
           }`}
         />
       </div>

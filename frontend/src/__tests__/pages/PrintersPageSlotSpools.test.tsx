@@ -129,12 +129,20 @@ const rfidSpool = {
   tray_uuid: 'A1B2C3D4E5F60718293A4B5C6D7E8F90',
 };
 
-function setup({ spoolman = false, prompt = true, spool = slotSpool } = {}) {
+function setup({
+  spoolman = false,
+  prompt = true,
+  spool = slotSpool,
+  assignmentsFail = false,
+  sameCleared = true,
+  sameDelay = 0,
+  printerStatus = status as Record<string, unknown>,
+} = {}) {
   const sent: { method: string; path: string }[] = [];
   server.use(
     http.get('/api/v1/printers/', () => HttpResponse.json([mockPrinter])),
     http.get('/api/v1/queue/', () => HttpResponse.json([])),
-    http.get('/api/v1/printers/:id/status', () => HttpResponse.json(status)),
+    http.get('/api/v1/printers/:id/status', () => HttpResponse.json(printerStatus)),
     http.get('/api/v1/printers/:id/ams-labels', () => HttpResponse.json({})),
     http.get('/api/v1/spoolman/status', () =>
       HttpResponse.json({ enabled: spoolman, connected: spoolman, url: spoolman ? 'http://spoolman' : null }),
@@ -142,7 +150,7 @@ function setup({ spoolman = false, prompt = true, spool = slotSpool } = {}) {
     http.get('/api/v1/spoolman/inventory/slot-assignments/all', () => HttpResponse.json([])),
     http.get('/api/v1/spoolman/inventory/spools', () => HttpResponse.json([])),
     http.get('/api/v1/inventory/assignments', () =>
-      HttpResponse.json([
+      assignmentsFail ? HttpResponse.json({ detail: 'boom' }, { status: 500 }) : HttpResponse.json([
         {
           id: 1,
           spool_id: 77,
@@ -180,9 +188,10 @@ function setup({ spoolman = false, prompt = true, spool = slotSpool } = {}) {
       ),
     ),
     http.get('/api/v1/slot-spools/restorable', () => HttpResponse.json([])),
-    http.post('/api/v1/slot-spools/prompts/:pid/:aid/:tid/same', ({ request }) => {
+    http.post('/api/v1/slot-spools/prompts/:pid/:aid/:tid/same', async ({ request }) => {
       sent.push({ method: 'POST', path: new URL(request.url).pathname });
-      return HttpResponse.json({ status: 'ok', cleared: true });
+      if (sameDelay) await new Promise((r) => setTimeout(r, sameDelay));
+      return HttpResponse.json({ status: 'ok', cleared: sameCleared });
     }),
   );
   render(<PrintersPage />);
@@ -246,7 +255,7 @@ describe('printer card slot spools', () => {
     await user.click(await hover(all[1], 'Correct the amount left'));
 
     expect(await screen.findByText('How many grams of filament are left on this roll?')).toBeInTheDocument();
-    expect(screen.getByLabelText('Grams on the roll')).toHaveValue(650);
+    expect(screen.getByLabelText('Grams on the roll')).toHaveValue('650');
   });
 
   it('a counted slot offers a new roll even when the swap went unseen', async () => {
@@ -280,7 +289,7 @@ describe('printer card slot spools', () => {
 
     await user.click(screen.getByRole('button', { name: 'Correct the amount left' }));
 
-    expect(await screen.findByLabelText('Grams on the roll')).toHaveValue(0);
+    expect(await screen.findByLabelText('Grams on the roll')).toHaveValue('0');
   });
 
   it('lights nothing in Spoolman mode', async () => {
@@ -289,5 +298,139 @@ describe('printer card slot spools', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByTestId('slot-spool-badge-new')).toBeNull();
     expect(screen.queryByTestId('slot-spool-badge-check')).toBeNull();
+  });
+  it('lights nothing and offers no new roll while the slot rows are unknown', async () => {
+    // The assignments failed to load: a counted roll would read as "no spool",
+    // and "New roll → full 1 kg" would archive it and restart at 1000 g.
+    setup({ assignmentsFail: true });
+    const all = await slots();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId('slot-spool-badge-new')).toBeNull();
+    expect(screen.queryByTestId('slot-spool-badge-check')).toBeNull();
+    await hover(all[1], 'Re-read RFID');
+    expect(screen.queryByRole('button', { name: 'New roll…' })).toBeNull();
+    expect(screen.queryByTestId('slot-spool-asks')).toBeNull();
+  });
+
+  it('says so when the slot changed before "Same roll" arrived', async () => {
+    const user = userEvent.setup();
+    setup({ sameCleared: false });
+    const all = await slots();
+    await waitFor(() => expect(screen.getAllByTestId('slot-spool-badge-check')).toHaveLength(1));
+
+    await user.click(await hover(all[1], 'Same roll'));
+
+    expect(await screen.findByText(/The slot has changed meanwhile/)).toBeInTheDocument();
+    expect(screen.queryByText('Still counting on the same roll')).toBeNull();
+  });
+
+  it('holds every action while "Same roll" is on its way', async () => {
+    const user = userEvent.setup();
+    setup({ sameDelay: 300 });
+    const all = await slots();
+    await waitFor(() => expect(screen.getAllByTestId('slot-spool-badge-check')).toHaveLength(1));
+
+    await user.click(await hover(all[1], 'Same roll'));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New roll…' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Correct the amount left' })).toBeDisabled();
+  });
+
+  it('closes the slot card when an action opens a dialog', async () => {
+    // The card is portaled above the dialogs and would cover the grams field.
+    const user = userEvent.setup();
+    setup();
+    const all = await slots();
+
+    await user.click(await hover(all[1], 'Correct the amount left'));
+
+    expect(await screen.findByLabelText('Grams on the roll')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Same roll' })).toBeNull();
+  });
+
+  it('names what the slots ask under the AMS row, and a tap answers it', async () => {
+    const user = userEvent.setup();
+    const sent = setup();
+    await slots();
+    const asks = await screen.findByTestId('slot-spool-asks');
+    expect(asks).toHaveTextContent('A1: new roll');
+    expect(asks).toHaveTextContent('A2: same roll?');
+
+    await user.click(screen.getByRole('button', { name: 'A2: same roll?' }));
+    expect(await screen.findByText('Same roll in A2?')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Same roll' }));
+
+    await waitFor(() =>
+      expect(sent).toEqual([{ method: 'POST', path: `/api/v1/slot-spools/prompts/${PRINTER_ID}/0/1/same` }]),
+    );
+    await waitFor(() => expect(screen.queryByText('Same roll in A2?')).toBeNull());
+  });
+
+  it('a tap on "new roll" in that line opens the slot dialog', async () => {
+    const user = userEvent.setup();
+    setup();
+    await slots();
+    await user.click(await screen.findByRole('button', { name: 'A1: new roll' }));
+    expect(await screen.findByText('Roll in this slot')).toBeInTheDocument();
+  });
+
+  it('frames "same roll?" with its own outline, also on the active slot', async () => {
+    setup({ printerStatus: { ...status, tray_now: 1 } });
+    await slots();
+    const badge = await screen.findByTestId('slot-spool-badge-check');
+    const tile = badge.parentElement as HTMLElement;
+    expect(tile.className).toContain('ring-bambu-green');
+    expect(tile.className).toContain('outline-dashed');
+  });
+
+  it('says why a Bambu RFID roll is not a slot spool', async () => {
+    setup();
+    const all = await slots();
+    await hover(all[2], 'Re-read RFID');
+    expect(screen.getByTestId('slot-spool-note-rfid')).toBeInTheDocument();
+  });
+
+  it('says slot spools do not apply in Spoolman mode', async () => {
+    setup({ spoolman: true });
+    const all = await slots();
+    await hover(all[1], 'Re-read RFID');
+    expect(await screen.findByTestId('slot-spool-note-spoolman')).toBeInTheDocument();
+  });
+
+  it('warns that correcting a slot the running print feeds counts the print twice', async () => {
+    const user = userEvent.setup();
+    setup({ printerStatus: { ...status, state: 'RUNNING', tray_now: 1, ams_mapping: [1] } });
+    const all = await slots();
+
+    await user.click(await hover(all[1], 'Correct the amount left'));
+
+    expect(await screen.findByTestId('slot-spool-adjust-feeds-print')).toBeInTheDocument();
+  });
+
+  it('does not warn when the printer is idle', async () => {
+    const user = userEvent.setup();
+    setup();
+    const all = await slots();
+    await user.click(await hover(all[1], 'Correct the amount left'));
+    await screen.findByLabelText('Grams on the roll');
+    expect(screen.queryByTestId('slot-spool-adjust-feeds-print')).toBeNull();
+  });
+
+  it('takes a corrected amount with a decimal comma and refuses more than 5 kg', async () => {
+    const user = userEvent.setup();
+    setup();
+    const all = await slots();
+    await user.click(await hover(all[1], 'Correct the amount left'));
+    const input = await screen.findByLabelText('Grams on the roll');
+
+    await user.clear(input);
+    await user.type(input, '6500');
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter 0 to 5000 g.');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    await user.clear(input);
+    await user.type(input, '412,5');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

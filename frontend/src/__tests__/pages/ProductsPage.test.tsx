@@ -3,7 +3,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
@@ -32,6 +32,21 @@ describe('ProductsPage', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Products' })).toBeInTheDocument();
     expect(await screen.findByText('No products yet')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Orders from Base' })).toBeNull();
+  });
+
+  it('reads the products again when the app says a plan was made elsewhere', async () => {
+    let reads = 0;
+    server.use(
+      http.get('/api/v1/products/', () => {
+        reads += 1;
+        return HttpResponse.json([]);
+      }),
+    );
+    render(<ProductsPage />);
+    await screen.findByText('No products yet');
+    const before = reads;
+    window.dispatchEvent(new CustomEvent('bambuddy:products-replanned', { detail: { product_ids: [4] } }));
+    await waitFor(() => expect(reads).toBeGreaterThan(before));
   });
 });
 

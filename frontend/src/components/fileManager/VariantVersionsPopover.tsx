@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
+import { TOUCH_BUTTON } from '../../pages/fileManager/useCoarsePointer';
+import { useModalBehavior } from '../../hooks/useModalBehavior';
 
 const PHONE_BREAKPOINT = 640;
 const MIN_WIDTH = 340;
@@ -137,6 +139,15 @@ export function VariantVersionsPopover({
     first?.focus({ preventScroll: true });
   }, [ready]);
 
+  // Fork: Escape through the modal stack (one layer at a time), and on a
+  // phone the sheet is a history step, so Back (or the swipe) closes it
+  // instead of leaving the page. Focus and Tab are handled here.
+  useModalBehavior(() => close(true), panelRef, {
+    backCloses: phone,
+    onBack: () => close(false),
+    manageFocus: false,
+  });
+
   // A sheet covers the page, so the page does not scroll behind it.
   useEffect(() => {
     if (!phone) return;
@@ -163,13 +174,8 @@ export function VariantVersionsPopover({
       close(false);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        // A version's menu is open: Escape closes that menu (it listens
-        // itself), the popover stays.
-        if (panelRef.current?.querySelector('[data-context-menu]')) return;
-        close(true);
-        return;
-      }
+      // Escape goes through the modal stack, which leaves it to an open
+      // version menu first.
       if (event.key !== 'Tab') return;
       const panel = panelRef.current;
       if (!panel) return;
@@ -230,6 +236,7 @@ export function VariantVersionsPopover({
         ref={panelRef}
         id={id}
         role="dialog"
+        aria-modal={phone || undefined}
         aria-label={t('fileManager.variants.versionsOf', { name })}
         data-testid={phone ? 'variant-versions-sheet' : 'variant-versions-popover'}
         style={
@@ -259,7 +266,7 @@ export function VariantVersionsPopover({
               type="button"
               aria-label={t('common.close')}
               onClick={() => close(true)}
-              className="p-1.5 rounded flex-shrink-0 text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary"
+              className={`p-1.5 rounded flex-shrink-0 text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary ${TOUCH_BUTTON}`}
             >
               <X className="w-4 h-4" />
             </button>

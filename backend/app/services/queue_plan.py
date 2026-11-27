@@ -11,7 +11,8 @@ is the order a printer is to print them in. Applying the plan does two things:
 - that alone does not keep a job the user left alone where the plan shows it
   when the plan changed when the printers free up: a printer whose lane now
   ends sooner takes the next job, wherever the plan put it. Replaying the plan
-  finds those jobs, and they are reserved for their lane's printer too.
+  finds those jobs, and they are reserved for their lane's printer too,
+  except the ones the product planner holds softly: they keep its hold.
 
 Replayed from the printers' live state, the forecast then puts every job back
 where the plan has it, as long as prints take as long as their files say.
@@ -53,7 +54,7 @@ class PlanError(Exception):
 
 @dataclass
 class PlanResult:
-    # Reserved now, for the printer the plan put them on.
+    # Held as the user's now, for the printer the plan put them on.
     reserved: list[int]
     # On a lane of the plan but forecast on another printer (or none) once applied.
     moved_elsewhere: list[int]
@@ -164,9 +165,12 @@ async def apply_plan(
         item.position = position[item.id]
 
     # Hold, one at a time and first in the order first (holding one can put
-    # the next back), each job the replay would hand another printer.
+    # the next back), each job the replay would hand another printer. Not one
+    # the product planner holds softly and the user left alone: it may still
+    # give way, and holding it as the user's would make it firm.
     schedulable = sorted(inputs.schedulable, key=lambda job: position[job.id])
-    on_timeline = {job.id for job in schedulable}
+    soft_held = {item_id for item_id, r in inputs.reservations.items() if r.soft}
+    holdable = {job.id for job in schedulable if job.id not in soft_held}
     for _ in range(len(on_lane)):
         placed = {
             p.item_id: p.printer_id for p in place_jobs(schedulable, inputs.printers, inputs.now, inputs.ready_after)[0]
@@ -174,7 +178,7 @@ async def apply_plan(
         jumped = [
             item_id
             for item_id, printer_id in on_lane.items()
-            if item_id in on_timeline
+            if item_id in holdable
             and item_id not in to_reserve
             and placed.get(item_id) != printer_id
             and inputs.jobs[item_id].printer_id is None

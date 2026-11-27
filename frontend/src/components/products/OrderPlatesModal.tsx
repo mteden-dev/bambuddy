@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ImageOff, Loader2, Printer, X } from 'lucide-react';
@@ -7,14 +7,17 @@ import type { BaseOrder, BaseOrderPlate, BaseOrderPlateFilament } from '../../ap
 import { Card } from '../Card';
 import { Button } from '../Button';
 import { useToast } from '../../contexts/ToastContext';
+import { useModalBehavior } from '../../hooks/useModalBehavior';
 import { useUiSettings } from '../../hooks/useUiSettings';
-import { formatDateTime, formatDuration, formatTimeOnly, parseUTCDate } from '../../utils/date';
+import { formatDuration } from '../../utils/date';
 import type { TimeFormat } from '../../utils/date';
+import { shortWhen as when } from '../../utils/baseOrders';
+import { PlateTime } from './PlateTime';
 
-const TOUCH = 'pointer-coarse:min-h-11!';
+const TOUCH = 'pointer-coarse:min-h-[44px]!';
 // 16 px on a phone: a smaller select makes iOS zoom in on focus.
 const selectClass =
-  'w-full sm:w-64 px-2 py-2 pointer-coarse:min-h-11 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-base sm:text-sm focus:border-bambu-green focus:outline-none disabled:opacity-60';
+  'w-full sm:w-64 px-2 py-2 pointer-coarse:min-h-[44px] bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-base sm:text-sm focus:border-bambu-green focus:outline-none disabled:opacity-60';
 
 interface OrderPlatesModalProps {
   order: BaseOrder;
@@ -26,14 +29,6 @@ interface OrderPlatesModalProps {
 /** "lid_x2" from "lid_x2.gcode.3mf". */
 function shortName(filename: string | null): string {
   return (filename ?? '').replace(/(\.gcode)?\.3mf$|\.gcode$/i, '') || '?';
-}
-
-/** A time today as "14:10", another day with its weekday. */
-function when(value: string | null, timeFormat: TimeFormat): string {
-  const date = parseUTCDate(value);
-  if (!date) return '';
-  if (date.toDateString() === new Date().toDateString()) return formatTimeOnly(date, timeFormat);
-  return formatDateTime(value, timeFormat, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 function FilamentLine({ filament }: { filament: BaseOrderPlateFilament }) {
@@ -124,6 +119,7 @@ function PlateCard({ plate, orderLabel, canAct, saving, savingThis, timeFormat, 
             <Printer aria-hidden="true" className="w-3.5 h-3.5 shrink-0" />
             <span className="break-words">{where}</span>
           </div>
+          <PlateTime plate={plate} />
           {plate.filament.length > 0 && (
             <ul className="space-y-0.5">
               {plate.filament.map((filament, index) => (
@@ -214,21 +210,19 @@ export function OrderPlatesModal({ order, canAct, onClose }: OrderPlatesModalPro
     onError: (e: Error) => showToast(e.message, 'error'),
   });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // A sheet on a phone: Back closes it.
+  const overlayRef = useRef<HTMLDivElement>(null);
+  useModalBehavior(onClose, overlayRef, { backCloses: 'narrow' });
 
   return (
     <div
+      ref={overlayRef}
       className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center sm:p-4"
       onClick={onClose}
     >
       <Card
-        className="w-full sm:max-w-2xl max-h-[92dvh] flex flex-col rounded-b-none sm:rounded-b-xl"
+        tabIndex={-1}
+        className="outline-none w-full sm:max-w-2xl max-h-[92dvh] flex flex-col rounded-b-none sm:rounded-b-xl"
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -245,7 +239,7 @@ export function OrderPlatesModal({ order, canAct, onClose }: OrderPlatesModalPro
             type="button"
             onClick={onClose}
             aria-label={t('baseSync.plates.close')}
-            className="p-2 -m-2 text-bambu-gray hover:text-white pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center justify-center"
+            className="p-2 -m-2 text-bambu-gray hover:text-white pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px] flex items-center justify-center"
           >
             <X className="w-5 h-5" />
           </button>
@@ -286,7 +280,9 @@ export function OrderPlatesModal({ order, canAct, onClose }: OrderPlatesModalPro
           )}
         </div>
 
-        <div className="p-4 border-t border-bambu-dark-tertiary flex justify-end pb-[max(1rem,env(safe-area-inset-bottom))]">
+        {/* A sheet on a touch phone: a fixed bottom padding keeps the button off the home-indicator
+            zone (env(safe-area-inset-bottom) is 0 without viewport-fit=cover). */}
+        <div className="p-4 border-t border-bambu-dark-tertiary flex justify-end max-sm:any-pointer-coarse:pb-8">
           <Button className={`${TOUCH} w-full sm:w-auto`} onClick={onClose}>
             {t('baseSync.plates.done')}
           </Button>

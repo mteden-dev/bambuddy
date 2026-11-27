@@ -95,6 +95,10 @@ export interface PrintModalProps {
   /** Called after each refusal in separate jobs with what is in the queue so
    *  far, so the opener can resume the run if the dialog is closed. */
   onSeparateJobsProgress?: (progress: SeparateJobsProgress) => void;
+  /** Fork: the OrcaSlicer import dialog's decision id, sent with every job
+   *  this dialog creates, so the server refuses another device's second job
+   *  for the same upload (octoprint_compat.claim_slicer_upload). */
+  slicerInboxClaim?: string;
 }
 
 /**

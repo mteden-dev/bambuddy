@@ -48,8 +48,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import httpx
 from sqlalchemy import select
@@ -59,6 +61,9 @@ from backend.app.core.db_dialect import upsert_setting
 from backend.app.models.base_sync import BaseOrder, ProductSku
 from backend.app.models.products import ProductOrder
 from backend.app.models.settings import Settings
+
+if TYPE_CHECKING:
+    from backend.app.services.products import PassOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -638,6 +643,8 @@ class SyncResult:
     packed: int = 0
     replanned: list[int] = field(default_factory=list)
     unmapped: int = 0
+    # Products to tell the clients about once committed (``products.PassOutcome.changed_ids``).
+    changed_products: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -650,6 +657,20 @@ class SyncState:
 
 state = SyncState()
 _lock = asyncio.Lock()
+# One lock per Base order: saves on one order (send, draft, withdraw, take
+# back) wait for each other, so each reads what the one before committed.
+# ``accept`` writes on hand as a difference from the stored total; two saves
+# reading the same total would put the pieces in twice. One backend process.
+_order_locks: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
+
+
+def order_lock(order_id: int) -> asyncio.Lock:
+    """The lock of one Base order; hold it from reading the order to the commit."""
+    lock = _order_locks.get(order_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _order_locks[order_id] = lock
+    return lock
 
 
 def _source_key(order: OrderData) -> str:
@@ -684,8 +705,8 @@ async def read_ship_dates(client: BaseClient, rows: list[BaseOrder]) -> set[int]
     return dated
 
 
-async def replan_products(db: AsyncSession, product_ids: set[int], config: BaseConfig) -> list[int]:
-    """Plan each product again, as the system (all printers); returns them, sorted. The caller commits.
+async def replan_products(db: AsyncSession, product_ids: set[int], config: BaseConfig) -> PassOutcome | None:
+    """Plan each product again, as the system (all printers); None when there are none. The caller commits.
 
     One pass, the most urgent first, with the products behind them in the
     queue planned again too (see ``products.replan_pass``).
@@ -693,11 +714,10 @@ async def replan_products(db: AsyncSession, product_ids: set[int], config: BaseC
     from backend.app.services import products as product_service
 
     if not product_ids:
-        return []
-    await product_service.replan_pass(
+        return None
+    return await product_service.replan_pass(
         db, product_ids, actor_id=None, manual_start=config.manual_start, printer_ids=None
     )
-    return sorted(product_ids)
 
 
 async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult:
@@ -787,7 +807,9 @@ async def sync(db: AsyncSession, client: BaseClient | None = None) -> SyncResult
     changed |= await close_packed_orders(db)
     result.unmapped = len(unmapped_lines(list(tracked.values()), skus))
     if changed:
-        result.replanned = await replan_products(db, changed, config)
+        done = await replan_products(db, changed, config)
+        result.replanned = sorted(changed)
+        result.changed_products = done.changed_ids if done is not None else []
     return result
 
 
@@ -1036,6 +1058,9 @@ async def run_once() -> SyncResult | None:
                 await db.commit()
             if result.replanned:
                 logger.info("[BASE] Replanned products %s", result.replanned)
+            from backend.app.services.products import announce_replanned
+
+            await announce_replanned(result.changed_products)
             state.last_ok_at = state.last_run_at
             state.last_error = None
             state.last_result = result

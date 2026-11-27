@@ -187,6 +187,8 @@ class TestWhatItExposes:
             "hide_builtin_filament_presets",
             "ams_color_palette",
             "slicer_inbox_manual_start",
+            # Fork: the print dialog warns of a job that would wait for a colour.
+            "require_file_colors",
             "has_gcode_snippets",
         }
 
