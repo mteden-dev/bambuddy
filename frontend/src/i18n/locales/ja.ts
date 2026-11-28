@@ -9771,6 +9771,7 @@ export default {
     },
     sectionLate: '{{n}}件期限超過',
     partsApply: '適用',
+    partsApplied: '適用しました',
     partsBaseChanged: 'Baseで注文が変更されました。',
     partsReload: '再読み込み',
     partsHintAccepted: '手元にあるものを選んで「適用」を押してください。変更のたびに計画が再計算されます。',

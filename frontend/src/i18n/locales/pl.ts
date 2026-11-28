@@ -9911,6 +9911,7 @@ export default {
     },
     sectionLate: '{{n}} po terminie',
     partsApply: 'Zastosuj',
+    partsApplied: 'Zastosowano',
     partsBaseChanged: 'Zamówienie zmieniło się w Base.',
     partsReload: 'Wczytaj ponownie',
     partsHintAccepted: 'Zaznacz, co już masz, i naciśnij Zastosuj: każda zmiana przelicza plan.',

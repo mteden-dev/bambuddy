@@ -9758,6 +9758,7 @@ export default {
     },
     sectionLate: '{{n}} en retard',
     partsApply: 'Appliquer',
+    partsApplied: 'Appliqué',
     partsBaseChanged: 'La commande a changé dans Base.',
     partsReload: 'Recharger',
     partsHintAccepted: 'Indiquez ce que vous avez déjà, puis appuyez sur Appliquer : chaque changement recalcule le plan.',

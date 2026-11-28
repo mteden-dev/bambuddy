@@ -9755,6 +9755,7 @@ export default {
     },
     sectionLate: '{{n}} 个逾期',
     partsApply: '应用',
+    partsApplied: '已应用',
     partsBaseChanged: '该订单在 Base 中已变更。',
     partsReload: '重新加载',
     partsHintAccepted: '标记你已有的部分，然后点击应用：每次更改都会重新计算规划。',

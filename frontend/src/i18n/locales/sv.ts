@@ -9854,6 +9854,7 @@ errors: {
     },
     sectionLate: '{{n}} försenade',
     partsApply: 'Verkställ',
+    partsApplied: 'Verkställt',
     partsBaseChanged: 'Ordern har ändrats i Base.',
     partsReload: 'Läs in igen',
     partsHintAccepted: 'Markera det du redan har och tryck på Verkställ: varje ändring räknar om planen.',

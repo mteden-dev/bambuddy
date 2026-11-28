@@ -9823,6 +9823,7 @@ export default {
     },
     sectionLate: '{{n}} te laat',
     partsApply: 'Toepassen',
+    partsApplied: 'Toegepast',
     partsBaseChanged: 'De bestelling is gewijzigd in Base.',
     partsReload: 'Opnieuw laden',
     partsHintAccepted: 'Markeer wat je al hebt en druk op Toepassen: elke wijziging berekent het plan opnieuw.',

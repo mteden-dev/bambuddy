@@ -785,6 +785,96 @@ describe('BaseOrdersView', () => {
       expect(accepted[1]).toEqual({ id: 5001, body: { products: [{ product_id: 4, units: 2, have: [] }] } });
     });
 
+    it('one Apply under all the products sends every change at once and goes until the next change', async () => {
+      const HOLDER = {
+        ...PRODUCT,
+        id: 6,
+        name: 'Holder 9x19',
+        parts: [{ id: 61, name: 'Tray', quantity: 1, matched: true, finish_minutes: 0 }],
+        stock: [],
+      };
+      server.use(
+        http.get('/api/v1/products/:id', ({ params }) => HttpResponse.json(Number(params.id) === 6 ? HOLDER : PRODUCT)),
+      );
+      orders = [
+        {
+          ...ORDER,
+          state: 'accepted',
+          lines: [
+            LINE,
+            { ...LINE, sku: 'SKU-HOLDER', name: 'Holder', quantity: 1, product_id: 6, product_name: 'Holder 9x19' },
+          ],
+          progress: [IN_PRODUCTION],
+        },
+      ];
+      const user = userEvent.setup();
+      render(<BaseOrdersView hasPermission={allowAll} />);
+      await user.click(await screen.findByRole('button', { name: 'Parts' }));
+      const box = await screen.findByRole('radiogroup', { name: 'Finished 9mm 100 Black on hand' });
+      const holder = await screen.findByRole('radiogroup', { name: 'Finished Holder 9x19 on hand' });
+      await user.click(within(box).getByRole('radio', { name: '1' }));
+      await user.click(within(holder).getByRole('radio', { name: '1' }));
+      expect(screen.getAllByRole('button', { name: 'Apply' })).toHaveLength(1);
+
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      await waitFor(() => expect(accepted).toHaveLength(1));
+      expect(accepted[0]).toEqual({
+        id: 5001,
+        body: {
+          products: [
+            { product_id: 4, units: 1, have: [] },
+            { product_id: 6, units: 0, have: [] },
+          ],
+        },
+      });
+      // Done at once, though the list still holds the old order: nothing to press again.
+      expect(await screen.findByText('Applied')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+
+      // Changed again in the same panel: Apply comes back.
+      await user.click(within(holder).getByRole('radio', { name: '0' }));
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
+      expect(screen.queryByText('Applied')).not.toBeInTheDocument();
+      // ...and goes when it is back to what was applied.
+      await user.click(within(holder).getByRole('radio', { name: '1' }));
+      expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+
+      // One Undo takes back both products in one call.
+      await user.click(screen.getByRole('button', { name: 'Undo' }));
+      await waitFor(() => expect(accepted).toHaveLength(2));
+      expect(accepted[1]).toEqual({
+        id: 5001,
+        body: {
+          products: [
+            { product_id: 4, units: 2, have: [] },
+            { product_id: 6, units: 1, have: [] },
+          ],
+        },
+      });
+      expect(within(box).getByRole('radio', { name: '0' })).toBeChecked();
+      expect(within(holder).getByRole('radio', { name: '0' })).toBeChecked();
+      expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+    });
+
+    it('a failed Apply keeps the change and its Apply', async () => {
+      orders = [{ ...ORDER, state: 'accepted', progress: [IN_PRODUCTION] }];
+      server.use(
+        http.post('/api/v1/base-sync/orders/:id/accept', () =>
+          HttpResponse.json({ detail: 'The order is packed in Base' }, { status: 409 }),
+        ),
+      );
+      const user = userEvent.setup();
+      render(<BaseOrdersView hasPermission={allowAll} />);
+      await user.click(await screen.findByRole('button', { name: 'Parts' }));
+      const lid = await screen.findByRole('radiogroup', { name: 'Extra Lid of 9mm 100 Black on hand' });
+      await user.click(within(lid).getByRole('radio', { name: '1' }));
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      expect(await screen.findByText(/packed in Base/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+      expect(within(lid).getByRole('radio', { name: '1' })).toBeChecked();
+      expect(screen.queryByText('Applied')).not.toBeInTheDocument();
+    });
+
     it('follows a change in Base under an untouched panel, and asks under a changed one', async () => {
       orders = [{ ...ORDER, state: 'accepted', progress: [IN_PRODUCTION] }];
       server.use(

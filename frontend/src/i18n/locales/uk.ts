@@ -9899,6 +9899,7 @@ export default {
     },
     sectionLate: 'із запізненням: {{n}}',
     partsApply: 'Застосувати',
+    partsApplied: 'Застосовано',
     partsBaseChanged: 'Замовлення змінилося в Base.',
     partsReload: 'Завантажити знову',
     partsHintAccepted: 'Позначте, що у вас уже є, і натисніть «Застосувати»: кожна зміна перераховує план.',

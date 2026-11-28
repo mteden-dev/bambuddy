@@ -9825,6 +9825,7 @@ export default {
     },
     sectionLate: '{{n}} late',
     partsApply: 'Apply',
+    partsApplied: 'Applied',
     partsBaseChanged: 'The order changed in Base.',
     partsReload: 'Reload',
     partsHintAccepted: 'Mark what you already have, then press Apply: each change recalculates the plan.',

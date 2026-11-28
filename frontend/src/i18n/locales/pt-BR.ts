@@ -9757,6 +9757,7 @@ export default {
     },
     sectionLate: '{{n}} atrasados',
     partsApply: 'Aplicar',
+    partsApplied: 'Aplicado',
     partsBaseChanged: 'O pedido mudou no Base.',
     partsReload: 'Recarregar',
     partsHintAccepted: 'Marque o que você já tem e toque em Aplicar: cada mudança recalcula o plano.',

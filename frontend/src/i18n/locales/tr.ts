@@ -9699,6 +9699,7 @@ export default {
     },
     sectionLate: '{{n}} gecikmiş',
     partsApply: 'Uygula',
+    partsApplied: 'Uygulandı',
     partsBaseChanged: 'Sipariş Base\'de değişti.',
     partsReload: 'Yeniden yükle',
     partsHintAccepted: 'Elinizde olanı işaretleyin, sonra Uygula\'ya basın: her değişiklik planı yeniden hesaplar.',

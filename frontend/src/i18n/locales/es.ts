@@ -9780,6 +9780,7 @@ export default {
     },
     sectionLate: '{{n}} con retraso',
     partsApply: 'Aplicar',
+    partsApplied: 'Aplicado',
     partsBaseChanged: 'El pedido cambió en Base.',
     partsReload: 'Recargar',
     partsHintAccepted: 'Marca lo que ya tienes y pulsa Aplicar: cada cambio recalcula el plan.',

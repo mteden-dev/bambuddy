@@ -9772,6 +9772,7 @@ export default {
     },
     sectionLate: '{{n}} verspätet',
     partsApply: 'Anwenden',
+    partsApplied: 'Angewendet',
     partsBaseChanged: 'Die Bestellung hat sich in Base geändert.',
     partsReload: 'Neu laden',
     partsHintAccepted: 'Markiere, was du schon hast, und drücke Anwenden: jede Änderung berechnet den Plan neu.',

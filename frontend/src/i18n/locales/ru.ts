@@ -9463,6 +9463,7 @@ export default {
     },
     sectionLate: 'с опозданием: {{n}}',
     partsApply: 'Применить',
+    partsApplied: 'Применено',
     partsBaseChanged: 'Заказ изменился в Base.',
     partsReload: 'Загрузить заново',
     partsHintAccepted: 'Отметьте, что у вас уже есть, и нажмите «Применить»: каждое изменение пересчитывает план.',

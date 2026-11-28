@@ -9755,6 +9755,7 @@ export default {
     },
     sectionLate: '{{n}} 個逾期',
     partsApply: '套用',
+    partsApplied: '已套用',
     partsBaseChanged: '該訂單在 Base 中已變更。',
     partsReload: '重新載入',
     partsHintAccepted: '標記你已有的部分，然後點選套用：每次變更都會重新計算規劃。',

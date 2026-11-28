@@ -9395,6 +9395,7 @@ export default {
     },
     sectionLate: '{{n}}건 기한 초과',
     partsApply: '적용',
+    partsApplied: '적용됨',
     partsBaseChanged: 'Base에서 주문이 변경되었습니다.',
     partsReload: '다시 불러오기',
     partsHintAccepted: '이미 가진 것을 표시한 뒤 적용을 누르세요. 변경할 때마다 계획이 다시 계산됩니다.',

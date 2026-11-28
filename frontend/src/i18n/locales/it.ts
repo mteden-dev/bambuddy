@@ -9757,6 +9757,7 @@ export default {
     },
     sectionLate: '{{n}} in ritardo',
     partsApply: 'Applica',
+    partsApplied: 'Applicato',
     partsBaseChanged: 'L\'ordine è cambiato in Base.',
     partsReload: 'Ricarica',
     partsHintAccepted: 'Segna ciò che hai già, poi premi Applica: ogni modifica ricalcola il piano.',
