@@ -78,6 +78,14 @@ class ProductPlate(Base):
     The printer model is the file's own (``sliced_for_model``), so the same part
     usually has a plate per model, and per number of pieces: 1, 2, 3 on a P1S,
     more on an H2S. A plate may hold pieces of several parts.
+
+    A plate may also print parts of other products (a mixed plate: two single
+    and two double magazine holders, each a product of its own): it is then
+    *shared*, and shows on every product whose parts it prints. ``product_id``
+    is the product that holds it, always one whose parts it prints; when that
+    product lets go of it (takes its pieces off, or is deleted) another of them
+    takes it over. Products sharing plates are planned together
+    (services/products.py, "families"), and none of them has matched parts.
     """
 
     __tablename__ = "custom_product_plates"
@@ -211,6 +219,23 @@ class ProductJob(Base):
     # What the plan worked out for it: the filament it takes and what is left
     # on the spools after it, and why it is not on the preferred printer.
     plan_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class ProductJobProduct(Base):
+    """Another product a job prints pieces for: its plate is shared (a mixed plate).
+
+    ``ProductJob.product_id`` is the plate's holder when the job was made; a row
+    here for each other product whose parts are in the job's ``pieces``, so the
+    job counts for that product too (stock, orders, checks). Kept when the plate
+    changes later: what a finished job printed is history.
+    """
+
+    __tablename__ = "custom_product_job_products"
+
+    job_id: Mapped[int] = mapped_column(ForeignKey("custom_product_jobs.id", ondelete="CASCADE"), primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("custom_products.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
 
 
 class ProductStockAdjustment(Base):

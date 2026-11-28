@@ -44,6 +44,11 @@
     { "text": "A plate names the same part twice", "key": "plateSamePartTwice" },
     { "pattern": "^A plate names (?<part>.+) twice$", "key": "plateNamesPartTwice" },
     { "pattern": "^The product has no part named (?<part>.+)$", "key": "noPartNamed" },
+    { "pattern": "^No part (?<part>\\d+)$", "key": "noSuchPart" },
+    { "pattern": "^Part (?<part>\\d+) is this product's: name it in pieces$", "key": "partIsOwnNotOther" },
+    { "text": "A plate of the product prints at least one of its parts", "key": "plateNeedsOwnPart" },
+    { "pattern": "^(?<file>.+) prints parts of several products, so none of them may have matched parts; (?<products>.+) has some$", "key": "sharedPlateMatched" },
+    { "text": "Products planned together (sharing a plate) cannot have matched parts", "key": "familyMatched" },
 
     { "text": "Enter the Base API token", "key": "enterBaseToken" },
     { "text": "Say what to keep: products", "key": "sayWhatToKeep" },

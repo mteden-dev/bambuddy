@@ -63,6 +63,15 @@ counts as done ``max(prefer_min_s, prefer_pct % of the package's print time)``
 sooner, and a plan that puts the plate elsewhere costs that much more. Another
 printer wins only when it is done sooner by more than that, or when the
 preferred one needs a spool loaded or changed for the plate and it does not.
+
+Several products at once (a *family*: products sharing a mixed plate, such as
+two single and two double magazine holders on one plate): each part and order
+names its product (``PartSpec.product_id``, ``OrderNeed.product_id``). What the
+orders want and when each order is ready are counted per product, the plates
+and printers are shared, so a mixed plate counts for every product it prints
+and the "whole" packing covers what the other products still miss too. Part
+ids are unique across products. Products planned together have no matched
+parts (``plan`` refuses them); one product alone plans exactly as before.
 """
 
 from __future__ import annotations
@@ -92,6 +101,15 @@ IMPROVE_MAX_MOVES = 100
 IMPROVE_MAX_TRIES = 1500
 # How many of the enumeration's cheapest plans are improved.
 IMPROVE_PLANS = 3
+# Above this many states (every combination of the pieces still to cover) the
+# cover search splits (``_split_cover``): the full search grows with the
+# product of the needs, and a family of five holders asking 20 each would take
+# seconds per cover on a small computer.
+COVER_STATES = 30_000
+# The split counts out the plates printing several of the parts wanted: at most
+# this many combinations of their counts; above it, plates are taken one by one
+# first (``_peel``).
+COVER_SPLIT_COUNTS = 20_000
 # How a package's plates are chosen (see ``_build``).
 PACK_CHEAPEST = "cheapest"
 PACK_WHOLE = "whole"
@@ -120,6 +138,8 @@ class PartSpec:
     # Work on a printed piece before the product is done (a tray glued into
     # the base drying), in seconds: the piece counts as there that much later.
     finish_s: int = 0
+    # The product it is a part of, when several are planned together.
+    product_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -161,6 +181,8 @@ class OrderNeed:
     id: int
     units: int
     due: datetime | None = None
+    # The product it wants (``PartSpec.product_id``), when several are planned together.
+    product_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -322,6 +344,23 @@ def _copy(pool: Pool) -> Pool:
     return {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
 
 
+def by_product(
+    parts: Sequence[PartSpec], orders: Sequence[OrderNeed]
+) -> list[tuple[list[PartSpec], list[OrderNeed]]]:
+    """Each product's parts and orders (in their order), the products as their parts first appear."""
+    keys = list(dict.fromkeys([p.product_id for p in parts] + [o.product_id for o in orders]))
+    return [([p for p in parts if p.product_id == key], [o for o in orders if o.product_id == key]) for key in keys]
+
+
+def _wanted(inputs: PlanInputs) -> dict[int, int]:
+    """Part id -> the products of its product the orders want."""
+    wanted: dict[int, int] = {}
+    for parts, orders in by_product(inputs.parts, inputs.orders):
+        units = sum(o.units for o in orders)
+        wanted |= {p.id: units for p in parts}
+    return wanted
+
+
 def _total(pool: Pool, part_id: int) -> int:
     return sum(n for n in pool.get(part_id, {}).values() if n > 0)
 
@@ -390,6 +429,7 @@ def _matched_units(pool: Pool, matched: Sequence[PartSpec]) -> int:
 def allocate(parts: Sequence[PartSpec], pool: Pool, orders: Sequence[OrderNeed]) -> Allocation:
     """Give the pieces in ``pool`` to ``orders``, in order, as complete products.
 
+    ``parts`` and ``orders`` are one product's (the pool may hold others' parts).
     A product takes its matched parts from one printer, the one with the most
     complete sets; when no printer has a whole set, a printer's leftovers
     completed with pieces of no known printer, and last sets of those pieces
@@ -453,7 +493,7 @@ def allocate(parts: Sequence[PartSpec], pool: Pool, orders: Sequence[OrderNeed])
 def complete_units(parts: Sequence[PartSpec], pool: Pool) -> int:
     """How many whole products ``pool`` makes: what ``allocate`` hands out in all.
 
-    Matched sets are counted per printer (completed with pieces of no known
+    ``parts`` are one product's. Matched sets are counted per printer (completed with pieces of no known
     printer) and the other parts over all printers, so taking products one at
     a time, as ``allocate`` does, can only stop at this number.
     """
@@ -475,8 +515,8 @@ def ready_times(
     """When each order has all its products, as ``arrivals`` come in (None: never).
 
     Orders take whole products in order, so order k is complete once the pool
-    makes as many products as orders 1..k want together. A printed piece
-    counts once its part's finishing time has passed too.
+    makes as many products as orders 1..k of its product want together. A
+    printed piece counts once its part's finishing time has passed too.
     """
     finish = {p.id: timedelta(seconds=p.finish_s) for p in parts}
     events: list[tuple[datetime, int, int, int]] = []
@@ -491,6 +531,22 @@ def _ready_from_events(
     parts: Sequence[PartSpec], orders: Sequence[OrderNeed], events: list[tuple[datetime, int, int, int]], now: datetime
 ) -> dict[int, datetime | None]:
     """``ready_times`` from (when there, printer id, part id, pieces), finishing time included."""
+    groups = by_product(parts, orders)
+    if len(groups) <= 1:
+        return _ready_one(parts, orders, events, now)
+    owner = {p.id: p.product_id for p in parts}
+    ready: dict[int, datetime | None] = {}
+    for product_parts, product_orders in groups:
+        key = (product_parts or product_orders)[0].product_id
+        mine = [event for event in events if owner.get(event[2]) == key]
+        ready |= _ready_one(product_parts, product_orders, mine, now)
+    return ready
+
+
+def _ready_one(
+    parts: Sequence[PartSpec], orders: Sequence[OrderNeed], events: list[tuple[datetime, int, int, int]], now: datetime
+) -> dict[int, datetime | None]:
+    """``_ready_from_events`` for one product's parts and orders."""
     ready: dict[int, datetime | None] = {o.id: None for o in orders}
     wanted_by = []
     total = 0
@@ -548,6 +604,8 @@ def _cheapest_cover(
     for pid, n in zip(part_ids, start, strict=True):
         if n and not any(o.count(pid) for o in options):
             return None
+    if math.prod(n + 1 for n in start) > COVER_STATES:
+        return _split_cover(options, part_ids, start, plate_cost_s)
     counts = [
         (o, tuple(o.count(pid) for pid in part_ids), (o.duration_s + plate_cost_s) * (1 + o.risk)) for o in options
     ]
@@ -596,6 +654,117 @@ def _cheapest_cover(
         step = after
     order = {o.id: i for i, o in enumerate(options)}
     return tuple(sorted(chosen, key=lambda o: order[o.id]))
+
+
+def _split_cover(
+    options: Sequence[PlateOption], part_ids: list[int], start: tuple[int, ...], plate_cost_s: int
+) -> tuple[PlateOption, ...] | None:
+    """``_cheapest_cover`` for needs too big to search whole, the same answer by another way.
+
+    A plate printing one of the parts wanted covers that part alone, so once
+    the counts of the plates printing several are fixed, each part's rest is
+    covered on its own (a search per part, linear in its pieces) and the costs
+    add up. The counts of those plates are tried in full: a mixed plate is
+    worth from none up to what covers its biggest part. When that is too many
+    combinations, plates are taken one by one first (``_peel``), no longer
+    exactly the cheapest.
+    """
+
+    def cost(option: PlateOption) -> float:
+        return (option.duration_s + plate_cost_s) * (1 + option.risk)
+
+    wanted = [(o, tuple(o.count(pid) for pid in part_ids)) for o in options]
+    wanted = [(o, got) for o, got in wanted if any(c and n for c, n in zip(got, start, strict=True))]
+    multi = [(o, got) for o, got in wanted if sum(1 for c, n in zip(got, start, strict=True) if c and n) > 1]
+    multi_ids = {o.id for o, _ in multi}
+    ranges = [
+        range(max(math.ceil(n / c) for c, n in zip(got, start, strict=True) if c and n) + 1) for _, got in multi
+    ]
+    if math.prod(len(r) for r in ranges) > COVER_SPLIT_COUNTS:
+        return _peel(options, part_ids, start, plate_cost_s, multi)
+
+    # Per part: the cheapest (cost, extra pieces) to print at least r pieces with
+    # plates printing only it of the parts wanted, and the plate printed last.
+    tables: list[list[tuple[float, int, PlateOption | None, int] | None]] = []
+    for index, need in enumerate(start):
+        singles = [(o, got[index]) for o, got in wanted if o.id not in multi_ids and got[index]]
+        table: list[tuple[float, int, PlateOption | None, int] | None] = [(0.0, 0, None, 0)]
+        for r in range(1, need + 1):
+            best = None
+            for option, c in singles:
+                prev = table[max(0, r - c)]
+                if prev is None:
+                    continue
+                candidate = (prev[0] + cost(option), prev[1] + max(0, c - r), option, max(0, r - c))
+                if best is None or candidate[:2] < best[:2]:
+                    best = candidate
+            table.append(best)
+        tables.append(table)
+
+    best_total: tuple[float, int, tuple[int, ...]] | None = None
+    for counts in cartesian(*ranges):
+        total = 0.0
+        extra = 0
+        made = [0] * len(start)
+        for (option, got), k in zip(multi, counts, strict=True):
+            if k:
+                total += k * cost(option)
+                for index, c in enumerate(got):
+                    made[index] += k * c
+        feasible = True
+        for index, need in enumerate(start):
+            rest = need - made[index]
+            if rest <= 0:
+                extra -= rest
+                continue
+            entry = tables[index][rest]
+            if entry is None:
+                feasible = False
+                break
+            total += entry[0]
+            extra += entry[1]
+        if feasible and (best_total is None or (total, extra) < best_total[:2]):
+            best_total = (total, extra, counts)
+    if best_total is None:
+        return None
+    chosen: list[PlateOption] = []
+    made = [0] * len(start)
+    for (option, got), k in zip(multi, best_total[2], strict=True):
+        chosen += [option] * k
+        for index, c in enumerate(got):
+            made[index] += k * c
+    for index, need in enumerate(start):
+        r = need - made[index]
+        while r > 0:
+            entry = tables[index][r]
+            assert entry is not None and entry[2] is not None  # the total above was feasible
+            chosen.append(entry[2])
+            r = entry[3]
+    order = {o.id: i for i, o in enumerate(options)}
+    return tuple(sorted(chosen, key=lambda o: order[o.id]))
+
+
+def _peel(
+    options: Sequence[PlateOption],
+    part_ids: list[int],
+    start: tuple[int, ...],
+    plate_cost_s: int,
+    multi: list[tuple[PlateOption, tuple[int, ...]]],
+) -> tuple[PlateOption, ...] | None:
+    """Take the mixed plate that covers the most per second, then cover the rest; for needs no search fits."""
+
+    def per_second(entry: tuple[PlateOption, tuple[int, ...]]) -> float:
+        option, got = entry
+        covered = sum(min(c, n) for c, n in zip(got, start, strict=True))
+        return covered / ((option.duration_s + plate_cost_s) * (1 + option.risk))
+
+    option, got = max(multi, key=per_second)
+    rest = tuple((pid, max(0, n - c)) for pid, n, c in zip(part_ids, start, got, strict=True))
+    found = _cheapest_cover(options, rest, plate_cost_s)
+    if found is None:
+        return None
+    order = {o.id: i for i, o in enumerate(options)}
+    return tuple(sorted((option, *found), key=lambda o: order[o.id]))
 
 
 class _Covers:
@@ -771,17 +940,18 @@ def _have(inputs: PlanInputs) -> Pool:
 
 
 def _to_make(inputs: PlanInputs, have: Pool) -> dict[int, int]:
-    """Part id -> pieces the orders still need printed (matched parts as whole sets)."""
-    wanted = sum(o.units for o in inputs.orders)
-    matched = [p for p in inputs.parts if p.matched]
+    """Part id -> pieces the orders still need printed (matched parts as whole sets), per product."""
     to_make: dict[int, int] = {}
-    if matched:
-        work = {m.id: {r: n for r, n in have.get(m.id, {}).items() if n > 0} for m in matched}
-        missing_units = max(0, wanted - _matched_units(work, matched))
-        to_make = {m.id: missing_units * m.per_unit for m in matched}
-    for p in inputs.parts:
-        if not p.matched:
-            to_make[p.id] = max(0, wanted * p.per_unit - _total(have, p.id))
+    for parts, orders in by_product(inputs.parts, inputs.orders):
+        wanted = sum(o.units for o in orders)
+        matched = [p for p in parts if p.matched]
+        if matched:
+            work = {m.id: {r: n for r, n in have.get(m.id, {}).items() if n > 0} for m in matched}
+            missing_units = max(0, wanted - _matched_units(work, matched))
+            to_make |= {m.id: missing_units * m.per_unit for m in matched}
+        for p in parts:
+            if not p.matched:
+                to_make[p.id] = max(0, wanted * p.per_unit - _total(have, p.id))
     return to_make
 
 
@@ -882,7 +1052,9 @@ def _build(
     group's own parts, a plate printing other parts too costed as if they were
     waste. PACK_WHOLE: the package covers whole products, the parts still
     missing for its products besides the group's own, and the matched group
-    goes first. PACK_OWN: only plates printing nothing but the group's parts.
+    goes first; with several products, the parts the other products still miss
+    too (as many as the package's products), so a mixed plate covers them all.
+    PACK_OWN: only plates printing nothing but the group's parts.
     """
     whole = packing == PACK_WHOLE
     own = packing == PACK_OWN
@@ -890,6 +1062,8 @@ def _build(
     matched = [p for p in inputs.parts if p.matched]
     loose = [p for p in inputs.parts if not p.matched]
     wanted = sum(o.units for o in inputs.orders)
+    # Products of its product per part (all of them when there is one product).
+    wanted_of = _wanted(inputs)
 
     have = _have(inputs)
 
@@ -917,8 +1091,8 @@ def _build(
             wild[m.id] = max(0, work[m.id].get(UNKNOWN_PRINTER, 0)) - alone * m.per_unit
             for printer_id in known:
                 leftover[m.id][printer_id] = max(0, work[m.id].get(printer_id, 0))
-        missing_units = max(0, wanted - sets_there)
-    missing = {p.id: wanted * p.per_unit - _total(have, p.id) for p in loose}
+        missing_units = max(0, wanted_of[matched[0].id] - sets_there)
+    missing = {p.id: wanted_of[p.id] * p.per_unit - _total(have, p.id) for p in loose}
     to_make = _to_make(inputs, have)
 
     free = {p.id: max(p.free_at, now) for p in inputs.printers}
@@ -1380,7 +1554,10 @@ def plan(inputs: PlanInputs) -> Plan:
 
     Every combination of caps is tried when there are few; otherwise the best
     single cap for all, then each cap in turn with the others held (twice).
+    Raises ValueError for several products when one has matched parts.
     """
+    if len(by_product(inputs.parts, inputs.orders)) > 1 and any(p.matched for p in inputs.parts):
+        raise ValueError("Products planned together (sharing a plate) cannot have matched parts")
     wanted = sum(o.units for o in inputs.orders)
     matched_ids = frozenset(p.id for p in inputs.parts if p.matched)
     covers = _Covers(inputs, matched_ids)

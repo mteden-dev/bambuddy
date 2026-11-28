@@ -13,7 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect as sa_inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,10 +80,20 @@ class PlatePieceIn(BaseModel):
         return self
 
 
+class OtherPieceIn(BaseModel):
+    # A part of another product the plate prints too (a mixed plate), by id.
+    part_id: int
+    pieces: int = Field(ge=1, le=1000)
+
+
 class PlateIn(BaseModel):
     library_file_id: int
     plate_id: int | None = Field(None, ge=1)
     pieces: list[PlatePieceIn] = Field(min_length=1, max_length=20)
+    # The pieces of other products' parts on it, exactly; left out (null) keeps
+    # the ones it has. A plate another of those products has for the file is
+    # then the same plate, shared (services/products.py, "shared plates").
+    others: list[OtherPieceIn] | None = Field(None, max_length=20)
 
 
 class SkuRef(BaseModel):
@@ -162,7 +172,8 @@ class StockIn(BaseModel):
 
 
 class PlatePieceRef(BaseModel):
-    # The part by id, or by name (case does not matter).
+    # The part by id, or by name (case does not matter). By id it may be a part
+    # of another product: the plate is then shared with it (a mixed plate).
     part_id: int | None = None
     part_name: str | None = Field(None, min_length=1, max_length=255)
     pieces: int = Field(ge=1, le=1000)
@@ -289,12 +300,26 @@ class PartOut(BaseModel):
     finish_minutes: int = 0
 
 
+class OtherPieces(BaseModel):
+    # A part of another product a shared plate prints too.
+    part_id: int
+    pieces: int
+    product_id: int
+    product_name: str
+    part_name: str
+
+
 class PlateOut(BaseModel):
     id: int
     library_file_id: int
     plate_id: int | None
+    # This product's parts.
     pieces: list[PartPieces]
     file: PlateFile
+    # Other products' parts on it: a shared (mixed) plate.
+    others: list[OtherPieces] = Field(default_factory=list)
+    # The product holding the plate when it is another one (edited there too).
+    holder_product_id: int | None = None
 
 
 class ProductOut(BaseModel):
@@ -477,7 +502,44 @@ async def _open_counts(db: AsyncSession, product_ids: list[int]) -> dict[int, tu
     return {pid: (count, int(units or 0)) for pid, count, units in rows.all()}
 
 
-def _product_out(product: Product, counts: tuple[int, int] = (0, 0)) -> dict:
+async def _plates_out(db: AsyncSession, product: Product) -> list[PlateOut]:
+    """Its plates, then the ones it shares with other products; their parts as others."""
+    plates = await svc.all_plates(db, product)
+    own = {p.id for p in product.parts}
+    foreign = {piece.part_id for plate in plates for piece in plate.pieces if piece.part_id not in own}
+    names: dict[int, tuple[int, str, str]] = {}
+    if foreign:
+        rows = await db.execute(
+            select(ProductPart.id, ProductPart.product_id, Product.name, ProductPart.name)
+            .join(Product, Product.id == ProductPart.product_id)
+            .where(ProductPart.id.in_(foreign))
+        )
+        names = {part_id: (product_id, product_name, part_name) for part_id, product_id, product_name, part_name in rows}
+    return [
+        PlateOut(
+            id=plate.id,
+            library_file_id=plate.library_file_id,
+            plate_id=plate.plate_id,
+            pieces=[PartPieces(part_id=p.part_id, pieces=p.pieces) for p in plate.pieces if p.part_id in own],
+            file=_plate_file(plate),
+            others=[
+                OtherPieces(
+                    part_id=p.part_id,
+                    pieces=p.pieces,
+                    product_id=names[p.part_id][0],
+                    product_name=names[p.part_id][1],
+                    part_name=names[p.part_id][2],
+                )
+                for p in plate.pieces
+                if p.part_id not in own and p.part_id in names
+            ],
+            holder_product_id=plate.product_id if plate.product_id != product.id else None,
+        )
+        for plate in plates
+    ]
+
+
+async def _product_out(db: AsyncSession, product: Product, counts: tuple[int, int] = (0, 0)) -> dict:
     return {
         "id": product.id,
         "name": product.name,
@@ -486,16 +548,7 @@ def _product_out(product: Product, counts: tuple[int, int] = (0, 0)) -> dict:
             PartOut(id=p.id, name=p.name, quantity=p.quantity, matched=p.matched, finish_minutes=p.finish_minutes or 0)
             for p in product.parts
         ],
-        "plates": [
-            PlateOut(
-                id=plate.id,
-                library_file_id=plate.library_file_id,
-                plate_id=plate.plate_id,
-                pieces=[PartPieces(part_id=p.part_id, pieces=p.pieces) for p in plate.pieces],
-                file=_plate_file(plate),
-            )
-            for plate in product.plates
-        ],
+        "plates": await _plates_out(db, product),
         "skus": [SkuRef(sku=row.sku, units=row.units) for row in product.skus],
         "open_orders": counts[0],
         "open_units": counts[1],
@@ -575,7 +628,7 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
     jobs_rows = await svc.active_jobs(db, product.id)
     placed_on, moved = await svc.placed_by_hand(db, jobs_rows)
     times = await svc.planned_times(db, jobs_rows)
-    plates = {plate.id: plate for plate in product.plates}
+    plates = {plate.id: plate for plate in await svc.all_plates(db, product)}
     jobs = []
     coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
     for job in jobs_rows:
@@ -611,7 +664,7 @@ async def _detail(db: AsyncSession, product: Product, *, estimates: bool = True)
 
     counts = (len(open_rows), sum(o.quantity for o in open_rows))
     return ProductDetail(
-        **_product_out(product, counts),
+        **await _product_out(db, product, counts),
         stock=stock,
         orders=orders,
         jobs=jobs,
@@ -648,10 +701,41 @@ async def _check_plate_files(db: AsyncSession, file_ids: set[int], actor: User |
 
 
 async def _set_plate(
-    db: AsyncSession, product: Product, library_file_id: int, plate_id: int | None, pieces: dict[int, int]
+    db: AsyncSession,
+    product: Product,
+    library_file_id: int,
+    plate_id: int | None,
+    pieces: dict[int, int],
+    others: dict[int, int] | None = None,
 ) -> ProductPlate:
-    """The product's plate for this file (and plate), new or with these pieces now. The caller commits."""
-    row = next((p for p in product.plates if p.library_file_id == library_file_id and p.plate_id == plate_id), None)
+    """The product's plate for this file (and plate), new or with these pieces of its parts now. The caller commits.
+
+    A plate it shares with other products is that plate. ``others``: the pieces
+    of other products' parts on it, exactly (None keeps the ones it has); with
+    some, a plate one of those products has for the file is joined rather than
+    a second one made for it, so the file has one plate and prints once.
+    """
+    own_ids = {p.id for p in product.parts}
+    candidates = [p for p in await svc.all_plates(db, product) if not sa_inspect(p).was_deleted]
+    row = next((p for p in candidates if p.library_file_id == library_file_id and p.plate_id == plate_id), None)
+    if row is None and others:
+        holders = set((await svc.part_owners(db, others)).values())
+        same_plate = ProductPlate.plate_id.is_(None) if plate_id is None else ProductPlate.plate_id == plate_id
+        row = (
+            (
+                await db.execute(
+                    select(ProductPlate)
+                    .where(
+                        ProductPlate.product_id.in_(holders),
+                        ProductPlate.library_file_id == library_file_id,
+                        same_plate,
+                    )
+                    .order_by(ProductPlate.id)
+                )
+            )
+            .scalars()
+            .first()
+        )
     if row is None:
         row = ProductPlate(
             product_id=product.id,
@@ -663,12 +747,94 @@ async def _set_plate(
         await db.flush()
         product.plates.append(row)
     else:
-        for piece in list(row.pieces):
-            await db.delete(piece)
+        current = (await db.execute(select(ProductPlatePart).where(ProductPlatePart.plate_id == row.id))).scalars()
+        for piece in list(current):
+            if piece.part_id in own_ids or others is not None:
+                await db.delete(piece)
         await db.flush()
-    for part_id, n in pieces.items():
+    for part_id, n in {**(others or {}), **pieces}.items():
         db.add(ProductPlatePart(plate_id=row.id, part_id=part_id, pieces=n))
+    await db.flush()
     return row
+
+
+async def _let_go(db: AsyncSession, product: Product, plate: ProductPlate) -> None:
+    """Take the product's pieces off a plate: a plate printing nothing more goes, one shared passes on."""
+    own_ids = {p.id for p in product.parts}
+    pieces = list((await db.execute(select(ProductPlatePart).where(ProductPlatePart.plate_id == plate.id))).scalars())
+    for piece in pieces:
+        if piece.part_id in own_ids:
+            await db.delete(piece)
+    await db.flush()
+    await _settle_holder(db, plate)
+
+
+async def _settle_holder(db: AsyncSession, plate: ProductPlate) -> None:
+    """A plate printing nothing goes; one its holder prints nothing on any more passes to another product on it.
+
+    The new holder is the lowest product id among the ones it prints for. Set by
+    id: the products' loaded plate lists are read again (``load_product``) before
+    anything relies on them.
+    """
+    if sa_inspect(plate).was_deleted:
+        return
+    part_ids = (await db.execute(select(ProductPlatePart.part_id).where(ProductPlatePart.plate_id == plate.id))).scalars()
+    owners = set((await svc.part_owners(db, part_ids)).values())
+    if not owners:
+        await db.delete(plate)
+    elif plate.product_id not in owners:
+        heir = min(owners)
+        last = await db.scalar(select(func.max(ProductPlate.sort_order)).where(ProductPlate.product_id == heir))
+        plate.product_id = heir
+        plate.sort_order = (last if last is not None else -1) + 1
+    await db.flush()
+
+
+async def _check_shared_plates(db: AsyncSession, product: Product) -> None:
+    """A plate printing parts of several products: none of them may have matched parts (400).
+
+    Products sharing plates are planned together, and matched parts (a lid and
+    its base from one printer) are planned one product at a time.
+    """
+    for plate in await svc.all_plates(db, product):
+        part_ids = (
+            await db.execute(select(ProductPlatePart.part_id).where(ProductPlatePart.plate_id == plate.id))
+        ).scalars()
+        owners = set((await svc.part_owners(db, part_ids)).values())
+        if len(owners) < 2:
+            continue
+        rows = await db.execute(
+            select(Product.name)
+            .join(ProductPart, ProductPart.product_id == Product.id)
+            .where(Product.id.in_(owners), ProductPart.matched.is_(True))
+            .distinct()
+        )
+        matched = sorted(rows.scalars())
+        if matched:
+            filename = plate.library_file.filename if plate.library_file is not None else f"plate {plate.id}"
+            raise HTTPException(
+                400,
+                f"{filename} prints parts of several products, so none of them may have matched parts; "
+                f"{', '.join(matched)} has some",
+            )
+
+
+async def _others_of(db: AsyncSession, product: Product, refs: list[OtherPieceIn] | None) -> dict[int, int] | None:
+    """The pieces of other products' parts a plate names, checked: real parts, not this product's, once each."""
+    if refs is None:
+        return None
+    own_ids = {p.id for p in product.parts}
+    owners = await svc.part_owners(db, [ref.part_id for ref in refs])
+    others: dict[int, int] = {}
+    for ref in refs:
+        if ref.part_id in own_ids:
+            raise HTTPException(400, f"Part {ref.part_id} is this product's: name it in pieces")
+        if ref.part_id not in owners:
+            raise HTTPException(400, f"No part {ref.part_id}")
+        if ref.part_id in others:
+            raise HTTPException(400, f"A plate names part {ref.part_id} twice")
+        others[ref.part_id] = ref.pieces
+    return others
 
 
 async def _write_skus(db: AsyncSession, product: Product, skus: list[SkuRef]) -> None:
@@ -736,19 +902,25 @@ async def _write_product(db: AsyncSession, product: Product, data: ProductIn, ac
         row.sort_order = index
         parts.append(row)
     await db.flush()
+    others = [await _others_of(db, product, plate.others) for plate in data.plates]
     wanted = {(plate.library_file_id, plate.plate_id) for plate in data.plates}
-    for plate in list(product.plates):
-        if (plate.library_file_id, plate.plate_id) not in wanted:
-            product.plates.remove(plate)
-            await db.delete(plate)
-    await db.flush()
+    # A plate left out: this product's pieces come off it (a plate shared with
+    # other products stays theirs).
+    for plate in await svc.all_plates(db, product):
+        if (plate.library_file_id, plate.plate_id) not in wanted and not sa_inspect(plate).was_deleted:
+            await _let_go(db, product, plate)
     for index, plate in enumerate(data.plates):
         pieces: dict[int, int] = {}
         for piece in plate.pieces:
             assert piece.part is not None  # names were turned into indexes
             pieces[parts[piece.part].id] = piece.pieces
-        row = await _set_plate(db, product, plate.library_file_id, plate.plate_id, pieces)
-        row.sort_order = index
+        row = await _set_plate(db, product, plate.library_file_id, plate.plate_id, pieces, others[index])
+        if row.product_id == product.id:
+            row.sort_order = index
+    # Parts taken away may leave a plate it held printing only others' parts.
+    for plate in list(product.plates):
+        await _settle_holder(db, plate)
+    await _check_shared_plates(db, product)
     await db.flush()
 
 
@@ -818,7 +990,7 @@ async def list_products(db: AsyncSession = Depends(get_db, scope="function"), _=
     for product_id in rows:
         product = await svc.load_product(db, product_id)
         if product is not None:
-            result.append(ProductOut(**_product_out(product, counts.get(product_id, (0, 0)))))
+            result.append(ProductOut(**await _product_out(db, product, counts.get(product_id, (0, 0)))))
     return result
 
 
@@ -1004,8 +1176,9 @@ async def cancel_queue_job(
         raise HTTPException(409, "The planner did not make this job for an order")
     if data.then == "withdraw" and not data.orders:
         raise HTTPException(400, "Say which orders to withdraw")
-    product = await svc.load_product(db, job.product_id)
-    part_ids = {p.id for p in product.parts} if product is not None else set()
+    # A job of a shared plate prints for several products: their pieces, their plans.
+    part_ids = await svc.job_part_ids(db, job)
+    printing_for = (await svc.job_products(db, [job]))[job.id]
 
     item.status = "cancelled"
     item.completed_at = datetime.now(timezone.utc)
@@ -1015,7 +1188,7 @@ async def cancel_queue_job(
     await svc.after_queue_items_changed(db, [item.id])
 
     actor_id = actor.id if actor is not None else None
-    changed = {job.product_id}
+    changed = set(printing_for)
     out = QueueJobCancelOut(replanned=[])
     if data.then == "stock":
         stocked = svc.put_pieces_in_stock(db, job, part_ids, actor_id=actor_id, note=f"Queue job {item.id}: on hand")
@@ -1038,14 +1211,19 @@ async def cancel_queue_job(
     )
     # What it says is about the products changed here; the ones planned
     # again behind them get their new jobs announced all the same.
+    counted: set[int] = set()
     for product_id in sorted(changed):
         outcome = done.of(product_id)
+        out.replanned.append(product_id)
+        # Products planned together share one plan: counted once.
+        if id(outcome) in counted:
+            continue
+        counted.add(id(outcome))
         created += outcome.item_ids
         out.kept += outcome.kept
         if outcome.plan is not None:
             for part_id, n in outcome.plan.short.items():
                 short[part_id] = short.get(part_id, 0) + n
-        out.replanned.append(product_id)
     await db.commit()
     await svc.announce_planned(done.item_ids)
     await svc.announce_replanned(done.changed_ids)
@@ -1113,8 +1291,10 @@ class QcCheckOut(AlsoReplanned):
 
 
 async def _qc_out(db: AsyncSession, jobs: list[ProductJob]) -> list[QcJobOut]:
+    # A job of a shared plate prints for several products: all their pieces are checked.
+    printing_for = await svc.job_products(db, jobs)
     products: dict[int, Product] = {}
-    for product_id in {job.product_id for job in jobs}:
+    for product_id in {pid for pids in printing_for.values() for pid in pids}:
         product = await svc.load_product(db, product_id)
         if product is not None:
             products[product_id] = product
@@ -1127,18 +1307,19 @@ async def _qc_out(db: AsyncSession, jobs: list[ProductJob]) -> list[QcJobOut]:
     }
     result = []
     for job in jobs:
-        product = products.get(job.product_id)
-        if product is None:
+        its = [products[pid] for pid in printing_for[job.id] if pid in products]
+        if not its:
             continue
+        product = its[0]
         reprint = reprints.get(job.id)
-        names = {part.id: part.name for part in product.parts}
-        plate = next((pl for pl in product.plates if pl.id == job.product_plate_id), None)
+        names = svc.piece_names(its)
+        plate = await svc.load_plate(db, job.product_plate_id)
         bad = svc.rejected_pieces(job)
         result.append(
             QcJobOut(
                 id=job.id,
                 product_id=product.id,
-                product_name=product.name,
+                product_name=" + ".join(p.name for p in its),
                 printer_id=job.printer_id,
                 printer_name=printer_names.get(job.printer_id or -1),
                 library_file_id=plate.library_file_id if plate is not None else None,
@@ -1219,7 +1400,7 @@ async def check_job(
     if replan:
         done = await svc.replan_pass(
             db,
-            [job.product_id],
+            (await svc.job_products(db, [job]))[job.id],
             actor_id=actor_id,
             manual_start=review_required,
             printer_ids=printer_scope.printer_ids,
@@ -1266,7 +1447,7 @@ async def uncheck_job(
     if had_bad:
         done = await svc.replan_pass(
             db,
-            [job.product_id],
+            (await svc.job_products(db, [job]))[job.id],
             actor_id=actor.id if actor is not None else None,
             manual_start=review_required,
             printer_ids=printer_scope.printer_ids,
@@ -1392,8 +1573,16 @@ async def delete_product(
     product_id: int,
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    actor: User | ApiKeyActor | None = RequestActor,
+    review_required: bool = QueueReviewRequired,
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
-    """Delete a product with no open orders; its waiting jobs leave the queue."""
+    """Delete a product with no open orders; its waiting jobs leave the queue.
+
+    Plates it shares with other products stay theirs, and so do its finished
+    jobs that printed for them (their stock); the products it shared plates
+    with are planned again, their waiting jobs of those plates having left too.
+    """
     product = await _get_product(db, product_id)
     if await svc.open_orders(db, product.id):
         raise HTTPException(409, "The product has open orders; cancel them first")
@@ -1401,10 +1590,27 @@ async def delete_product(
     await svc.sync_jobs(db, jobs)
     if any(j.status == "printing" for j in jobs):
         raise HTTPException(409, "A print of this product is running; delete it when it is done")
+    family = [pid for pid in await svc.family_of(db, product.id) if pid != product.id]
     await svc._remove_waiting_jobs(db, jobs)
+    await svc.hand_over(db, product)
+    # Read again: the plates handed over are no longer its own, and go nowhere with it.
+    product = await _get_product(db, product_id)
     svc.remove_thumbnail(product)
     await db.delete(product)
+    await db.flush()
+    done = None
+    if family:
+        done = await svc.replan_pass(
+            db,
+            family,
+            actor_id=actor.id if actor is not None else None,
+            manual_start=review_required,
+            printer_ids=printer_scope.printer_ids,
+        )
     await db.commit()
+    if done is not None:
+        await svc.announce_planned(done.item_ids)
+        await svc.announce_replanned(done.changed_ids)
     return {"deleted": product_id}
 
 
@@ -1607,15 +1813,25 @@ async def adjust_stock(
 # --- plates ---------------------------------------------------------------------------------
 
 
-def _resolve_pieces(product: Product, refs: list[PlatePieceRef]) -> dict[int, int]:
+async def _resolve_pieces(
+    db: AsyncSession, product: Product, refs: list[PlatePieceRef]
+) -> tuple[dict[int, int], dict[int, int] | None]:
+    """A plate's pieces: of this product's parts (by id or name), and of other products' parts (by id), or None."""
     by_id = {p.id: p for p in product.parts}
     by_name = {p.name.strip().casefold(): p for p in product.parts}
+    owners = await svc.part_owners(db, [ref.part_id for ref in refs if ref.part_id is not None])
     pieces: dict[int, int] = {}
+    others: dict[int, int] = {}
     for ref in refs:
         if ref.part_id is not None:
             part = by_id.get(ref.part_id)
             if part is None:
-                raise HTTPException(400, f"Part {ref.part_id} is not a part of this product")
+                if ref.part_id not in owners:
+                    raise HTTPException(400, f"No part {ref.part_id}")
+                if ref.part_id in others:
+                    raise HTTPException(400, f"A plate names part {ref.part_id} twice")
+                others[ref.part_id] = ref.pieces
+                continue
         else:
             assert ref.part_name is not None
             part = by_name.get(ref.part_name.strip().casefold())
@@ -1624,7 +1840,9 @@ def _resolve_pieces(product: Product, refs: list[PlatePieceRef]) -> dict[int, in
         if part.id in pieces:
             raise HTTPException(400, f"A plate names {part.name!r} twice")
         pieces[part.id] = ref.pieces
-    return pieces
+    if not pieces:
+        raise HTTPException(400, "A plate of the product prints at least one of its parts")
+    return pieces, others or None
 
 
 @router.post("/{product_id}/plates", response_model=ProductDetail)
@@ -1637,14 +1855,17 @@ async def add_plates(
 ):
     """Add plates to a product (parts by id or name); a file it has gets the new pieces.
 
-    Open orders are not replanned: POST /products/{id}/replan when they should
-    use the new plates.
+    A part of another product (by id) makes the plate shared with it: a mixed
+    plate, joined to that product's plate of the file when it has one, its
+    other products' pieces then exactly the ones named. Open orders are not
+    replanned: POST /products/{id}/replan when they should use the new plates.
     """
     product = await _get_product(db, product_id)
     await _check_plate_files(db, {plate.library_file_id for plate in data.plates}, actor)
-    resolved = [(plate, _resolve_pieces(product, plate.pieces)) for plate in data.plates]
-    for plate, pieces in resolved:
-        await _set_plate(db, product, plate.library_file_id, plate.plate_id, pieces)
+    resolved = [(plate, await _resolve_pieces(db, product, plate.pieces)) for plate in data.plates]
+    for plate, (pieces, others) in resolved:
+        await _set_plate(db, product, plate.library_file_id, plate.plate_id, pieces, others)
+    await _check_shared_plates(db, product)
     await db.commit()
     return await _detail(db, await _get_product(db, product_id), estimates=False)
 
@@ -1656,12 +1877,16 @@ async def delete_plate(
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
 ):
-    """Take a plate off a product (by its id in the product's ``plates``)."""
+    """Take a plate off a product (by its id in the product's ``plates``).
+
+    A plate shared with other products stays theirs: only this product's
+    pieces come off it.
+    """
     product = await _get_product(db, product_id)
-    plate = next((p for p in product.plates if p.id == plate_id), None)
+    plate = next((p for p in await svc.all_plates(db, product) if p.id == plate_id), None)
     if plate is None:
         raise HTTPException(404, "The product has no such plate")
-    await db.delete(plate)
+    await _let_go(db, product, plate)
     await db.commit()
     return await _detail(db, await _get_product(db, product_id), estimates=False)
 
@@ -1700,7 +1925,7 @@ async def suggest_plates(
         and svc.plate_model(f)
         and (can_read_all or (actor is not None and f.created_by_id is not None and f.created_by_id == actor.id))
     ]
-    have = {(p.library_file_id, p.plate_id) for p in product.plates}
+    have = {(p.library_file_id, p.plate_id) for p in await svc.all_plates(db, product)}
     suggestions = []
     applied = 0
     for library_file in files:

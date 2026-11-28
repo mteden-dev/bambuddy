@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import ColumnElement, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -55,9 +55,11 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.products import (
     Product,
     ProductJob,
+    ProductJobProduct,
     ProductOrder,
     ProductPart,
     ProductPlate,
+    ProductPlatePart,
     ProductStockAdjustment,
 )
 from backend.app.models.settings import Settings
@@ -231,9 +233,201 @@ async def load_product(db: AsyncSession, product_id: int) -> Product | None:
     ).scalar_one_or_none()
 
 
+# --- shared plates and families ----------------------------------------------------
+#
+# A plate may print parts of several products (a mixed plate: single and double
+# magazine holders together). It is held by one of them (``ProductPlate.product_id``)
+# and shows on each. A job printing it is the holder's, with a ProductJobProduct
+# row per other product, so it counts for each. Products joined by shared plates
+# (directly or through others) form a *family* and are planned together; a
+# product sharing no plate is a family of one, planned as before.
+
+
+def _plate_query():
+    return (
+        select(ProductPlate)
+        .options(selectinload(ProductPlate.pieces), selectinload(ProductPlate.library_file))
+        .execution_options(populate_existing=True)
+    )
+
+
+async def load_plate(db: AsyncSession, plate_id: int | None) -> ProductPlate | None:
+    """A plate with its pieces and file, whichever product holds it."""
+    if plate_id is None:
+        return None
+    return (await db.execute(_plate_query().where(ProductPlate.id == plate_id))).scalar_one_or_none()
+
+
+async def shared_plates(db: AsyncSession, product: Product) -> list[ProductPlate]:
+    """Plates held by other products that print some of this product's parts too."""
+    part_ids = [p.id for p in product.parts]
+    if not part_ids:
+        return []
+    ids = select(ProductPlatePart.plate_id).where(ProductPlatePart.part_id.in_(part_ids))
+    rows = await db.execute(
+        _plate_query()
+        .where(ProductPlate.id.in_(ids), ProductPlate.product_id != product.id)
+        .order_by(ProductPlate.product_id, ProductPlate.sort_order, ProductPlate.id)
+    )
+    return list(rows.scalars())
+
+
+async def all_plates(db: AsyncSession, product: Product) -> list[ProductPlate]:
+    """The product's plates, then the ones it shares with other products."""
+    return [*product.plates, *await shared_plates(db, product)]
+
+
+async def families(db: AsyncSession) -> dict[int, tuple[int, ...]]:
+    """Product id -> its family (itself included, sorted), for every product that shares a plate.
+
+    A product missing from it shares none: its family is itself.
+    """
+    rows = await db.execute(
+        select(ProductPlate.product_id, ProductPart.product_id)
+        .join(ProductPlatePart, ProductPlatePart.plate_id == ProductPlate.id)
+        .join(ProductPart, ProductPart.id == ProductPlatePart.part_id)
+        .where(ProductPart.product_id != ProductPlate.product_id)
+        .distinct()
+    )
+    parent: dict[int, int] = {}
+
+    def root(x: int) -> int:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for holder, other in rows.all():
+        a, b = root(holder), root(other)
+        if a != b:
+            parent[max(a, b)] = min(a, b)
+    members: dict[int, list[int]] = {}
+    for product_id in list(parent):
+        members.setdefault(root(product_id), []).append(product_id)
+    return {pid: tuple(sorted(group)) for group in members.values() for pid in group}
+
+
+async def family_of(db: AsyncSession, product_id: int) -> tuple[int, ...]:
+    return (await families(db)).get(product_id, (product_id,))
+
+
+def jobs_of(product_ids: Iterable[int]) -> ColumnElement[bool]:
+    """Jobs that print for any of these products: their own, and other products' jobs of plates they share."""
+    ids = list(product_ids)
+    linked = select(ProductJobProduct.job_id).where(ProductJobProduct.product_id.in_(ids))
+    return or_(ProductJob.product_id.in_(ids), ProductJob.id.in_(linked))
+
+
+async def job_products(db: AsyncSession, jobs: Iterable[ProductJob]) -> dict[int, list[int]]:
+    """Job id -> the products it prints for: its own first, then the others of a shared plate."""
+    jobs = list(jobs)
+    result = {job.id: [job.product_id] for job in jobs}
+    if jobs:
+        rows = await db.execute(
+            select(ProductJobProduct.job_id, ProductJobProduct.product_id)
+            .where(ProductJobProduct.job_id.in_(list(result)))
+            .order_by(ProductJobProduct.product_id)
+        )
+        for job_id, product_id in rows.all():
+            if product_id not in result[job_id]:
+                result[job_id].append(product_id)
+    return result
+
+
+async def part_owners(db: AsyncSession, part_ids: Iterable[int]) -> dict[int, int]:
+    """Part id -> its product, for the parts that still exist."""
+    ids = list(set(part_ids))
+    if not ids:
+        return {}
+    return dict((await db.execute(select(ProductPart.id, ProductPart.product_id).where(ProductPart.id.in_(ids)))).all())
+
+
+def _piece_ids(job: ProductJob) -> set[int]:
+    ids = set()
+    for key in job.pieces or {}:
+        try:
+            ids.add(int(key))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+async def link_job_products(db: AsyncSession, jobs: Iterable[ProductJob]) -> None:
+    """Record the other products whose parts each job prints (a shared plate). The jobs have ids."""
+    jobs = [job for job in jobs if job.id is not None]
+    owners = await part_owners(db, {pid for job in jobs for pid in _piece_ids(job)})
+    known = await job_products(db, jobs)
+    for job in jobs:
+        for product_id in sorted({owners[pid] for pid in _piece_ids(job) if pid in owners}):
+            if product_id not in known[job.id]:
+                db.add(ProductJobProduct(job_id=job.id, product_id=product_id))
+                known[job.id].append(product_id)
+
+
+async def job_part_ids(db: AsyncSession, job: ProductJob) -> set[int]:
+    """The parts a job's pieces are of that still exist, whichever products they belong to."""
+    return set(await part_owners(db, _piece_ids(job)))
+
+
+def piece_names(products: Iterable[Product]) -> dict[int, str]:
+    """Part id -> how to name its pieces: the part's name, or with several products the product's
+    (its part's too when it has more than one), so two holders' "Holder" parts are told apart."""
+    products = list(products)
+    if len(products) <= 1:
+        return {part.id: part.name for product in products for part in product.parts}
+    return {
+        part.id: product.name if len(product.parts) == 1 else f"{product.name} · {part.name}"
+        for product in products
+        for part in product.parts
+    }
+
+
+async def hand_over(db: AsyncSession, product: Product) -> None:
+    """Before a product is deleted: what it shares goes to another product, so their plates and stock stay.
+
+    A plate it holds that prints other products' parts passes to the lowest of
+    them; so does each of its jobs that printed for others (that product's row
+    becomes the job's own). The caller reads the product again before deleting
+    it: its loaded plates still list the ones handed over.
+    """
+    own = {p.id for p in product.parts}
+    for plate in product.plates:
+        owners = set((await part_owners(db, [p.part_id for p in plate.pieces if p.part_id not in own])).values())
+        owners.discard(product.id)
+        if owners:
+            heir = min(owners)
+            last = await db.scalar(select(func.max(ProductPlate.sort_order)).where(ProductPlate.product_id == heir))
+            plate.product_id = heir
+            plate.sort_order = (last if last is not None else -1) + 1
+    shared = list(
+        (
+            await db.execute(
+                select(ProductJob).where(
+                    ProductJob.product_id == product.id,
+                    ProductJob.id.in_(select(ProductJobProduct.job_id)),
+                )
+            )
+        ).scalars()
+    )
+    printing_for = await job_products(db, shared)
+    for job in shared:
+        others = [pid for pid in printing_for[job.id] if pid != product.id]
+        if not others:
+            continue
+        heir = min(others)
+        job.product_id = heir
+        await db.execute(
+            delete(ProductJobProduct).where(ProductJobProduct.job_id == job.id, ProductJobProduct.product_id == heir)
+        )
+    await db.flush()
+
+
 def part_specs(product: Product) -> list[planner.PartSpec]:
     return [
-        planner.PartSpec(p.id, max(1, p.quantity or 1), bool(p.matched), max(0, p.finish_minutes or 0) * 60)
+        planner.PartSpec(
+            p.id, max(1, p.quantity or 1), bool(p.matched), max(0, p.finish_minutes or 0) * 60, product_id=product.id
+        )
         for p in product.parts
     ]
 
@@ -342,19 +536,28 @@ async def products_to_replan(db: AsyncSession) -> list[int]:
         if product_id not in due or (when is not None and (current is None or when < current)):
             due[product_id] = when
     waiting = await db.execute(select(ProductJob.product_id).where(ProductJob.status == "planned").distinct())
-    for product_id in waiting.scalars():
+    linked = await db.execute(
+        select(ProductJobProduct.product_id)
+        .join(ProductJob, ProductJob.id == ProductJobProduct.job_id)
+        .where(ProductJob.status == "planned")
+        .distinct()
+    )
+    for product_id in [*waiting.scalars(), *linked.scalars()]:
         due.setdefault(product_id, None)
     never = datetime.max.replace(tzinfo=timezone.utc)
     return sorted(due, key=lambda pid: (due[pid] or never, pid))
 
 
 async def active_jobs(db: AsyncSession, product_id: int) -> list[ProductJob]:
+    """The product's waiting and printing jobs, those of plates it shares with other products too."""
+    return await active_jobs_of(db, [product_id])
+
+
+async def active_jobs_of(db: AsyncSession, product_ids: Iterable[int]) -> list[ProductJob]:
     return list(
         (
             await db.execute(
-                select(ProductJob)
-                .where(ProductJob.product_id == product_id, ProductJob.status.in_(JOB_ACTIVE))
-                .order_by(ProductJob.id)
+                select(ProductJob).where(jobs_of(product_ids), ProductJob.status.in_(JOB_ACTIVE)).order_by(ProductJob.id)
             )
         ).scalars()
     )
@@ -553,6 +756,9 @@ def piece_printer(job: ProductJob) -> int:
 async def stock_pool(db: AsyncSession, product: Product) -> planner.Pool:
     """Pieces in stock now: printed (less the ones found bad), corrected, minus what done orders took.
 
+    Of the product's parts only, printed by its own jobs or by other products'
+    jobs of plates they share.
+
     Pieces of jobs that do not count (plates printed by hand, see
     ``ProductJob.counted``) are left out. Done orders may have taken some of
     them already, so what is left of a part on a printer is taken to be
@@ -562,9 +768,7 @@ async def stock_pool(db: AsyncSession, product: Product) -> planner.Pool:
     part_ids = {p.id for p in product.parts}
     pool: planner.Pool = {}
     uncounted: planner.Pool = {}
-    done = (
-        await db.execute(select(ProductJob).where(ProductJob.product_id == product.id, ProductJob.status == "done"))
-    ).scalars()
+    done = (await db.execute(select(ProductJob).where(jobs_of([product.id]), ProductJob.status == "done"))).scalars()
     for job in done:
         good = good_pieces(job, part_ids)
         planner.pool_add(pool, piece_printer(job), good)
@@ -602,7 +806,7 @@ async def stock_pool(db: AsyncSession, product: Product) -> planner.Pool:
 
 
 def needs_of(orders: list[ProductOrder]) -> list[planner.OrderNeed]:
-    return [planner.OrderNeed(o.id, max(1, o.quantity), _aware(o.due_date)) for o in orders]
+    return [planner.OrderNeed(o.id, max(1, o.quantity), _aware(o.due_date), product_id=o.product_id) for o in orders]
 
 
 async def complete_ready_orders(db: AsyncSession, product: Product, pool: planner.Pool) -> list[ProductOrder]:
@@ -730,6 +934,28 @@ def serve_in_order(
     return result
 
 
+def serve_family(
+    products: list[Product], pool: planner.Pool, orders: list[ProductOrder], jobs: list[planner.Pieces]
+) -> list[list[ProductOrder]]:
+    """``serve_in_order`` for products planned together: each product's orders take its own parts' pieces.
+
+    ``orders`` are all of theirs, in the order they share the stock; each job's
+    orders come in that order.
+    """
+    if len(products) == 1:
+        return serve_in_order(part_specs(products[0]), pool, orders, jobs)
+    result: list[list[ProductOrder]] = [[] for _ in jobs]
+    for product in products:
+        specs = part_specs(product)
+        ids = {p.id for p in specs}
+        mine = [o for o in orders if o.product_id == product.id]
+        served = serve_in_order(specs, pool, mine, [tuple(p for p in pieces if p[0] in ids) for pieces in jobs])
+        for entry, more in zip(result, served, strict=True):
+            entry.extend(more)
+    rank = {o.id: i for i, o in enumerate(orders)}
+    return [sorted(entry, key=lambda o: rank[o.id]) for entry in result]
+
+
 def earliest_due(orders: list[ProductOrder]) -> datetime | None:
     """The soonest due date among orders (aware); None when none has one."""
     dues = [due for due in (_aware(o.due_date) for o in orders) if due is not None]
@@ -763,7 +989,9 @@ async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, 
             select(PrintQueueItem.id, PrintQueueItem.position).where(PrintQueueItem.id.in_(item_ids))
         )
         positions = dict(rows.all())
-    for product_id in sorted({j.product_id for j in jobs}):
+    # A job of a shared plate prints for several products: its orders are theirs together.
+    printing_for = await job_products(db, jobs)
+    for product_id in sorted({pid for pids in printing_for.values() for pid in pids}):
         product = await load_product(db, product_id)
         orders = await open_orders(db, product_id)
         if product is None:
@@ -773,7 +1001,7 @@ async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, 
         tags = await _order_tag_lookup(db, orders)
         # A job that does not count prints for nothing the plan knows of: no label.
         own = sorted(
-            (j for j in jobs if j.product_id == product_id and j.counted is not False),
+            (j for j in jobs if product_id in printing_for[j.id] and j.counted is not False),
             key=lambda j: (j.status != "printing", positions.get(j.queue_item_id or -1, 10**9), j.id),
         )
         serving = serve_in_order(
@@ -781,9 +1009,10 @@ async def order_tags(db: AsyncSession) -> tuple[dict[int, JobOrders], dict[int, 
         )
         for job, served_orders in zip(own, serving, strict=True):
             served = [tags[order.id] for order in served_orders]
-            entry = JobOrders(served, for_stock=not served)
             if job.queue_item_id is not None:
-                by_item[job.queue_item_id] = entry
+                entry = by_item.setdefault(job.queue_item_id, JobOrders())
+                entry.orders.extend(t for t in served if t not in entry.orders)
+                entry.for_stock = not entry.orders
             if job.status == "printing" and job.printer_id is not None:
                 printing = by_printer.setdefault(job.printer_id, JobOrders())
                 printing.orders.extend(t for t in served if t not in printing.orders)
@@ -977,10 +1206,10 @@ async def check_job(
     """
     if job.status != "done":
         raise ValueError("Only a finished job can be checked")
-    product = await load_product(db, job.product_id)
-    if product is None:
+    products = [p for pid in (await job_products(db, [job]))[job.id] if (p := await load_product(db, pid)) is not None]
+    if not products:
         raise ValueError("The job's product is gone")
-    printed = dict(job_pieces(job, {p.id for p in product.parts}))
+    printed = dict(job_pieces(job, {part.id for product in products for part in product.parts}))
     bad = {}
     for part_id, n in rejected.items():
         if part_id not in printed:
@@ -991,7 +1220,10 @@ async def check_job(
     job.rejected = {str(part_id): n for part_id, n in bad.items()} or None
     await record_check_verdict(db, job, source)
     await db.flush()
-    return await reopen_short_orders(db, product, await stock_pool(db, product))
+    reopened = []
+    for product in products:
+        reopened += await reopen_short_orders(db, product, await stock_pool(db, product))
+    return reopened
 
 
 # --- printing a checked plate again ---------------------------------------------
@@ -1072,11 +1304,11 @@ async def reprint_job(
 
     if job.status != "done":
         raise ValueError("Only a finished job can be printed again")
-    product = await load_product(db, job.product_id)
-    plate = next((p for p in product.plates if p.id == job.product_plate_id), None) if product else None
-    if product is None or plate is None or not plate_usable(plate):
+    plate = await load_plate(db, job.product_plate_id)
+    if plate is None or not plate_usable(plate):
         raise ValueError("The job's plate is gone")
-    pieces = plate_pieces(plate, {part.id for part in product.parts})
+    # All of a shared plate's pieces, whichever product they are for.
+    pieces = plate_pieces(plate, set(await part_owners(db, [p.part_id for p in plate.pieces])))
     if not pieces:
         raise ValueError("The job's plate prints no pieces")
 
@@ -1125,7 +1357,7 @@ async def reprint_job(
     await db.flush()
     await db.refresh(item, ["created_at"])
     reprint = ProductJob(
-        product_id=product.id,
+        product_id=plate.product_id,
         product_plate_id=plate.id,
         queue_item_id=item.id,
         item_created_at=item.created_at,
@@ -1140,17 +1372,28 @@ async def reprint_job(
     )
     db.add(reprint)
     await db.flush()
+    await link_job_products(db, [reprint])
+    await db.flush()
     logger.info("[PRODUCTS] Job %s printed again as queue job %s (%s)", job.id, item.id, "first" if asap else "last")
     return reprint
 
 
 async def refresh_product(db: AsyncSession, product: Product) -> tuple[planner.Pool, list[ProductJob]]:
-    """Follow the queue and close finished orders; returns the stock and the jobs that just failed."""
+    """Follow the queue and close finished orders; returns the stock and the jobs that just failed.
+
+    A job of a plate shared with other products may have finished their orders too.
+    """
     await link_hand_jobs(db, product=product)
-    failed = await sync_jobs(db, await active_jobs(db, product.id))
+    jobs = await active_jobs(db, product.id)
+    failed = await sync_jobs(db, jobs)
     await db.flush()
     pool = await stock_pool(db, product)
     await complete_ready_orders(db, product, pool)
+    others = {pid for pids in (await job_products(db, jobs)).values() for pid in pids} - {product.id}
+    for other_id in sorted(others):
+        other = await load_product(db, other_id)
+        if other is not None:
+            await complete_ready_orders(db, other, await stock_pool(db, other))
     return pool, failed
 
 
@@ -1173,7 +1416,7 @@ class PlanOutcome:
 
 
 def _log_plan(
-    product_id: int,
+    family: tuple[int, ...],
     result: planner.Plan,
     planned: list[planner.PlannedPlate],
     plates_by_id: dict[int, ProductPlate],
@@ -1207,7 +1450,7 @@ def _log_plan(
     others = ", ".join(f"{packing} {cost / 60:.0f}" for packing, cost in sorted(result.alternatives.items()))
     logger.info(
         "[PRODUCTS] Planned product %s: %s plan, cost %.0f min (by packing: %s); plates: %s%s%s",
-        product_id,
+        family[0] if len(family) == 1 else "s " + ", ".join(map(str, family)) + " together",
         result.packing,
         result.cost / 60,
         others or "-",
@@ -1403,7 +1646,7 @@ async def link_hand_jobs(
     from backend.app.models.products import ProductPlatePart
 
     if product is not None:
-        plates = [plate for plate in product.plates if plate_usable(plate)]
+        plates = [plate for plate in await all_plates(db, product) if plate_usable(plate)]
     else:
         plates = list((await db.execute(select(ProductPlate).options(selectinload(ProductPlate.pieces)))).scalars())
     by_file: dict[int, list[ProductPlate]] = {}
@@ -1468,6 +1711,8 @@ async def link_hand_jobs(
         db.add(job)
         linked.append(job)
     if linked:
+        await db.flush()
+        await link_job_products(db, linked)
         await db.flush()
         logger.info(
             "[PRODUCTS] Linked queue jobs %s queued by hand to product plates", [j.queue_item_id for j in linked]
@@ -1541,7 +1786,8 @@ async def replan(
 ) -> PlanOutcome:
     """Plan the product's open orders again and put the plates in the queue.
 
-    Started jobs stay and count as coming. So do the waiting jobs that are the
+    With its family: the products sharing plates with it are planned with it,
+    as one plan (see "shared plates and families" above). Started jobs stay and count as coming. So do the waiting jobs that are the
     user's: one queued by hand (linked here first, see ``link_hand_jobs``) and
     one moved by hand to another printer (pinned, or held for it on the
     timeline); a moved one the orders no longer need leaves the queue. A
@@ -1602,17 +1848,26 @@ async def _replan_once(
     from backend.app.services.queue_position import lock_queue_positions
     from backend.app.services.queue_reservations import SOURCE_PLAN, reserve
 
-    product = await load_product(db, product_id)
-    if product is None:
+    family = await family_of(db, product_id)
+    products = [p for pid in family if (p := await load_product(db, pid)) is not None]
+    if not products:
         return PlanOutcome(plan=None)
-    await link_hand_jobs(db, product=product)
-    jobs = await active_jobs(db, product.id)
+    family = tuple(p.id for p in products)
+    for product in products:
+        await link_hand_jobs(db, product=product)
+    jobs = await active_jobs_of(db, family)
     await sync_jobs(db, jobs)
     await db.flush()
-    pool = await stock_pool(db, product)
-    await complete_ready_orders(db, product, pool)
-    orders = await open_orders(db, product.id)
-    jobs = await active_jobs(db, product.id)
+    # Each product's stock is of its own parts: one pool holds them all.
+    pool: planner.Pool = {}
+    orders: list[ProductOrder] = []
+    for product in products:
+        own_pool = await stock_pool(db, product)
+        await complete_ready_orders(db, product, own_pool)
+        pool |= own_pool
+        orders += await open_orders(db, product.id)
+    orders.sort(key=order_sort_key)
+    jobs = await active_jobs_of(db, family)
     waiting = await waiting_jobs(db, jobs)
     # What the plan counts as still waiting, checked again once it is made.
     planned_around = {j.queue_item_id for j in waiting if j.queue_item_id is not None}
@@ -1635,13 +1890,13 @@ async def _replan_once(
             # move is still a move at the next plan.
             job.planned_printer_id = job.printer_id
         job.printer_id = placed_on.get(job.id, job.printer_id)
-    specs = part_specs(product)
-    part_ids = {p.id for p in product.parts}
+    specs = [spec for product in products for spec in part_specs(product)]
+    part_ids = {p.id for p in specs}
     printing = [job for job in jobs if job.status == "printing"]
     coming = {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
     for job in printing:
         planner.pool_add(coming, piece_printer(job), counted_pieces(job, part_ids))
-    needed = serve_in_order(specs, coming, orders, [counted_pieces(job, part_ids) for job in held])
+    needed = serve_family(products, coming, orders, [counted_pieces(job, part_ids) for job in held])
     unneeded = [job for job, served in zip(held, needed, strict=True) if not served and not job.by_hand]
     held = [job for job in held if job not in unneeded]
     waiting = [job for job in waiting if job not in held and job not in unneeded]
@@ -1703,15 +1958,17 @@ async def _replan_once(
         for p in (online or usable)
     ]
 
-    allowed_by_plate = await plate_printers(db, product.plates, [p.id for p in printers])
-    usable_plates = [plate for plate in product.plates if plate_usable(plate)]
+    # Every plate of the family: a shared plate is held by one of its products.
+    family_plates = [plate for product in products for plate in product.plates]
+    allowed_by_plate = await plate_printers(db, family_plates, [p.id for p in printers])
+    usable_plates = [plate for plate in family_plates if plate_usable(plate)]
     # The slicer's time per plate, and what the plate's history makes of it.
     estimates = {plate.id: est for plate in usable_plates if (est := plate_duration(plate)) is not None}
     history = await load_plate_history(db, usable_plates, estimates, now) if settings.learn_history else {}
     options: list[planner.PlateOption] = []
     plates_by_id: dict[int, ProductPlate] = {}
     skipped: list[tuple[int, str]] = []
-    for plate in product.plates:
+    for plate in family_plates:
         if not plate_usable(plate):
             skipped.append((plate.id, "file_missing"))
             continue
@@ -1797,7 +2054,7 @@ async def _replan_once(
 
     rank = {p.id: i for i, p in enumerate(inputs.printers)}
     planned = sorted(result.plates, key=lambda p: (p.start, rank.get(p.printer_id, 0)))
-    _log_plan(product.id, result, planned, plates_by_id, skipped)
+    _log_plan(family, result, planned, plates_by_id, skipped)
     outcome = PlanOutcome(plan=result, skipped_plates=skipped, held=len(held))
     if not planned:
         outcome.replaced = await _remove_waiting_jobs(db, waiting + unneeded)
@@ -1824,7 +2081,7 @@ async def _replan_once(
     for job in held:
         planner.pool_add(coming, piece_printer(job), counted_pieces(job, part_ids))
     plate_dues = [
-        earliest_due(served) for served in serve_in_order(specs, coming, orders, [p.option.pieces for p in planned])
+        earliest_due(served) for served in serve_family(products, coming, orders, [p.option.pieces for p in planned])
     ]
     own_items = {job.queue_item_id for job in jobs}
     other_dues: dict[int, datetime] = {}
@@ -1860,6 +2117,7 @@ async def _replan_once(
         return max([after, *(i.position or 0 for i in queue)]) + 1
 
     after = 0
+    created: list[ProductJob] = []
     for planned_plate, due in zip(planned, plate_dues, strict=True):
         plate = plates_by_id[planned_plate.option.id]
         pinned = planned_plate.pinned
@@ -1925,22 +2183,24 @@ async def _replan_once(
         queue.append(item)
         if not pinned:
             await reserve(db, item, planned_plate.printer_id, source=SOURCE_PLAN)
-        db.add(
-            ProductJob(
-                product_id=product.id,
-                product_plate_id=plate.id,
-                queue_item_id=item.id,
-                item_created_at=item.created_at,
-                printer_id=planned_plate.printer_id,
-                planned_printer_id=planned_plate.printer_id,
-                pinned=pinned,
-                status="planned",
-                pieces={str(part_id): n for part_id, n in planned_plate.option.pieces},
-                preferred_printer_id=planned_plate.preferred,
-                plan_info=job_info(planned_plate),
-            )
+        new_job = ProductJob(
+            product_id=plate.product_id,
+            product_plate_id=plate.id,
+            queue_item_id=item.id,
+            item_created_at=item.created_at,
+            printer_id=planned_plate.printer_id,
+            planned_printer_id=planned_plate.printer_id,
+            pinned=pinned,
+            status="planned",
+            pieces={str(part_id): n for part_id, n in planned_plate.option.pieces},
+            preferred_printer_id=planned_plate.preferred,
+            plan_info=job_info(planned_plate),
         )
+        db.add(new_job)
+        created.append(new_job)
         outcome.item_ids.append(item.id)
+    await db.flush()
+    await link_job_products(db, created)
     await db.flush()
     outcome.replaced = await _remove_waiting_jobs(db, waiting + unneeded)
     return outcome
@@ -1959,8 +2219,12 @@ class PassOutcome:
 
     @property
     def item_ids(self) -> list[int]:
-        """Every queue job the pass made, for ``announce_planned``."""
-        return [item_id for outcome in self.outcomes.values() for item_id in outcome.item_ids]
+        """Every queue job the pass made, for ``announce_planned``.
+
+        Products planned together (a family) share one outcome, listed under each.
+        """
+        distinct = {id(outcome): outcome for outcome in self.outcomes.values()}
+        return [item_id for outcome in distinct.values() for item_id in outcome.item_ids]
 
     def of(self, product_id: int) -> PlanOutcome:
         return self.outcomes.get(product_id) or PlanOutcome(plan=None)
@@ -2018,11 +2282,7 @@ async def replaceable_items(db: AsyncSession, product_ids: Iterable[int]) -> dic
     ids = list(product_ids)
     if not ids:
         return {}
-    jobs = list(
-        (
-            await db.execute(select(ProductJob).where(ProductJob.product_id.in_(ids), ProductJob.status == "planned"))
-        ).scalars()
-    )
+    jobs = list((await db.execute(select(ProductJob).where(jobs_of(ids), ProductJob.status == "planned"))).scalars())
     waiting = await waiting_jobs(db, jobs)
     if not waiting:
         return {}
@@ -2033,26 +2293,31 @@ async def replaceable_items(db: AsyncSession, product_ids: Iterable[int]) -> dic
         ).scalars()
     }
     placed_on = await _placed_on(db, waiting, items)
+    printing_for = await job_products(db, waiting)
     result: dict[int, set[int]] = {}
     for job in waiting:
         item = items.get(job.queue_item_id or -1)
         if item is None or not _same_item(job, item) or job.by_hand or _moved_by_hand(job, placed_on.get(job.id)):
             continue
-        result.setdefault(job.product_id, set()).add(item.id)
+        for product_id in printing_for[job.id]:
+            result.setdefault(product_id, set()).add(item.id)
     return {product_id: frozenset(item_ids) for product_id, item_ids in result.items()}
 
 
-async def _standing_owner(db: AsyncSession, product_id: int) -> tuple[int | None, bool, frozenset[int] | None]:
-    """Whom a product's waiting jobs were planned for: (actor id, manual start, printer scope).
+async def _standing_owner(
+    db: AsyncSession, product_ids: Iterable[int]
+) -> tuple[int | None, bool, frozenset[int] | None]:
+    """Whom products' waiting jobs were planned for: (actor id, manual start, printer scope).
 
-    For a product planned again that nobody asked about: its new jobs belong
-    to whoever its waiting jobs belong to. The actor is the most common
-    ``created_by_id`` of the planner's waiting jobs (None without any, or
-    when the system queued them), manual start when any of them waits for it.
+    For products planned again that nobody asked about (one, or a family): their
+    new jobs belong to whoever their waiting jobs belong to. The actor is the
+    most common ``created_by_id`` of the planner's waiting jobs (None without
+    any, or when the system queued them), manual start when any of them waits
+    for it.
     """
     from backend.app.core.printer_scope import resolve_user_id_printer_scope
 
-    waiting = [job for job in await waiting_jobs(db, await active_jobs(db, product_id)) if not job.by_hand]
+    waiting = [job for job in await waiting_jobs(db, await active_jobs_of(db, product_ids)) if not job.by_hand]
     items = []
     if waiting:
         items = list(
@@ -2093,6 +2358,9 @@ async def replan_pass(
     product planned again whose plan comes out the same keeps its jobs as
     they are (``replan`` keeps a waiting job the new plan has too).
 
+    Products sharing plates (a family) are planned as one, at the place of
+    the most urgent of them, and listed each with that one plan.
+
     Asked-for products are planned for the caller (``actor_id``,
     ``manual_start``, ``printer_ids``); one that fails raises. The others
     (``PassOutcome.displaced``) are planned for whoever their waiting jobs
@@ -2109,20 +2377,28 @@ async def replan_pass(
     # Asked-for products with nothing to plan still get their replan (it
     # closes ready orders, takes leftover jobs out); last, they wait for nothing.
     order += sorted(asked - set(order))
-    first = next(index for index, product_id in enumerate(order) if product_id in asked)
-    in_pass = order[first:]
-    replaceable = await replaceable_items(db, in_pass)
+    # Products sharing plates are planned together, at their most urgent one's place.
+    family = await families(db)
+    units = list(dict.fromkeys(family.get(product_id, (product_id,)) for product_id in order))
+    first = next(index for index, unit in enumerate(units) if asked & set(unit))
+    in_pass = units[first:]
+    replaceable = await replaceable_items(db, [product_id for unit in in_pass for product_id in unit])
     result = PassOutcome()
-    for index, product_id in enumerate(in_pass):
-        behind = frozenset().union(*(replaceable.get(later, frozenset()) for later in in_pass[index + 1 :]))
-        mine = product_id in asked
+    for index, unit in enumerate(in_pass):
+        behind = frozenset().union(
+            *(replaceable.get(later, frozenset()) for others in in_pass[index + 1 :] for later in others)
+        )
+        mine = bool(asked & set(unit))
         if not mine:
-            result.displaced.append(product_id)
+            result.displaced.extend(unit)
+        lead = unit[0]
 
-        async def plan_it(product_id: int = product_id, mine: bool = mine, behind: frozenset[int] = behind):
-            owner = (actor_id, manual_start, printer_ids) if mine else await _standing_owner(db, product_id)
+        async def plan_it(
+            unit: tuple[int, ...] = unit, lead: int = lead, mine: bool = mine, behind: frozenset[int] = behind
+        ):
+            owner = (actor_id, manual_start, printer_ids) if mine else await _standing_owner(db, unit)
             return await replan(
-                db, product_id, actor_id=owner[0], manual_start=owner[1], printer_ids=owner[2], ignore_items=behind
+                db, lead, actor_id=owner[0], manual_start=owner[1], printer_ids=owner[2], ignore_items=behind
             )
 
         if commit_each:
@@ -2131,8 +2407,8 @@ async def replan_pass(
                 await db.commit()
             except Exception:
                 await db.rollback()
-                logger.exception("[PRODUCTS] Could not replan product %s", product_id)
-                result.failed.append(product_id)
+                logger.exception("[PRODUCTS] Could not replan product(s) %s", list(unit))
+                result.failed.extend(unit)
                 continue
         elif mine:
             outcome = await plan_it()
@@ -2141,15 +2417,16 @@ async def replan_pass(
                 async with db.begin_nested():
                     outcome = await plan_it()
             except Exception:
-                logger.exception("[PRODUCTS] Could not replan product %s behind a more urgent one", product_id)
-                result.failed.append(product_id)
+                logger.exception("[PRODUCTS] Could not replan product(s) %s behind a more urgent one", list(unit))
+                result.failed.extend(unit)
                 continue
-        result.outcomes[product_id] = outcome
+        for product_id in unit:
+            result.outcomes[product_id] = outcome
     if result.displaced:
         logger.info(
             "[PRODUCTS] Replanned products %s behind %s, the more urgent",
             result.displaced,
-            sorted(p for p in in_pass if p in asked),
+            sorted(p for unit in in_pass for p in unit if p in asked),
         )
     return result
 
@@ -2205,6 +2482,9 @@ class OrderPlate:
     job: ProductJob
     product: Product
     plate: ProductPlate | None
+    # The products it prints for: ``product`` (the plate's holder), then the
+    # others of a shared plate.
+    products: list[Product]
     status: str
     printer_id: int | None
     start: datetime | None
@@ -2248,16 +2528,18 @@ async def order_plates(db: AsyncSession, product_order_ids: set[int]) -> list[Or
     available = {p.printer_id: p.available for p in forecast.printers}
     printers = list((await db.execute(select(Printer).order_by(Printer.id))).scalars())
     placed_on, moved = await placed_by_hand(db, jobs)
-    products: dict[int, Product] = {}
+    printing_for = await job_products(db, jobs)
+    products: dict[int, Product | None] = {}
     result = []
     for job in jobs:
-        if job.product_id not in products:
-            loaded = await load_product(db, job.product_id)
-            if loaded is None:
-                continue
-            products[job.product_id] = loaded
-        product = products[job.product_id]
-        plate = next((p for p in product.plates if p.id == job.product_plate_id), None)
+        for pid in printing_for[job.id]:
+            if pid not in products:
+                products[pid] = await load_product(db, pid)
+        its = [p for pid in printing_for[job.id] if (p := products[pid]) is not None]
+        if not its:
+            continue
+        product = its[0]
+        plate = await load_plate(db, job.product_plate_id)
         choices: list[PlateChoice] = []
         if plate is not None and plate.library_file is not None:
             model = model_key(plate_model(plate.library_file))
@@ -2280,6 +2562,7 @@ async def order_plates(db: AsyncSession, product_order_ids: set[int]) -> list[Or
                 job=job,
                 product=product,
                 plate=plate,
+                products=its,
                 status=job.status,
                 printer_id=printer_id,
                 start=start,
@@ -2465,7 +2748,9 @@ async def after_queue_items_changed(db: AsyncSession, queue_item_ids: list[int])
     }
     failed = await sync_jobs(db, jobs)
     await db.flush()
-    for product_id in sorted({j.product_id for j in jobs}):
+    # A job of a shared plate finishes orders of every product it prints for.
+    printing_for = await job_products(db, jobs)
+    for product_id in sorted({pid for pids in printing_for.values() for pid in pids}):
         product = await load_product(db, product_id)
         if product is not None:
             await complete_ready_orders(db, product, await stock_pool(db, product))
@@ -2482,11 +2767,15 @@ async def after_queue_items_changed(db: AsyncSession, queue_item_ids: list[int])
     started = [
         j for j in failed if (item := items.get(j.queue_item_id or -1)) is not None and item.started_at
     ] + stopped
-    for product_id in sorted({j.product_id for j in started}):
+    # Products sharing plates are planned together: one replan (and one count of them) per family,
+    # under its lowest product id.
+    family = await families(db) if started else {}
+    lead = {j.id: family.get(j.product_id, (j.product_id,))[0] for j in started}
+    for product_id in sorted(set(lead.values())):
         if not _may_auto_replan(product_id, time.monotonic()):
             logger.warning("[PRODUCTS] Product %s: prints keep failing, not replanning it again for now", product_id)
             continue
-        source = next(items[j.queue_item_id or -1] for j in started if j.product_id == product_id)
+        source = next(items[j.queue_item_id or -1] for j in started if lead[j.id] == product_id)
         task = asyncio.get_running_loop().create_task(
             _replan_later(product_id, source.created_by_id, bool(source.manual_start))
         )

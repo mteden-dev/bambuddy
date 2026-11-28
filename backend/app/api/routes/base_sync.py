@@ -882,14 +882,15 @@ async def order_plates(order_id: int, db: AsyncSession = Depends(get_db, scope="
     for entry in plates:
         job, plate, product = entry.job, entry.plate, entry.product
         info = job.plan_info or {}
-        part_names = {p.id: p.name for p in product.parts}
+        # A shared plate prints for several products: their pieces are named by product.
+        part_names = product_service.piece_names(entry.products)
         library_file = plate.library_file if plate is not None else None
         result.append(
             OrderPlateOut(
                 job_id=job.id,
                 queue_item_id=job.queue_item_id,
                 product_id=product.id,
-                product_name=product.name,
+                product_name=" + ".join(p.name for p in entry.products),
                 library_file_id=library_file.id if library_file is not None else None,
                 filename=library_file.filename if library_file is not None else None,
                 plate_index=plate.plate_id if plate is not None else None,
@@ -1057,7 +1058,7 @@ async def _withdraw_preview(db: AsyncSession, row: BaseOrder, return_done: bool)
     files = {
         plate.id: plate.library_file.filename if plate.library_file is not None else None
         for product in products.values()
-        for plate in product.plates
+        for plate in await product_service.all_plates(db, product)
     }
     printer_names = dict((await db.execute(select(Printer.id, Printer.name))).all())
 
@@ -1095,7 +1096,10 @@ async def _withdraw_preview(db: AsyncSession, row: BaseOrder, return_done: bool)
 
     # Before: what prints for it, and what no order takes yet.
     by_item, _ = await product_service.order_tags(db)
-    queued = [job for product_id in products for job in await product_service.queued_jobs(db, product_id)]
+    # A job of a plate shared by two of its products is listed once.
+    queued = list(
+        {job.id: job for product_id in products for job in await product_service.queued_jobs(db, product_id)}.values()
+    )
     # Started or being sent: the queue job says so before the planner's job follows it.
     started = set(
         (
@@ -1136,7 +1140,7 @@ async def _withdraw_preview(db: AsyncSession, row: BaseOrder, return_done: bool)
         (
             await db.execute(
                 select(ProductJob).where(
-                    ProductJob.product_id.in_(list(products)), ProductJob.status.in_(product_service.JOB_ACTIVE)
+                    product_service.jobs_of(products), ProductJob.status.in_(product_service.JOB_ACTIVE)
                 )
             )
         ).scalars()
