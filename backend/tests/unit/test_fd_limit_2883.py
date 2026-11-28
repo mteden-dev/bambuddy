@@ -7,6 +7,7 @@ hard limit, so startup does that on every install. The support bundle now counts
 descriptors by kind, so the next report shows what held them.
 """
 
+import os
 import resource
 import sqlite3
 from unittest.mock import MagicMock, patch
@@ -125,6 +126,7 @@ class TestDescriptorsInTheSupportBundle:
 
         assert _fd_kind(target) == kind
 
+    @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="the breakdown reads /proc, Linux only")
     def test_counts_by_kind_against_the_limit_without_paths(self, tmp_path):
         import psutil
 

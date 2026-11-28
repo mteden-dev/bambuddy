@@ -2818,7 +2818,7 @@ class ThumbnailError(ValueError):
 def _thumbnails_dir() -> Path:
     from backend.app.core.config import settings
 
-    directory = settings.base_dir / THUMBNAIL_DIR
+    directory = settings.base_dir / THUMBNAIL_DIR  # SEC-PATH-OK: THUMBNAIL_DIR is a module constant
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -2829,7 +2829,9 @@ def _absolute(relative: str | None) -> Path | None:
     from backend.app.core.config import settings
 
     path = Path(relative)
-    return path if path.is_absolute() else settings.base_dir / path
+    if path.is_absolute():
+        return path
+    return settings.base_dir / path  # SEC-PATH-OK: thumbnail_path is DB-stored, internally generated
 
 
 def remove_thumbnail(product: Product) -> None:
