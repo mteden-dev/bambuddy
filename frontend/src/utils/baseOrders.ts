@@ -1,21 +1,32 @@
-import type { BaseOrder, ProductJobOrders, ProductOrderTag } from '../api/client';
+import type { BaseOrder, BaseOrderLine, ProductJobOrders, ProductOrderTag } from '../api/client';
 import { formatDateTime, formatTimeOnly, parseUTCDate } from './date';
 import type { TimeFormat } from './date';
 
-/** Products an order's mapped lines want: product id -> units. */
+/** Products an order's mapped lines want: product id -> units. A line someone has already wants none. */
 export function wantedUnits(order: BaseOrder): Map<number, number> {
   const wanted = new Map<number, number>();
   for (const line of order.lines) {
-    if (line.mapping === 'product' && line.product_id != null) {
+    if (line.mapping === 'product' && line.product_id != null && !line.have) {
       wanted.set(line.product_id, (wanted.get(line.product_id) ?? 0) + line.quantity * line.units);
     }
   }
   return wanted;
 }
 
+/** Lines that are no product (not even "not printed") and nobody has yet: they keep an order from ready. */
+export function openLines(order: BaseOrder): BaseOrderLine[] {
+  return order.lines.filter((line) => line.mapping === 'unmapped' && !line.have);
+}
+
+/** Nothing to make for the order: its draft leaves nothing to print, or every line is had or not printed. */
+export function nothingToMake(order: BaseOrder): boolean {
+  if (order.draft) return order.draft.nothing_to_print;
+  return order.lines.some((line) => line.have) && order.lines.every((line) => line.have || line.mapping === 'not_printed');
+}
+
 /** What sending a waiting order does: print it all, print what the shelf leaves, or nothing to print. */
 export function sendLabel(order: BaseOrder): string {
-  if (order.draft?.nothing_to_print) return 'baseSync.markReady';
+  if (nothingToMake(order)) return 'baseSync.markReady';
   return order.draft ? 'baseSync.printRest' : 'baseSync.print';
 }
 

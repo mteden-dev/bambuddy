@@ -9,7 +9,7 @@ import { Button } from '../Button';
 import { PieceStepper } from './PieceStepper';
 import { useToast } from '../../contexts/ToastContext';
 import { useUndoToast } from '../../hooks/useUndoToast';
-import { sendLabel, wantedUnits } from '../../utils/baseOrders';
+import { nothingToMake, sendLabel, wantedUnits } from '../../utils/baseOrders';
 import { invalidatePlanQueries } from '../../utils/products';
 
 const TOUCH = 'any-pointer-coarse:min-h-[44px]!';
@@ -151,7 +151,7 @@ export function OrderPartsPanel({
           />
         ))}
       </div>
-      {waiting && order.draft?.nothing_to_print && (
+      {waiting && nothingToMake(order) && (
         <p role="status" className={`flex items-start gap-2 text-sm ${HAVE_TEXT}`}>
           <PackageCheck aria-hidden="true" className="w-4 h-4 mt-0.5 shrink-0" />
           {t('baseSync.parts.orderNothing')}
@@ -169,7 +169,7 @@ export function OrderPartsPanel({
               {printing || saving ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                order.draft?.nothing_to_print && <PackageCheck className="w-4 h-4" />
+                nothingToMake(order) && <PackageCheck className="w-4 h-4" />
               )}
               {t(sendLabel(order))}
             </Button>

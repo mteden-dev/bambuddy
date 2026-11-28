@@ -61,6 +61,7 @@ export default {
     baseUnreachable: 'Base could not be reached: {{error}}',
     baseNotJson: 'Base sent an answer that is not JSON',
     orderNoLineForProduct: 'The order has no line for product {{product}}',
+    orderNoSuchLine: 'The order has no such line',
     partNotOfProductId: 'Part {{part}} is not a part of product {{product}}',
     printerNotFound: 'Printer not found',
     slotSpoolsNeedInventory: 'Slot spools need the built-in inventory (Spoolman mode is on)',

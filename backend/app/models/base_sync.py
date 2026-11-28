@@ -75,6 +75,11 @@ class BaseOrder(Base):
     # n}, "on_hand": {part: n}}): nothing goes into stock or the queue until
     # it is sent, which applies it.
     draft: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # The lines someone has already for this order ("I have it": made by hand,
+    # or a product not in Bambuddy yet), by key (services/base_sync.line_key):
+    # nothing is printed for them, whatever their SKU maps to, and a line that
+    # maps to no product no longer keeps the order from ready.
+    have_lines: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # The last sync found it in one of the statuses orders are taken from.
     in_status: Mapped[bool] = mapped_column(Boolean, default=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

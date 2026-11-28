@@ -20,9 +20,12 @@ the sync:
    automatically. Sending it, someone may hold products back (``held``: from
    the shelf, made another way) and say which parts they have already (those
    go into stock as pieces of no known printer, which the planner pairs with
-   any printer's). An accepted order's product orders follow its lines while
-   it stays in those statuses (a line added, a quantity changed, a SKU mapped),
-   less what was held back;
+   any printer's). A line can be marked as had already (``have_lines``: made
+   by hand, or a product not in Bambuddy yet): nothing is printed for it, and
+   a line no product is mapped to keeps an accepted order from ready until it
+   is. An accepted order's product orders follow its lines while it stays in
+   those statuses (a line added, a quantity changed, a SKU mapped), less what
+   was held back and the lines had;
 4. cancels the open product orders of an order found in the cancelled status,
    and its done ones too while it was still in those statuses (not packed or
    sent yet): their boxes go back to stock;
@@ -391,6 +394,34 @@ def wanted_products(lines: list[dict], skus: dict[str, SkuTarget]) -> dict[int, 
     return wanted
 
 
+def line_key(line: dict) -> str:
+    """What tells an order's line apart: its SKU (casefolded), its name when it has none."""
+    sku = str(line.get("sku") or "").strip()
+    return sku.casefold() if sku else "name:" + str(line.get("name") or "").strip().casefold()
+
+
+def have_lines(order: BaseOrder) -> set[str]:
+    """The keys of the lines someone has already for this order ("I have it")."""
+    return {str(key) for key in (order.have_lines or []) if key}
+
+
+def lines_to_make(order: BaseOrder) -> list[dict]:
+    """An order's lines less the ones someone has already: what is made for it."""
+    had = have_lines(order)
+    return [line for line in order.items or [] if line_key(line) not in had]
+
+
+def had_lines(order: BaseOrder) -> list[dict]:
+    """An order's lines someone has already."""
+    had = have_lines(order)
+    return [line for line in order.items or [] if line_key(line) in had]
+
+
+def open_lines(order: BaseOrder, skus: dict[str, SkuTarget]) -> list[dict]:
+    """Lines that map to nothing (not even "not printed") and nobody has yet: they keep it from ready."""
+    return [line for line in lines_to_make(order) if str(line.get("sku") or "").casefold() not in skus]
+
+
 def held_products(order: BaseOrder) -> dict[int, int]:
     """product id -> products held back from printing for this order."""
     result = {}
@@ -453,14 +484,15 @@ async def reconcile(
     """Make an accepted order's open product orders match its lines; returns the products changed.
 
     A product order that is done stays done. One whose line went away (or
-    whose SKU was unmapped) is cancelled; a quantity change follows the line.
+    whose SKU was unmapped, or someone has the line already) is cancelled; a
+    quantity change follows the line.
     ``refresh_due`` (its ship-by deadline was just read, or ``handling_days``
     changed) sets the open ones' due date again; otherwise a due date set by
     hand stays.
     """
     from backend.app.models.products import Product
 
-    wanted = wanted_products(order.items or [], skus)
+    wanted = wanted_products(lines_to_make(order), skus)
     held = held_products(order)
     wanted = {pid: n - held.get(pid, 0) for pid, n in wanted.items()}
     existing_products = set((await db.execute(select(Product.id).where(Product.id.in_(wanted)))).scalars())
@@ -616,12 +648,15 @@ async def close_packed_orders(db: AsyncSession) -> set[int]:
 
 
 def unmapped_lines(orders: list[BaseOrder], skus: dict[str, SkuTarget]) -> dict[str, dict]:
-    """SKU -> {"name", "orders"} for the lines of waiting or accepted orders (not packed) that map to nothing."""
+    """SKU -> {"name", "orders"} for the lines of waiting or accepted orders (not packed) that map to nothing.
+
+    A line someone has already for its order ("I have it") needs no answer there.
+    """
     found: dict[str, dict] = {}
     for order in orders:
         if order.state not in ("new", "accepted") or is_packed(order):
             continue
-        for line in order.items or []:
+        for line in lines_to_make(order):
             sku = str(line.get("sku") or "")
             if not sku or sku.casefold() in skus:
                 continue
@@ -883,7 +918,7 @@ async def _check_choices(db: AsyncSession, order: BaseOrder, choices: list[Produ
     """Every choice names a product of the order and parts of that product; returns product -> its parts."""
     from backend.app.models.products import ProductPart
 
-    wanted = wanted_products(order.items or [], skus)
+    wanted = wanted_products(lines_to_make(order), skus)
     parts: dict[int, set[int]] = {}
     for choice in choices:
         if choice.product_id not in wanted:
@@ -908,7 +943,7 @@ async def save_draft(db: AsyncSession, order: BaseOrder, choices: list[ProductCh
     """
     skus = await sku_map(db)
     await _check_choices(db, order, choices, skus)
-    wanted = wanted_products(order.items or [], skus)
+    wanted = wanted_products(lines_to_make(order), skus)
     held, on_hand = draft_parts(order)
     owner = await _part_products(db, set(on_hand))
     for choice in choices:
@@ -933,7 +968,7 @@ async def _draft_choices(db: AsyncSession, order: BaseOrder, skus) -> list[Produ
         return None
     held, on_hand = draft_parts(order)
     owner = await _part_products(db, set(on_hand))
-    wanted = wanted_products(order.items or [], skus)
+    wanted = wanted_products(lines_to_make(order), skus)
     return [
         ProductChoice(
             product_id,
@@ -965,7 +1000,7 @@ async def accept(db: AsyncSession, order: BaseOrder, choices: list[ProductChoice
         choices = await _draft_choices(db, order, skus)
     order.draft = None
     if choices is not None:
-        wanted = wanted_products(order.items or [], skus)
+        wanted = wanted_products(lines_to_make(order), skus)
         held = held_products(order)
         on_hand = on_hand_parts(order)
         owner = await _part_products(db, set(on_hand))
@@ -997,6 +1032,29 @@ async def accept(db: AsyncSession, order: BaseOrder, choices: list[ProductChoice
     order.state = "accepted"
     changed |= await reconcile(db, order, skus, config)
     return changed
+
+
+async def set_have(db: AsyncSession, order: BaseOrder, key: str, have: bool) -> set[int]:
+    """Say someone has a line of the order already ("I have it"), or no more; returns the products changed.
+
+    Nothing is printed for a line someone has, whatever its SKU maps to: an
+    accepted order's product orders follow at once. A waiting order keeps it
+    until it is sent, and sending it, taking that back or skipping it leaves it
+    as it is: it is about the thing on the shelf, not the order's printing.
+    The caller replans and commits.
+    """
+    if not any(line_key(line) == key for line in order.items or []):
+        raise ValueError("The order has no such line")
+    had = have_lines(order)
+    if have:
+        had.add(key)
+    else:
+        had.discard(key)
+    order.have_lines = sorted(had) or None
+    await db.flush()
+    if order.state != "accepted":
+        return set()
+    return await reconcile(db, order, await sku_map(db), await read_config(db))
 
 
 async def reset(db: AsyncSession, order: BaseOrder) -> set[int]:

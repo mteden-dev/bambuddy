@@ -21,6 +21,8 @@ import type { TimeFormat } from '../../utils/date';
 import {
   isLate,
   missingParts,
+  nothingToMake,
+  openLines,
   ORDER_GRID,
   orderLate,
   sendLabel,
@@ -52,6 +54,8 @@ interface OrderRowProps {
   onRequeue: () => void;
   /** Open the plates the plan prints for an order in production (a preferred printer per plate). */
   onPlates: () => void;
+  /** Say someone has a line already ("I have it": made by hand, no product yet), or take it back. */
+  onHave: (line: BaseOrderLine, have: boolean) => void;
 }
 
 /** Allegro: an orange "A"; a shop: a bag. The account name says which Allegro account. */
@@ -131,7 +135,7 @@ function LineThumb({ line }: { line: BaseOrderLine }) {
   return (
     <div
       className={`${size} rounded-lg bg-bambu-dark flex items-center justify-center shrink-0 ${
-        line.mapping === 'unmapped' ? 'ring-1 ring-amber-500/60' : ''
+        line.mapping === 'unmapped' && !line.have ? 'ring-1 ring-amber-500/60' : ''
       }`}
     >
       <ImageOff className="w-4 h-4 text-bambu-gray" />
@@ -139,7 +143,65 @@ function LineThumb({ line }: { line: BaseOrderLine }) {
   );
 }
 
-function Line({ order, line, index }: { order: BaseOrder; line: BaseOrderLine; index: number }) {
+/**
+ * "I have it" on a line no product is mapped to (made by hand, not sliced yet), and on one marked so:
+ * pressed, nothing is printed for it and it no longer keeps the order from ready.
+ */
+function HaveToggle({
+  line,
+  canMark,
+  busy,
+  onHave,
+}: {
+  line: BaseOrderLine;
+  canMark: boolean;
+  busy: boolean;
+  onHave: (line: BaseOrderLine, have: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const have = !!line.have;
+  if (!canMark) {
+    return have ? (
+      <span className="inline-flex items-center gap-1 text-xs text-sky-700 dark:text-sky-300 shrink-0">
+        <Check className="w-3.5 h-3.5" />
+        {t('baseSync.heldAll')}
+      </span>
+    ) : null;
+  }
+  return (
+    <button
+      type="button"
+      aria-pressed={have}
+      disabled={busy}
+      title={t(have ? 'baseSync.haveUndoTitle' : 'baseSync.haveTitle')}
+      onClick={() => onHave(line, !have)}
+      className={`shrink-0 inline-flex items-center justify-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 any-pointer-coarse:min-h-[44px] any-pointer-coarse:min-w-[64px] ${
+        have
+          ? 'border-sky-500/60 bg-sky-500/15 text-sky-700 dark:text-sky-300'
+          : 'border-bambu-dark-tertiary text-bambu-gray-light hover:border-bambu-gray hover:text-white'
+      }`}
+    >
+      {have && <Check className="w-3.5 h-3.5" />}
+      {t('baseSync.have')}
+    </button>
+  );
+}
+
+function Line({
+  order,
+  line,
+  index,
+  canMark,
+  busy,
+  onHave,
+}: {
+  order: BaseOrder;
+  line: BaseOrderLine;
+  index: number;
+  canMark: boolean;
+  busy: boolean;
+  onHave: (line: BaseOrderLine, have: boolean) => void;
+}) {
   const { t } = useTranslation();
   const held = line.product_id != null ? (order.held?.[String(line.product_id)] ?? 0) : 0;
   const total = line.product_id != null ? (wantedUnits(order).get(line.product_id) ?? 0) : 0;
@@ -161,14 +223,18 @@ function Line({ order, line, index }: { order: BaseOrder; line: BaseOrderLine; i
         <div className="flex flex-wrap items-center gap-x-2 text-xs">
           <span className="text-bambu-gray">{line.sku}</span>
           {line.mapping === 'unmapped' && (
-            <span className="px-1.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-300">
+            <span
+              className={`px-1.5 rounded ${
+                line.have ? 'bg-bambu-dark-tertiary text-bambu-gray' : 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+              }`}
+            >
               {t('baseSync.mapping.unmapped')}
             </span>
           )}
           {line.mapping === 'not_printed' && (
             <span className="px-1.5 rounded bg-bambu-dark-tertiary text-bambu-gray">{t('baseSync.mapping.not_printed')}</span>
           )}
-          {held > 0 && firstOfProduct && (
+          {held > 0 && firstOfProduct && !line.have && (
             // All of it on hand is nothing to warn about; printing only some is.
             <span className={held >= total ? 'text-sky-700 dark:text-sky-300' : 'text-amber-600 dark:text-amber-300'}>
               {held >= total ? t('baseSync.heldAll') : t('baseSync.heldBack', { print: total - held, total })}
@@ -176,6 +242,9 @@ function Line({ order, line, index }: { order: BaseOrder; line: BaseOrderLine; i
           )}
         </div>
       </div>
+      {(line.mapping === 'unmapped' || line.have) && (
+        <HaveToggle line={line} canMark={canMark} busy={busy} onHave={onHave} />
+      )}
     </li>
   );
 }
@@ -186,6 +255,14 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
   const { data: ui } = useUiSettings();
   const timeFormat: TimeFormat = ui?.time_format || 'system';
   const missing = missingParts(order);
+  // In production, lines no product is mapped to keep it from ready until someone has them.
+  const open = order.state === 'accepted' ? openLines(order) : [];
+  const openHint = open.length > 0 && (
+    <div role="status" className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-300">
+      <AlertTriangle aria-hidden="true" className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+      <span>{t('baseSync.openLines', { list: open.map((line) => `${line.quantity}× ${line.name}`).join(', ') })}</span>
+    </div>
+  );
   if (order.packed) {
     return (
       <span
@@ -246,10 +323,12 @@ function ProgressCell({ order, partNames }: { order: BaseOrder; partNames: Map<n
             </span>
           </div>
         )}
+        {openHint}
       </div>
     );
   }
-  if (order.draft?.nothing_to_print) {
+  if (openHint) return openHint;
+  if (order.state !== 'accepted' && nothingToMake(order)) {
     return (
       <span className="inline-flex items-center gap-1 text-xs text-sky-700 dark:text-sky-300">
         <PackageCheck className="w-3.5 h-3.5 shrink-0" />
@@ -298,6 +377,7 @@ export function OrderRow(props: OrderRowProps) {
     onWithdraw,
     onRequeue,
     onPlates,
+    onHave,
   } = props;
   const { t } = useTranslation();
   const { data: ui } = useUiSettings();
@@ -310,11 +390,13 @@ export function OrderRow(props: OrderRowProps) {
     const body = expanded && parts.current ? await parts.current.flush() : null;
     onPrint(body ?? undefined);
   };
-  const hasProducts = order.lines.some((line) => line.mapping === 'product');
+  // Products to print: a line someone has already prints nothing.
+  const hasProducts = order.lines.some((line) => line.mapping === 'product' && !line.have);
   const waiting = order.state === 'new' || order.state === 'skipped';
   // Packed in Base: done, listed with the ready ones; nothing to do on it any more.
   const packedState = !!order.packed && (order.state === 'new' || order.state === 'accepted');
   const act = canAct && !order.packed;
+  const canMark = act && order.state !== 'cancelled';
   const missing = missingParts(order).length > 0;
   // Three lines; the rest behind "+N" (all of them once the row is open).
   const shownLines = allLines || expanded ? order.lines : order.lines.slice(0, 3);
@@ -377,7 +459,15 @@ export function OrderRow(props: OrderRowProps) {
         <div className="min-w-0">
           <ul className="space-y-1">
             {shownLines.map((line, index) => (
-              <Line key={`${line.sku}-${index}`} order={order} line={line} index={index} />
+              <Line
+                key={`${line.sku}-${index}`}
+                order={order}
+                line={line}
+                index={index}
+                canMark={canMark}
+                busy={busy}
+                onHave={onHave}
+              />
             ))}
           </ul>
           {hiddenLines > 0 && (
@@ -436,7 +526,7 @@ export function OrderRow(props: OrderRowProps) {
                 {busy || partsSaving ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
-                  order.draft?.nothing_to_print && <PackageCheck className="w-4 h-4" />
+                  nothingToMake(order) && <PackageCheck className="w-4 h-4" />
                 )}
                 {t(sendLabel(order))}
               </Button>

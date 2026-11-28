@@ -617,6 +617,38 @@ describe('BaseOrdersView', () => {
     );
   });
 
+  it('marks a line with no product as had on the order, and an order waiting for one says so', async () => {
+    const haves: { id: number; body: unknown }[] = [];
+    const handmade = { ...ORDER.lines[1], sku: 'SKU-HANDMADE', name: 'Handmade insert' };
+    orders = [{ ...ORDER, state: 'accepted', lines: [handmade] }];
+    server.use(
+      http.post('/api/v1/base-sync/orders/:id/have', async ({ params, request }) => {
+        const body = await request.json();
+        haves.push({ id: Number(params.id), body });
+        return HttpResponse.json({ ...orders[0], lines: [{ ...handmade, have: true }], ready: true });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    // In production, the line keeps the order from ready until someone has it.
+    expect(await screen.findByText('Waiting for "Have it": 1× Handmade insert')).toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Have it' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    await waitFor(() =>
+      expect(haves).toEqual([{ id: 5001, body: { sku: 'SKU-HANDMADE', name: 'Handmade insert', have: true } }]),
+    );
+    expect(await screen.findByText('The order is ready.')).toBeInTheDocument();
+  });
+
+  it('sends a waiting order whose every line is had as ready, not to print', async () => {
+    orders = [{ ...ORDER, lines: [{ ...ORDER.lines[1], have: true }] }];
+    render(<BaseOrdersView hasPermission={allowAll} />);
+    expect(await screen.findByRole('button', { name: 'Have it' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Print' })).not.toBeInTheDocument();
+  });
+
   it('saves the connection settings with the chosen statuses', async () => {
     const user = userEvent.setup();
     render(<BaseOrdersView hasPermission={allowAll} />);

@@ -697,6 +697,100 @@ async def test_an_order_still_printing_stays_in_production(async_client: AsyncCl
     assert (counts["accepted"]["allegro"], counts["ready"]["allegro"]) == (1, 0)
 
 
+async def _have(client: AsyncClient, order_id: int, sku: str, have: bool = True, connected: set[int] | None = None):
+    online, status = _live(connected or set())
+    with online, status:
+        response = await client.post(f"/api/v1/base-sync/orders/{order_id}/have", json={"sku": sku, "have": have})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_a_line_with_no_product_is_ready_once_someone_has_it(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    # Made by hand: in no product yet.
+    fake_base.orders = [_order(5821, [("SKU-HANDMADE", 2)])]
+    await _sync(async_client, {shop.printer})
+    online, status = _live({shop.printer})
+    with online, status:
+        body = (await async_client.post("/api/v1/base-sync/orders/5821/accept")).json()
+    # Sent, it is in production, not ready: nobody said they have it.
+    assert (body["state"], body["ready"]) == ("accepted", False)
+    assert [o["order_id"] for o in (await async_client.get("/api/v1/base-sync/orders?state=accepted")).json()] == [5821]
+
+    body = await _have(async_client, 5821, "sku-handmade")  # any case
+    assert [(line["mapping"], line["have"]) for line in body["lines"]] == [("unmapped", True)]
+    assert body["ready"] is True
+    assert [o["order_id"] for o in (await async_client.get("/api/v1/base-sync/orders?state=ready")).json()] == [5821]
+    counts = (await async_client.get("/api/v1/base-sync/orders/counts")).json()
+    assert (counts["ready"]["allegro"], counts["accepted"]["allegro"]) == (1, 0)
+    # Had, it asks for no SKU mapping any more; nothing was printed for it.
+    assert (await async_client.get("/api/v1/base-sync/skus")).json()["unmapped"] == []
+    assert await _product_orders(db_session) == []
+
+    # Taken back: in production again.
+    body = await _have(async_client, 5821, "SKU-HANDMADE", have=False)
+    assert (body["lines"][0]["have"], body["ready"]) == (False, False)
+
+
+async def test_a_line_with_no_product_keeps_its_order_from_ready(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5822, [("SKU-BOX-100-B", 1), ("SKU-HANDMADE", 1)])]
+    await _sync(async_client, {shop.printer})
+    # The box from the shelf: the draft holds it back, yet the other line is not had.
+    response = await async_client.post(
+        "/api/v1/base-sync/orders/5822/draft", json={"products": [{"product_id": shop.product_id, "units": 0}]}
+    )
+    assert response.json()["draft"]["nothing_to_print"] is False
+    body = await _have(async_client, 5822, "SKU-HANDMADE")
+    assert body["state"] == "new" and body["draft"]["nothing_to_print"] is True
+
+    await _have(async_client, 5822, "SKU-HANDMADE", have=False)
+    online, status = _live({shop.printer})
+    with online, status:
+        body = (await async_client.post("/api/v1/base-sync/orders/5822/accept")).json()
+    assert (body["state"], body["held"], body["ready"]) == ("accepted", {str(shop.product_id): 1}, False)
+    # Done by hand later: now it can be packed.
+    body = await _have(async_client, 5822, "SKU-HANDMADE")
+    assert body["ready"] is True
+
+
+async def test_a_line_had_prints_nothing_when_its_sku_is_mapped_later(
+    async_client: AsyncClient, db_session, shop, fake_base
+):
+    fake_base.orders = [_order(5823, [("SKU-BOX-100-G", 1)])]
+    await _sync(async_client, {shop.printer})
+    online, status = _live({shop.printer})
+    with online, status:
+        await async_client.post("/api/v1/base-sync/orders/5823/accept")
+    await _have(async_client, 5823, "SKU-BOX-100-G")
+    # Sliced at last and mapped: the order has it already, nothing prints for it.
+    with online, status:
+        response = await async_client.put("/api/v1/base-sync/skus/SKU-BOX-100-G", json={"product_id": shop.product_id})
+    assert response.status_code == 200, response.text
+    assert await _product_orders(db_session) == []
+    [order] = (await async_client.get("/api/v1/base-sync/orders?state=ready")).json()
+    assert [(line["mapping"], line["have"]) for line in order["lines"]] == [("product", True)]
+
+    # Taken back: it prints.
+    body = await _have(async_client, 5823, "SKU-BOX-100-G", have=False, connected={shop.printer})
+    assert body["ready"] is False
+    [po] = await _product_orders(db_session)
+    assert (po.product_id, po.quantity, po.status) == (shop.product_id, 1, "open")
+
+
+async def test_only_a_line_of_the_order_can_be_had(async_client: AsyncClient, db_session, shop, fake_base):
+    fake_base.orders = [_order(5824, [("SKU-HANDMADE", 1)])]
+    await _sync(async_client, {shop.printer})
+    response = await async_client.post("/api/v1/base-sync/orders/5824/have", json={"sku": "SKU-OTHER", "have": True})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "The order has no such line"
+    row = await db_session.get(BaseOrder, 5824)
+    await db_session.refresh(row)
+    assert row.have_lines is None
+
+
 async def test_order_counts_by_state_and_source(async_client: AsyncClient, db_session, shop, fake_base):
     fake_base.orders = [_order(5901, [("SKU-BOX-100-B", 1)]), _shop_order(5902, confirmed=1795111800)]
     await _sync(async_client, {shop.printer})

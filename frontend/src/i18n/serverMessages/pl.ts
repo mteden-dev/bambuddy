@@ -58,6 +58,7 @@ export default {
     baseUnreachable: 'Nie udało się połączyć z Base: {{error}}',
     baseNotJson: 'Base przysłał odpowiedź, która nie jest JSON-em',
     orderNoLineForProduct: 'Zamówienie nie ma pozycji z produktem {{product}}',
+    orderNoSuchLine: 'Zamówienie nie ma takiej pozycji',
     partNotOfProductId: 'Część {{part}} nie należy do produktu {{product}}',
     printerNotFound: 'Nie znaleziono drukarki',
     slotSpoolsNeedInventory: 'Szpule w slotach wymagają wbudowanego magazynu (włączony jest tryb Spoolman)',

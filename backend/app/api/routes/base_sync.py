@@ -205,6 +205,8 @@ class OrderLineOut(BaseModel):
     # The product's picture: GET /products/{id}/thumbnail?v=<version>.
     has_thumbnail: bool = False
     thumbnail_version: str | None = None
+    # Someone has it already for this order ("I have it"): nothing is printed for it.
+    have: bool = False
 
 
 class ProductOrderRef(BaseModel):
@@ -243,7 +245,8 @@ class DraftOut(BaseModel):
     # product id -> products held back; part id -> pieces on hand (saved, not applied yet).
     held: dict[int, int]
     on_hand: dict[int, int]
-    # The choice leaves nothing to print: every product held back or all its parts on hand.
+    # The choice leaves nothing to print: every product held back or all its parts on hand,
+    # and every line that is no product had already.
     nothing_to_print: bool = False
 
 
@@ -310,6 +313,7 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
     result = []
     for row in rows:
         lines = []
+        had = svc.have_lines(row)
         for line in row.items or []:
             target = skus.get(str(line.get("sku") or "").casefold())
             if target is None:
@@ -332,13 +336,14 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                     thumbnail_version=(
                         product_service.thumbnail_version(products[product_id]) if product_id in products else None
                     ),
+                    have=svc.line_key(line) in had,
                 )
             )
         own = refs.get(row.order_id, [])
         live = [r for r in own if r.status != "cancelled"]
         on_hand = svc.on_hand_parts(row)
         draft_held, draft_on_hand = svc.draft_parts(row)
-        wanted = {pid: n for pid, n in svc.wanted_products(row.items or [], skus).items() if pid in products}
+        wanted = {pid: n for pid, n in svc.wanted_products(svc.lines_to_make(row), skus).items() if pid in products}
         row_progress = []
         for po in product_orders.get(row.order_id, []):
             entry = progress.get(po.id)
@@ -357,7 +362,7 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                     DraftOut(
                         held=draft_held,
                         on_hand=draft_on_hand,
-                        nothing_to_print=_nothing_to_print(wanted, draft_held, draft_on_hand, products),
+                        nothing_to_print=_nothing_to_print(row, skus, wanted, draft_held, draft_on_hand, products),
                     )
                     if row.draft
                     else None
@@ -374,18 +379,26 @@ async def _orders_out(db: AsyncSession, rows: list[BaseOrder]) -> list[BaseOrder
                 product_orders=own,
                 held=svc.held_products(row),
                 on_hand=svc.on_hand_parts(row),
-                ready=_ready(row, wanted, live),
+                ready=_ready(row, skus, wanted, live),
             )
         )
     return result
 
 
 def _nothing_to_print(
-    wanted: dict[int, int], held: dict[int, int], on_hand: dict[int, int], products: dict[int, Product]
+    row: BaseOrder,
+    skus: dict[str, svc.SkuTarget],
+    wanted: dict[int, int],
+    held: dict[int, int],
+    on_hand: dict[int, int],
+    products: dict[int, Product],
 ) -> bool:
-    """A choice leaves nothing to print: each product is held back or has every part on hand."""
-    if not wanted:
+    """A choice leaves nothing to do: each product is held back or has every part on hand, and no
+    line that is no product waits for someone to have it."""
+    if svc.open_lines(row, skus):
         return False
+    if not wanted:
+        return bool(svc.had_lines(row))
     for product_id, units in wanted.items():
         units -= held.get(product_id, 0)
         if units <= 0:
@@ -425,20 +438,25 @@ async def _ready_orders(db: AsyncSession, rows: list[BaseOrder]) -> set[int]:
     product_orders = await _product_orders_by_order(db, {row.order_id for row in accepted})
     ready = set()
     for row in accepted:
-        wanted = {pid: n for pid, n in svc.wanted_products(row.items or [], skus).items() if pid in existing}
+        wanted = {pid: n for pid, n in svc.wanted_products(svc.lines_to_make(row), skus).items() if pid in existing}
         live = [po for po in product_orders.get(row.order_id, []) if po.status != "cancelled"]
-        if _ready(row, wanted, live):
+        if _ready(row, skus, wanted, live):
             ready.add(row.order_id)
     return ready
 
 
-def _ready(row: BaseOrder, wanted: dict[int, int], live: list) -> bool:
-    """An accepted order is ready: every product printed for it is done, the rest held back.
+def _ready(row: BaseOrder, skus: dict[str, svc.SkuTarget], wanted: dict[int, int], live: list) -> bool:
+    """An accepted order is ready: every product printed for it is done, the rest held back, and
+    someone has every line that maps to no product ("I have it").
 
-    Holding back every product leaves it no product order, and it is ready all the same.
-    Ready orders are listed apart from the ones in production (``state=ready``).
+    Holding back every product (or having every line) leaves it no product order, and it is
+    ready all the same. A line no product is mapped to keeps it from ready until someone has
+    it, or its SKU is mapped (to a product, or as not printed). Ready orders are listed apart
+    from the ones in production (``state=ready``).
     """
-    if row.state != "accepted" or not (live or wanted):
+    if row.state != "accepted" or svc.open_lines(row, skus):
+        return False
+    if not (live or wanted or svc.had_lines(row)):
         return False
     if any(r.status != "done" for r in live):
         return False
@@ -901,6 +919,45 @@ async def order_plates(order_id: int, db: AsyncSession = Depends(get_db, scope="
             )
         )
     return result
+
+
+class HaveIn(BaseModel):
+    sku: str = Field("", max_length=200)
+    # A line without a SKU is told apart by its name.
+    name: str = Field("", max_length=500)
+    have: bool
+
+
+@router.post("/orders/{order_id}/have", response_model=BaseOrderOut)
+async def set_have(
+    order_id: int,
+    data: HaveIn,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+):
+    """Say someone has a line of the order already ("I have it": made by hand, a product not in
+    Bambuddy yet), or take it back (``have`` false).
+
+    Nothing is printed for a line someone has, whatever its SKU maps to, and a
+    line that maps to no product no longer keeps the order from ready. A waiting
+    order keeps it until it is sent; an accepted one's product orders follow at
+    once, then replan.
+    """
+    async with svc.order_lock(order_id):
+        row = await _get_order(db, order_id)
+        if row.state == "cancelled":
+            raise HTTPException(409, "The order was cancelled in Base")
+        if svc.is_packed(row):
+            raise HTTPException(409, "The order is packed in Base: nothing to print for it")
+        try:
+            changed = await svc.set_have(db, row, svc.line_key({"sku": data.sku, "name": data.name}), data.have)
+        except ValueError as exc:
+            await db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+        done = await _replan(db, changed)
+        await db.commit()
+    await _announce(done)
+    return await _order_answer(db, order_id, done)
 
 
 class SkipIn(BaseModel):

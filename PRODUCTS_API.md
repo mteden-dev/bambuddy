@@ -273,6 +273,12 @@ i pozycje (SKU, nazwa, ilość). Imienia, adresu, telefonu ani maila nie zapisuj
   `PUT /base-sync/skus/{sku}` z `{"product_id": 7, "units": 1}`. `{"product_id": null}` oznacza
   SKU, którego nie drukujemy (zaklejki, rzeczy kupowane): takie pozycje są pomijane bez pytania.
   Pozycje z SKU bez produktu czekają; `GET /base-sync/skus` zwraca mapowanie i listę `unmapped`.
+- **„Mam”** na pozycji zamówienia (zrobione ręcznie, produktu jeszcze nie ma w Bambuddy):
+  `POST /base-sync/orders/{order_id}/have` z `{"sku": "...", "have": true}` (pozycja bez SKU:
+  `"name"`; `false` cofa). Dla takiej pozycji nic się nie drukuje, jakkolwiek jej SKU jest
+  zmapowane, także gdy produkt dopisze się później; pozycja ma `have: true`. Pozycja bez produktu
+  (niezmapowana, nie „nie drukujemy”) bez „Mam” trzyma zamówienie w produkcji: jest gotowe dopiero,
+  gdy ktoś ją ma albo jej SKU zostanie zmapowane (na produkt albo „nie drukujemy”). Taka pozycja znika też z listy `unmapped`.
 - **Nowe zamówienie** czeka na zatwierdzenie (`POST /base-sync/orders/{order_id}/accept`, albo
   `/skip`), chyba że w ustawieniach jest `auto_accept`. Zatwierdzone zamówienie daje zamówienie
   produktu na każdy produkt (`external_source` `base`, `external_ref` `"<order_id>/<product_id>"`)
@@ -344,6 +350,9 @@ curl -s -X POST "$BB/base-sync/orders/10000001/accept" -H "X-API-Key: $KEY" -H '
   -d '{"products": [{"product_id": 7, "units": 1, "have": [{"part_id": 21, "pieces": 1}]}]}'
 curl -s -X PUT "$BB/base-sync/skus/SKU-STICKER-W" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
   -d '{"product_id": null}'
+# wkładka zrobiona ręcznie: mam ją dla tego zamówienia
+curl -s -X POST "$BB/base-sync/orders/10000001/have" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"sku": "SKU-INSERT-EVA", "have": true}'
 ```
 
 Ustawienia (`GET/PUT /base-sync/settings`): `enabled`, `status_ids` (statusy do pobierania),

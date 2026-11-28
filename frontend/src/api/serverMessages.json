@@ -59,6 +59,7 @@
     { "pattern": "^Base could not be reached: (?<error>.+)$", "key": "baseUnreachable" },
     { "text": "Base sent an answer that is not JSON", "key": "baseNotJson" },
     { "pattern": "^The order has no line for product (?<product>\\d+)$", "key": "orderNoLineForProduct" },
+    { "text": "The order has no such line", "key": "orderNoSuchLine" },
     { "pattern": "^Part (?<part>\\d+) is not a part of product (?<product>\\d+)$", "key": "partNotOfProductId" },
 
     { "text": "Printer not found", "key": "printerNotFound" },

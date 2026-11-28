@@ -4794,6 +4794,8 @@ export interface BaseOrderLine {
   /** The product's picture: getProductThumbnailUrl(product_id, thumbnail_version). */
   has_thumbnail: boolean;
   thumbnail_version: string | null;
+  /** Someone has it already for this order ("I have it"): nothing is printed for it. */
+  have?: boolean;
 }
 
 export interface BaseOrder {
@@ -8266,6 +8268,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  /** Say someone has a line of the order already ("I have it"), or take it back; a line without a SKU goes by its name. */
+  setBaseOrderLineHave: (orderId: number, data: { sku: string; name: string; have: boolean }) =>
+    request<BaseOrder>(`/base-sync/orders/${orderId}/have`, { method: 'POST', body: JSON.stringify(data) }),
   /** Undo sending or skipping: the order waits again. */
   resetBaseOrder: (orderId: number) => request<BaseOrder>(`/base-sync/orders/${orderId}/reset`, { method: 'POST' }),
   /** Save a choice on a waiting order without sending it ("I have the base"). */

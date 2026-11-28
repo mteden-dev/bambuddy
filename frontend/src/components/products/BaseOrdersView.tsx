@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Link2Off, RefreshCw, Search, Settings2, ShoppingBag, X } from 'lucide-react';
 import { api } from '../../api/client';
-import type { BaseOrder, BaseOrderAcceptProduct, BaseSyncResult, Permission } from '../../api/client';
+import type { BaseOrder, BaseOrderAcceptProduct, BaseOrderLine, BaseSyncResult, Permission } from '../../api/client';
 import { Card } from '../Card';
 import { Button } from '../Button';
 import { useToast } from '../../contexts/ToastContext';
@@ -233,6 +233,21 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
       // Sent to print: the plates the plan chose, to prefer a printer for any; not over another dialog.
       if (action === 'accept' && sent.state === 'accepted' && !sent.ready && !withdrawingNow.current) {
         setPlatesFor((current) => current ?? sent);
+      }
+    },
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
+  // "I have it" on one line (made by hand, no product yet): a toast only when that makes the order ready.
+  const haveMutation = useMutation({
+    mutationFn: ({ order, line, have }: { order: BaseOrder; line: BaseOrderLine; have: boolean }) =>
+      api.setBaseOrderLineHave(order.order_id, { sku: line.sku, name: line.name, have }),
+    ...tracked,
+    onSuccess: (sent, { order }) => {
+      refresh();
+      if (sent.ready && !order.ready) showToast(withNote(t('baseSync.toast.ready'), planNote(sent)), 'success');
+      else {
+        const note = planNote(sent);
+        if (note) showToast(note, 'success');
       }
     },
     onError: (e: Error) => showToast(e.message, 'error'),
@@ -477,6 +492,7 @@ export function BaseOrdersView({ hasPermission }: BaseOrdersViewProps) {
                         onWithdraw={() => setWithdrawing(order)}
                         onRequeue={() => requeueMutation.mutate({ order })}
                         onPlates={() => setPlatesFor(order)}
+                        onHave={(line, have) => haveMutation.mutate({ order, line, have })}
                       />
                     ))}
                   </div>
