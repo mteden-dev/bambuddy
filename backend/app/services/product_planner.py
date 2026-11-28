@@ -344,9 +344,7 @@ def _copy(pool: Pool) -> Pool:
     return {part_id: dict(by_printer) for part_id, by_printer in pool.items()}
 
 
-def by_product(
-    parts: Sequence[PartSpec], orders: Sequence[OrderNeed]
-) -> list[tuple[list[PartSpec], list[OrderNeed]]]:
+def by_product(parts: Sequence[PartSpec], orders: Sequence[OrderNeed]) -> list[tuple[list[PartSpec], list[OrderNeed]]]:
     """Each product's parts and orders (in their order), the products as their parts first appear."""
     keys = list(dict.fromkeys([p.product_id for p in parts] + [o.product_id for o in orders]))
     return [([p for p in parts if p.product_id == key], [o for o in orders if o.product_id == key]) for key in keys]
@@ -677,9 +675,7 @@ def _split_cover(
     wanted = [(o, got) for o, got in wanted if any(c and n for c, n in zip(got, start, strict=True))]
     multi = [(o, got) for o, got in wanted if sum(1 for c, n in zip(got, start, strict=True) if c and n) > 1]
     multi_ids = {o.id for o, _ in multi}
-    ranges = [
-        range(max(math.ceil(n / c) for c, n in zip(got, start, strict=True) if c and n) + 1) for _, got in multi
-    ]
+    ranges = [range(max(math.ceil(n / c) for c, n in zip(got, start, strict=True) if c and n) + 1) for _, got in multi]
     if math.prod(len(r) for r in ranges) > COVER_SPLIT_COUNTS:
         return _peel(options, part_ids, start, plate_cost_s, multi)
 

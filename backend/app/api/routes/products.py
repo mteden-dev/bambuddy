@@ -13,7 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import func, inspect as sa_inspect, select
+from sqlalchemy import func, inspect as sa_inspect, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,8 +91,9 @@ class PlateIn(BaseModel):
     plate_id: int | None = Field(None, ge=1)
     pieces: list[PlatePieceIn] = Field(min_length=1, max_length=20)
     # The pieces of other products' parts on it, exactly; left out (null) keeps
-    # the ones it has. A plate another of those products has for the file is
-    # then the same plate, shared (services/products.py, "shared plates").
+    # the ones it has. A plate of the file another of those products is on is
+    # then the same plate, shared, and joining it keeps what else it prints
+    # (services/products.py, "shared plates").
     others: list[OtherPieceIn] | None = Field(None, max_length=20)
 
 
@@ -514,7 +515,9 @@ async def _plates_out(db: AsyncSession, product: Product) -> list[PlateOut]:
             .join(Product, Product.id == ProductPart.product_id)
             .where(ProductPart.id.in_(foreign))
         )
-        names = {part_id: (product_id, product_name, part_name) for part_id, product_id, product_name, part_name in rows}
+        names = {
+            part_id: (product_id, product_name, part_name) for part_id, product_id, product_name, part_name in rows
+        }
     return [
         PlateOut(
             id=plate.id,
@@ -707,28 +710,43 @@ async def _set_plate(
     plate_id: int | None,
     pieces: dict[int, int],
     others: dict[int, int] | None = None,
+    *,
+    exact: bool = False,
 ) -> ProductPlate:
     """The product's plate for this file (and plate), new or with these pieces of its parts now. The caller commits.
 
-    A plate it shares with other products is that plate. ``others``: the pieces
-    of other products' parts on it, exactly (None keeps the ones it has); with
-    some, a plate one of those products has for the file is joined rather than
-    a second one made for it, so the file has one plate and prints once.
+    A plate it shares with other products is that plate. ``others``: pieces of
+    other products' parts on it (None leaves them as they are). With ``exact``
+    (a whole product written, PUT) they replace the other products' pieces of
+    a plate the product is on already; otherwise the ones named are set and
+    the rest stay. With others named, a plate of the file those products are
+    on (or hold) is joined rather than a second one made, so the file has one
+    plate and prints once; joining one adds to it, whatever ``exact`` says,
+    since the product did not know what else it prints.
+
+    The same file as a plate of two products without others named stays two
+    plates (a tray file serving two boxes prints trays for one box at a time).
     """
     own_ids = {p.id for p in product.parts}
     candidates = [p for p in await svc.all_plates(db, product) if not sa_inspect(p).was_deleted]
     row = next((p for p in candidates if p.library_file_id == library_file_id and p.plate_id == plate_id), None)
+    joined = False
     if row is None and others:
-        holders = set((await svc.part_owners(db, others)).values())
+        named = set((await svc.part_owners(db, others)).values())
         same_plate = ProductPlate.plate_id.is_(None) if plate_id is None else ProductPlate.plate_id == plate_id
+        printing_theirs = (
+            select(ProductPlatePart.plate_id)
+            .join(ProductPart, ProductPart.id == ProductPlatePart.part_id)
+            .where(ProductPart.product_id.in_(named))
+        )
         row = (
             (
                 await db.execute(
                     select(ProductPlate)
                     .where(
-                        ProductPlate.product_id.in_(holders),
                         ProductPlate.library_file_id == library_file_id,
                         same_plate,
+                        or_(ProductPlate.product_id.in_(named), ProductPlate.id.in_(printing_theirs)),
                     )
                     .order_by(ProductPlate.id)
                 )
@@ -736,6 +754,7 @@ async def _set_plate(
             .scalars()
             .first()
         )
+        joined = row is not None
     if row is None:
         row = ProductPlate(
             product_id=product.id,
@@ -747,9 +766,10 @@ async def _set_plate(
         await db.flush()
         product.plates.append(row)
     else:
+        replace_others = others is not None and exact and not joined
         current = (await db.execute(select(ProductPlatePart).where(ProductPlatePart.plate_id == row.id))).scalars()
         for piece in list(current):
-            if piece.part_id in own_ids or others is not None:
+            if piece.part_id in own_ids or replace_others or piece.part_id in (others or {}):
                 await db.delete(piece)
         await db.flush()
     for part_id, n in {**(others or {}), **pieces}.items():
@@ -778,7 +798,9 @@ async def _settle_holder(db: AsyncSession, plate: ProductPlate) -> None:
     """
     if sa_inspect(plate).was_deleted:
         return
-    part_ids = (await db.execute(select(ProductPlatePart.part_id).where(ProductPlatePart.plate_id == plate.id))).scalars()
+    part_ids = (
+        await db.execute(select(ProductPlatePart.part_id).where(ProductPlatePart.plate_id == plate.id))
+    ).scalars()
     owners = set((await svc.part_owners(db, part_ids)).values())
     if not owners:
         await db.delete(plate)
@@ -914,7 +936,7 @@ async def _write_product(db: AsyncSession, product: Product, data: ProductIn, ac
         for piece in plate.pieces:
             assert piece.part is not None  # names were turned into indexes
             pieces[parts[piece.part].id] = piece.pieces
-        row = await _set_plate(db, product, plate.library_file_id, plate.plate_id, pieces, others[index])
+        row = await _set_plate(db, product, plate.library_file_id, plate.plate_id, pieces, others[index], exact=True)
         if row.product_id == product.id:
             row.sort_order = index
     # Parts taken away may leave a plate it held printing only others' parts.
@@ -1856,8 +1878,9 @@ async def add_plates(
     """Add plates to a product (parts by id or name); a file it has gets the new pieces.
 
     A part of another product (by id) makes the plate shared with it: a mixed
-    plate, joined to that product's plate of the file when it has one, its
-    other products' pieces then exactly the ones named. Open orders are not
+    plate, joined to the plate of the file that product is on when there is
+    one. The other products' pieces named are set, the rest stay (take them
+    off with PUT /products/{id} and ``others``). Open orders are not
     replanned: POST /products/{id}/replan when they should use the new plates.
     """
     product = await _get_product(db, product_id)

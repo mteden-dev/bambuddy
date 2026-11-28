@@ -78,12 +78,14 @@ jobs:
             backend/tests/unit/test_product_planner_fork.py \
             backend/tests/unit/test_product_planner_preference_fork.py \
             backend/tests/unit/test_product_planner_improve_fork.py \
+            backend/tests/unit/test_product_planner_family_fork.py \
             backend/tests/unit/test_product_filament_fork.py \
             backend/tests/unit/test_plate_history_fork.py \
             backend/tests/integration/test_products_api_fork.py \
             backend/tests/integration/test_product_preferences_api_fork.py \
             backend/tests/integration/test_product_replan_pass_fork.py \
             backend/tests/integration/test_product_plan_inputs_fork.py \
+            backend/tests/integration/test_product_shared_plates_fork.py \
             backend/tests/integration/test_base_sync_api_fork.py \
             backend/tests/unit/test_product_jobs_counted_migration_fork.py \
             backend/tests/unit/test_filament_aliases_fork.py \

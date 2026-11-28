@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Boxes, ImageIcon, Link2, Loader2, Plus, Search, Timer, Trash2, Upload, X } from 'lucide-react';
+import { Boxes, ImageIcon, Layers, Link2, Loader2, Plus, Search, Timer, Trash2, Upload, X } from 'lucide-react';
 import { api } from '../../api/client';
 import type { LibraryFileListItem, Product, ProductPlateFile, ProductWrite } from '../../api/client';
 import type { PlateMetadata } from '../../types/plates';
@@ -24,6 +24,15 @@ interface DraftPart {
   finish_minutes: number;
 }
 
+/** A part of another product the plate prints too: a shared (mixed) plate. */
+interface DraftOther {
+  part_id: number;
+  product_id: number;
+  product_name: string;
+  part_name: string;
+  pieces: number;
+}
+
 interface DraftPlate {
   /** Unique in the draft: two plates of one multi-plate file share the file id. */
   key: string;
@@ -32,6 +41,8 @@ interface DraftPlate {
   file: ProductPlateFile;
   /** Pieces per part, by the part's index in the draft. */
   pieces: number[];
+  /** Other products' parts on it (sent exactly on save). */
+  others: DraftOther[];
   /** The file's plates, when it has several and they were read (a plate added here). */
   filePlates?: PlateMetadata[];
 }
@@ -67,6 +78,7 @@ function draftFrom(product: Product | null | undefined): { parts: DraftPart[]; p
     plate_id: plate.plate_id,
     file: plate.file,
     pieces: product.parts.map((part) => plate.pieces.find((p) => p.part_id === part.id)?.pieces ?? 0),
+    others: (plate.others ?? []).map((o) => ({ ...o })),
   }));
   return { parts, plates };
 }
@@ -76,7 +88,8 @@ function draftFrom(product: Product | null | undefined): { parts: DraftPart[]; p
  *
  * Parts marked "same printer" are printed on one printer for each product (a
  * lid and its base). A plate is a sliced file from the library; its printer
- * model comes from the file, and it may print pieces of several parts.
+ * model comes from the file, and it may print pieces of several parts, and of
+ * other products' parts too (a mixed plate: shared, planned with them).
  */
 export function ProductEditorModal({ product, onClose }: ProductEditorModalProps) {
   const { t } = useTranslation();
@@ -113,7 +126,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
       name,
       notes,
       parts,
-      plates: plates.map((p) => [p.library_file_id, p.plate_id, p.pieces]),
+      plates: plates.map((p) => [p.library_file_id, p.plate_id, p.pieces, p.others.map((o) => [o.part_id, o.pieces])]),
       skus,
       picture: picture ? [picture.name, picture.size] : null,
       dropPicture,
@@ -123,6 +136,29 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
   const titleId = useId();
   const overlayRef = useRef<HTMLDivElement>(null);
   const { requestClose, confirm } = useDiscardGuard(dirty, onClose);
+
+  // Other products' parts a plate may print too (a mixed plate). Products with
+  // matched parts cannot share a plate: not offered.
+  const { data: allProducts } = useQuery({ queryKey: ['products'], queryFn: api.getProducts });
+  const partCount = useMemo(
+    () => new Map((allProducts ?? []).map((p) => [p.id, p.parts.length] as const)),
+    [allProducts],
+  );
+  const otherParts = useMemo(
+    () =>
+      (allProducts ?? [])
+        .filter((p) => p.id !== product?.id && !p.parts.some((part) => part.matched))
+        .flatMap((p) =>
+          p.parts.map((part) => ({ part_id: part.id, product_id: p.id, product_name: p.name, part_name: part.name })),
+        ),
+    [allProducts, product?.id],
+  );
+  // A product with matched parts cannot share a plate either: nothing to add then.
+  const canShare = !parts.some((p) => p.matched);
+  const otherName = (o: { product_id: number; product_name: string; part_name: string }) =>
+    (partCount.get(o.product_id) ?? 1) > 1 ? `${o.product_name} · ${o.part_name}` : o.product_name;
+  const setOthers = (plateIndex: number, change: (others: DraftOther[]) => DraftOther[]) =>
+    setPlates((current) => current.map((p, i) => (i === plateIndex ? { ...p, others: change(p.others) } : p)));
 
   const { data: files, isLoading: filesLoading } = useQuery({
     queryKey: ['library-files', 'products-picker'],
@@ -188,6 +224,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
           plate_id: plateId,
           file: info,
           pieces: guessPlatePieces(parts, guessFrom),
+          others: [],
           filePlates,
         },
       ]);
@@ -229,6 +266,7 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
         library_file_id: plate.library_file_id,
         plate_id: plate.plate_id,
         pieces: plate.pieces.flatMap((n, part) => (n > 0 ? [{ part, pieces: n }] : [])),
+        others: plate.others.filter((o) => o.pieces > 0).map((o) => ({ part_id: o.part_id, pieces: o.pieces })),
       })),
       skus: skus
         .map((s) => ({ sku: s.sku.trim(), units: s.units }))
@@ -459,6 +497,9 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
             <section>
               <h3 className="text-sm font-semibold text-white mb-1">{t('products.editor.plates')}</h3>
               <p className="text-xs text-bambu-gray mb-2">{t('products.editor.platesHint')}</p>
+              {canShare && otherParts.length > 0 && (
+                <p className="text-xs text-bambu-gray mb-2">{t('products.editor.otherPartsHint')}</p>
+              )}
               {plates.length > 0 && (
                 <div className="space-y-2">
                   {plates.map((plate, plateIndex) => {
@@ -517,6 +558,14 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                         {plate.file.missing && (
                           <span className="text-xs text-amber-500 shrink-0">{t('products.editor.fileMissing')}</span>
                         )}
+                        {plate.others.some((o) => o.pieces > 0) && (
+                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-bambu-green/15 text-bambu-green max-w-full truncate">
+                            <Layers className="w-3 h-3 shrink-0" />
+                            {t('products.editor.sharedWith', {
+                              products: [...new Set(plate.others.filter((o) => o.pieces > 0).map((o) => o.product_name))].join(', '),
+                            })}
+                          </span>
+                        )}
                         <button
                           type="button"
                           onClick={() => setPlates((current) => current.filter((_, i) => i !== plateIndex))}
@@ -549,6 +598,65 @@ export function ProductEditorModal({ product, onClose }: ProductEditorModalProps
                           </label>
                         ))}
                       </div>
+                      {(plate.others.length > 0 || (canShare && otherParts.length > 0)) && (
+                        <div className="border-t border-bambu-dark-tertiary pt-2 flex flex-col gap-2">
+                          {plate.others.length > 0 && (
+                            <span className="text-xs font-medium text-bambu-gray-light">{t('products.editor.otherProducts')}</span>
+                          )}
+                          {plate.others.length > 0 && (
+                            <div className="flex flex-col gap-1.5 sm:max-w-md">
+                              {plate.others.map((other) => (
+                                <div key={other.part_id} className="flex items-center gap-2 text-xs text-bambu-gray min-w-0">
+                                  <span className="flex-1 min-w-0 truncate">{otherName(other)}</span>
+                                  <div className="w-20 shrink-0">
+                                    <NumberInput
+                                      min={0}
+                                      max={1000}
+                                      fallback={0}
+                                      className={`${inputClass} py-1`}
+                                      value={other.pieces}
+                                      aria-label={otherName(other)}
+                                      onChange={(value) =>
+                                        setOthers(plateIndex, (others) =>
+                                          others.map((o) => (o.part_id === other.part_id ? { ...o, pieces: value } : o)),
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setOthers(plateIndex, (others) => others.filter((o) => o.part_id !== other.part_id))}
+                                    className={iconButton}
+                                    aria-label={t('products.editor.removeOther', { name: otherName(other) })}
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {canShare && otherParts.some((o) => !plate.others.some((x) => x.part_id === o.part_id)) && (
+                            <select
+                              className="self-start max-w-full px-2 py-1 any-pointer-coarse:min-h-[44px] bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-bambu-gray-light text-base sm:text-sm focus:border-bambu-green focus:outline-none"
+                              value=""
+                              aria-label={t('products.editor.addOtherPart')}
+                              onChange={(e) => {
+                                const picked = otherParts.find((o) => o.part_id === Number(e.target.value));
+                                if (picked) setOthers(plateIndex, (others) => [...others, { ...picked, pieces: 1 }]);
+                              }}
+                            >
+                              <option value="">{t('products.editor.addOtherPart')}</option>
+                              {otherParts
+                                .filter((o) => !plate.others.some((x) => x.part_id === o.part_id))
+                                .map((o) => (
+                                  <option key={o.part_id} value={o.part_id}>
+                                    {otherName(o)}
+                                  </option>
+                                ))}
+                            </select>
+                          )}
+                        </div>
+                      )}
                     </div>
                     );
                   })}

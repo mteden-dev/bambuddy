@@ -91,6 +91,44 @@ otwarte zamówienia mają z nich korzystać, wywołaj `POST /products/{id}/repla
 
 Co wie biblioteka o pliku (model, czas, gramy, liczba obiektów): `GET /products/file-info/{library_file_id}`.
 
+### Płyta mieszana: kilka produktów na jednej płycie
+
+Płyta może drukować też części innych produktów, np. 2 uchwyty pojedyncze, 2 podwójne, 1 potrójny,
+1 poczwórny i uchwyt na broń, a każdy z nich to osobny produkt z własnym SKU i zamówieniami. Taka
+płyta jest **wspólna**: to jeden wiersz, widoczny przy każdym z tych produktów. Jeden wydruk liczy
+się dla wszystkich (stan, zamówienia, kontrola jakości), a produkty połączone wspólnymi płytami
+(„rodzina”) są planowane razem jednym planem. Planer sam wybiera, kiedy opłaca się mix, a kiedy
+płyty dedykowane. Produkt bez wspólnych płyt planuje się tak jak wcześniej.
+
+Części innych produktów podaje się po `part_id`:
+
+```bash
+# PUT/POST produktu: "others" to dokładnie te sztuki innych produktów; pominięte (null) zostawia,
+# co płyta już ma, więc klient, który nie zna płyt mieszanych, ich nie kasuje
+curl -s -X PUT "$BB/products/21" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{
+  "name": "Uchwyt pojedynczy",
+  "parts": [{"id": 51, "name": "Uchwyt"}],
+  "plates": [{"library_file_id": 300, "pieces": [{"part": 0, "pieces": 2}],
+              "others": [{"part_id": 52, "pieces": 2}, {"part_id": 53, "pieces": 1}]}]
+}'
+
+# POST /plates: część innego produktu po part_id; płyta tego pliku, na której tamten produkt już
+# jest, staje się wspólna zamiast drugiej kopii; wymienione sztuki są ustawiane, reszta zostaje
+curl -s -X POST "$BB/products/21/plates" -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"plates": [{"library_file_id": 300, "pieces": [{"part_name": "Uchwyt", "pieces": 2}, {"part_id": 52, "pieces": 2}]}]}'
+```
+
+Dołączenie do istniejącej płyty mieszanej (także w `PUT`) dopisuje produkt i nie usuwa tego, co
+płyta już drukuje. Ten sam plik w dwóch produktach bez `others` zostaje dwiema osobnymi płytami
+(np. plik traya pasujący do pudełka /100 i /50 drukuje tray dla jednego z nich naraz).
+
+W odpowiedzi `plates[].pieces` to części tego produktu, `plates[].others` to części innych
+produktów (`part_id`, `pieces`, `product_id`, `product_name`, `part_name`), a `holder_product_id`
+pokazuje produkt trzymający płytę, gdy to inny produkt. Płyta pominięta w `PUT` albo usunięta
+przez `DELETE /products/{id}/plates/{plate_id}` traci tylko sztuki tego produktu i zostaje u pozostałych.
+Usunięcie produktu przekazuje jego wspólne płyty i zadania innemu produktowi z płyty, więc ich stan
+zostaje. Produkty z częściami dopasowanymi (`matched`) nie mogą dzielić płyty (400).
+
 ## Zdjęcie produktu
 
 Bez własnego zdjęcia produkt pokazuje miniaturę pierwszej płyty.

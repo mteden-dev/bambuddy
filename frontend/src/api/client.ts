@@ -4612,13 +4612,27 @@ export interface ProductPlateFile {
   missing: boolean;
 }
 
+/** Fork (products): a part of another product a shared (mixed) plate prints too. */
+export interface ProductPlateOther {
+  part_id: number;
+  pieces: number;
+  product_id: number;
+  product_name: string;
+  part_name: string;
+}
+
 /** Fork (products): a sliced plate that prints pieces of a product's parts. */
 export interface ProductPlate {
   id: number;
   library_file_id: number;
   plate_id: number | null;
+  /** This product's parts. */
   pieces: ProductPartPieces[];
   file: ProductPlateFile;
+  /** Other products' parts on it: the plate is shared, prints once for all, planned together. */
+  others?: ProductPlateOther[];
+  /** The product holding the plate, when it is another one. */
+  holder_product_id?: number | null;
 }
 
 export interface Product {
@@ -4702,8 +4716,13 @@ export interface ProductWrite {
   name: string;
   notes?: string | null;
   parts: { id?: number | null; name: string; quantity: number; matched: boolean; finish_minutes?: number }[];
-  /** ``part`` is the index into ``parts``. */
-  plates: { library_file_id: number; plate_id?: number | null; pieces: { part: number; pieces: number }[] }[];
+  /** ``part`` is the index into ``parts``; ``others``: other products' parts on the plate, exactly (omitted keeps them). */
+  plates: {
+    library_file_id: number;
+    plate_id?: number | null;
+    pieces: { part: number; pieces: number }[];
+    others?: { part_id: number; pieces: number }[] | null;
+  }[];
   /** Omitted leaves the product's SKUs as they are. */
   skus?: { sku: string; units: number }[];
 }

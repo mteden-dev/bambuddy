@@ -557,7 +557,9 @@ async def active_jobs_of(db: AsyncSession, product_ids: Iterable[int]) -> list[P
     return list(
         (
             await db.execute(
-                select(ProductJob).where(jobs_of(product_ids), ProductJob.status.in_(JOB_ACTIVE)).order_by(ProductJob.id)
+                select(ProductJob)
+                .where(jobs_of(product_ids), ProductJob.status.in_(JOB_ACTIVE))
+                .order_by(ProductJob.id)
             )
         ).scalars()
     )
@@ -1641,10 +1643,6 @@ async def link_hand_jobs(
     say plates printed by hand count (``ProductJob.counted``). The caller
     commits.
     """
-    from sqlalchemy import or_
-
-    from backend.app.models.products import ProductPlatePart
-
     if product is not None:
         plates = [plate for plate in await all_plates(db, product) if plate_usable(plate)]
     else:
